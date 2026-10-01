@@ -1,0 +1,56 @@
+schema: spec-driven
+
+context: |
+  语言：中文（简体）
+  所有产出物必须用简体中文撰写。
+  OpenSpec 的结构性标题（## ADDED Requirements、### Requirement:、#### Scenario: 等）
+  以及 SHALL/MUST、GIVEN/WHEN/THEN 关键字保持英文，校验依赖它们。
+
+  项目：AI Agent 美股交易系统（长期维护）
+  设计来源：docs/AI Agent 美股交易系统需求 Proposal 简版.md（核心原则）
+            docs/AI Agent 美股交易系统需求 Proposal.md（完整规则，可能按需修改）
+  Proposal 只是参考资料，不是 spec；每次变更只把相关章节转成增量 spec。
+
+  技术栈：Python 3.13 + uv（src 布局：src/tradingagentspro/）、DBOS、PydanticAI、Pydantic、
+  PostgreSQL、moomoo OpenAPI + OpenD、SEC EDGAR、discord.py；测试 pytest，检查 ruff 和 mypy（strict），CI 用 GitHub Actions。
+
+  架构铁律（任何变更都不得违反）：
+  - 只有 PM、子Agents、Reviewer、Critic 调用模型；触发、调度、风控、下单全部是确定性代码
+  - 调度器不调用模型、不做交易判断、不下单；只有执行模块能下单
+  - agent 之间不直接通信，只通过 Agent 网关转发的 Task / Result 协作
+  - 共享状态库是事实的唯一来源；每类字段只有一个写入者，只追加不覆盖；同一案件读同一份快照
+  - 任何交易必须通过代码风控，开仓必须人工确认
+  
+  编程架构：
+  - 模块化单体 + 端口/适配器：单进程，按业务拆模块，外部系统一律通过接口（Protocol）接入
+  - 分层：shared→ contracts → modules/<模块>
+    → integrations → workflows → bootstrap
+  - 依赖只能单向：bootstrap → workflows → modules → contracts → shared；integrations 实现 modules 定义的 ports；
+    modules 不得 import integrations，用 import-linter 强制
+  - 模块内部：domain/（纯逻辑，禁止 I/O、禁止 import dbos/pydantic_ai/sqlalchemy/moomoo/discord/... 、禁止 datetime.now()）、
+    service.py（用例）、ports.py（外部接口）、repo.py（本模块的表）
+  - 模块之间只通过对方 __init__.py 的公开 API 交互，不读别的模块的表
+  - 扩展靠新增实现再注册，不改已有代码：新数据源或券商写新适配器，新风控规则实现 RiskRule，新 agent 加 prompt 并注册
+  - live / paper / replay 共用同一套业务代码，只在 bootstrap 切换实现
+  - 金额、价格、数量用 Decimal；时间从 Clock 取并存 UTC，交易日用交易所日历库
+  - 外部写操作必须幂等（客户端订单 ID、task_id 去重）；DBOS 工作流保持确定性，I/O 和模型调用放在 step 里
+
+rules:
+  proposal:
+    - 写明引用了 Proposal 的哪些章节，以及本次明确不做的范围（Non-goals）
+    - 一个变更只有一个能用一句话说清的目的，过大就拆分
+  specs:
+    - 规则表、优先级、阈值、状态机的每一行都要有对应的 Scenario
+    - 必须覆盖边界值和异常情况（超时、断线、预算用尽、数据缺失），不只是正常路径
+    - 阈值写成可配置项并给出默认值，不要硬编码在需求里
+  design:
+    - 说明模块边界：本次涉及哪些模块、模块之间传递哪些 Pydantic 模型
+  tasks:
+    - 确定性规则先写测试再写实现
+    - 每个任务能在一次会话内完成
+
+operations:
+  apply:
+    guidance:
+      - 每完成一组任务运行 uv run pytest、uv run ruff check 和 uv run mypy
+      - 发现 spec 或 design 与实际不符时，先更新文档再改代码
