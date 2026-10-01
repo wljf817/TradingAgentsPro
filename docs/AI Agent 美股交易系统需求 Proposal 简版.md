@@ -74,6 +74,7 @@
 
 ## 故障与降级
 
+- 每个 agent 可配 1 个或多个备用模型，主模型不可用时自动按顺序切换；PM 或 Critic 的模型全部不可用才算模型 API 异常
 - 模型 API、券商连接、数据或预算出现异常时进入降级模式：保留止损单、暂停开仓、不做新的由模型发起的退出，并告警
 - 系统故障不当作投资判断：复查到期但因故障没有结论时，顺延处理
 - 紧急风险退出不依赖模型，降级时照常有效
@@ -94,7 +95,7 @@
 | 存储 | PostgreSQL |
 | 行情、到价提醒和交易 | moomoo OpenAPI + OpenD |
 | 公告和财报原文 | SEC EDGAR |
-| 模型 | 子 agent 用 flash 模型；PM 用较强的模型；Critic 与 PM 不同厂商 |
+| 模型 | 子 agent 用 flash 模型；PM 用较强的模型；Critic 与 PM 不同厂商（含备用模型）；每个 agent 可配备用模型 |
 | 通知与人工确认 | Discord 机器人 |
 | 开发工具 | uv、Ruff、mypy、pytest、GitHub Actions CI |
 | 部署 | 一台常开机器，Docker 运行 PostgreSQL |
