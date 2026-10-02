@@ -42,10 +42,11 @@ context: |
   - 纯区域（shared、contracts、各模块的 domain 和 config）：只能 import 白名单里的标准库和规定范围内的项目内包，
     第三方包只有 contracts 和 config 可以用 pydantic；不能使用 open、print、eval、__import__、id、hash 等内置名字。
     白名单和禁用名单在 tests/architecture/rules.py，扩充时在变更里修改，并在那个变更的 design 里写明理由
-  - domain 可以接收 shared 中纯计算、无 I/O 的协议（比如交易日历），但不接收 Clock，"现在"作为参数传入
+  - domain 可以接收 shared 中纯计算、无 I/O 的对象或协议（比如交易日历），但不接收 Clock，"现在"作为参数传入
   - 扩展靠新增实现再注册，不改已有代码：新数据源或券商写新适配器，新风控规则实现 RiskRule，新 agent 加 prompt 并注册
   - live / paper / replay 共用同一套业务代码，只在 bootstrap 切换实现
   - 金额、价格、数量用 Decimal；时间从 Clock 取并存 UTC，交易日用交易所日历库
+  - 交易日和交易时段一律通过 shared 的交易日历（TradingCalendar）计算，不把 UTC 时刻的日期部分当作交易日
   - 任何计算都不能依赖本机时区；time 模块全项目禁用（Ruff 强制），读取时间通过 Clock，等待用 DBOS 的持久化休眠
   - 外部写操作必须幂等（客户端订单 ID、task_id 去重）；DBOS 工作流保持确定性，I/O 和模型调用放在 step 里
 
