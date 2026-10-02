@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "exchange-calendars>=4.13.2",
+]
 
 [project.scripts]
 tradingagentspro = "tradingagentspro.bootstrap.cli:main"
@@ -79,6 +81,11 @@ ancestors = ["tradingagentspro"]
 python_version = "3.13"
 strict = true
 files = ["src", "tests"]
+
+# exchange_calendars 没有 py.typed；按它自己的类型标注检查，而不是整个当作 Any。
+[[tool.mypy.overrides]]
+module = ["exchange_calendars", "exchange_calendars.*"]
+follow_untyped_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
