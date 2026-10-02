@@ -23,17 +23,32 @@ context: |
   
   编程架构：
   - 模块化单体 + 端口/适配器：单进程，按业务拆模块，外部系统一律通过接口（Protocol）接入
-  - 分层：shared→ contracts → modules/<模块>
-    → integrations → workflows → bootstrap
-  - 依赖只能单向：bootstrap → workflows → modules → contracts → shared；integrations 实现 modules 定义的 ports；
-    modules 不得 import integrations，用 import-linter 强制
-  - 模块内部：domain/（纯逻辑，禁止 I/O、禁止 import dbos/pydantic_ai/sqlalchemy/moomoo/discord/... 、禁止 datetime.now()）、
-    service.py（用例）、ports.py（外部接口）、repo.py（本模块的表）
-  - 模块之间只通过对方 __init__.py 的公开 API 交互，不读别的模块的表
+  - 分层（从上到下）：bootstrap → workflows | integrations → modules → contracts → shared。
+    上层可以依赖下层，反过来不行；workflows 和 integrations 互相不能 import；integrations 实现 modules 定义的 ports。
+    由 import-linter 强制（pyproject.toml 的 top-layers 契约）
+  - 包根和 6 个层级包的 __init__.py 只放 docstring：import 任何子模块都会先执行它们
+  - 模块内部只能有这几种文件（module-layers 契约）：__init__.py（公开 API）、service.py（用例）、repo.py、
+    ports.py（外部接口）、domain/（纯逻辑，规则见下面的"纯区域"）、config.py（阈值和默认值）。
+    分层：service 和 repo 互相独立 → ports → domain → config
+  - 存储：存储接口放 ports；repo 放本模块的表和这个接口的数据库实现；service 只依赖接口、不直接用 repo，
+    由 bootstrap 注入实现（单元测试用 tests/fakes/ 的内存实现）
+  - 包和包之间、单个文件之间都不能有循环依赖（acyclic 契约和架构测试），跨模块的流程放进 workflows 编排
+  - 模块之外的任何代码（其他模块、workflows、integrations、bootstrap）只能 import 模块的包根，
+    不读别的模块的表；integrations 要实现的端口协议、bootstrap 要装配的实现都由模块包根导出
+  - 纯区域（shared、contracts、各模块的 domain 和 config）：只能 import 白名单里的标准库和规定范围内的项目内包，
+    第三方包只有 contracts 和 config 可以用 pydantic；不能使用 open、print、eval、__import__、id、hash 等内置名字。
+    白名单和禁用名单在 tests/architecture/rules.py，扩充时在变更里修改，并在那个变更的 design 里写明理由
+  - domain 可以接收 shared 中纯计算、无 I/O 的协议（比如交易日历），但不接收 Clock，"现在"作为参数传入
   - 扩展靠新增实现再注册，不改已有代码：新数据源或券商写新适配器，新风控规则实现 RiskRule，新 agent 加 prompt 并注册
   - live / paper / replay 共用同一套业务代码，只在 bootstrap 切换实现
   - 金额、价格、数量用 Decimal；时间从 Clock 取并存 UTC，交易日用交易所日历库
+  - 任何计算都不能依赖本机时区；time 模块全项目禁用（Ruff 强制），读取时间和等待都通过 Clock
   - 外部写操作必须幂等（客户端订单 ID、task_id 去重）；DBOS 工作流保持确定性，I/O 和模型调用放在 step 里
+
+  测试约定：
+  - 测试目录镜像 src/ 的结构，比如 tests/modules/<模块>/domain/
+  - 测试替身（各端口的内存实现）放 tests/fakes/；回放模式用的实现属于正式代码，放 integrations/
+  - 测试进程固定在 UTC+14 时区运行（tests/conftest.py），期望值一律用显式时区写出
 
 rules:
   proposal:
