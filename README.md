@@ -3,6 +3,7 @@
 以代码调度器为核心的多 agent 美股交易系统：只有出现值得关注的事件或检查到期时才开案件，由 PM 带领子 agent 研究并给出结论，交易方案经 Critic 审核、代码风控和人工确认后执行。
 
 - 设计文档：[docs/](docs/)，先读 [Proposal 简版](docs/AI%20Agent%20美股交易系统需求%20Proposal%20简版.md)
+- 实现路线和里程碑：[docs/实现路线.md](docs/实现路线.md)
 - 规格和变更：[openspec/](openspec/)
 
 ## 目录分层
