@@ -8,8 +8,12 @@ context: |
 
   项目：AI Agent 美股交易系统（长期维护）
   设计来源：docs/AI Agent 美股交易系统需求 Proposal 简版.md（核心原则）
-            docs/AI Agent 美股交易系统需求 Proposal.md（完整规则，可能按需修改）
-  Proposal 只是参考资料，不是 spec；每次变更只把相关章节转成增量 spec。
+            docs/AI Agent 美股交易系统需求 Proposal.md（完整规则）
+  两份 Proposal 的用法：
+  - 简版已经固定，不可更改，也不对它提修改建议
+  - 完整版是写 spec 的参考，只读当前变更对应的章节
+  - 当前变更对应的完整版章节有问题（矛盾、缺口、不可行）时，主动在 proposal 末尾「需要人决定」中提出，并给出推荐做法
+  - 完整版其他章节的问题，在人没有要求时一律忽略，不报告
 
   技术栈：Python 3.13 + uv（src 布局：src/tradingagentspro/）、DBOS、PydanticAI、Pydantic、
   PostgreSQL、moomoo OpenAPI + OpenD、SEC EDGAR、discord.py；测试 pytest，检查 ruff 和 mypy（strict），CI 用 GitHub Actions。
@@ -54,6 +58,7 @@ rules:
   proposal:
     - 写明引用了 Proposal 的哪些章节，以及本次明确不做的范围（Non-goals）
     - 一个变更只有一个能用一句话说清的目的，过大就拆分
+    - 末尾加「需要人决定」一节：列出本次变更对应的完整版 Proposal 章节里的问题，每条附推荐做法；没有就写"无"
   specs:
     - 规则表、优先级、阈值、状态机的每一行都要有对应的 Scenario
     - 必须覆盖边界值和异常情况（超时、断线、预算用尽、数据缺失），不只是正常路径
