@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "exchange-calendars>=4.13.2",
+    "pydantic>=2.13.5",
 ]
 
 [project.scripts]
@@ -83,6 +84,13 @@ ancestors = ["tradingagentspro"]
 python_version = "3.13"
 strict = true
 files = ["src", "tests"]
+plugins = ["pydantic.mypy"]
+
+# Pydantic 模型的构造函数按字段类型严格检查：给 Decimal 字段传 float 会报错。
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
 
 # exchange_calendars 没有 py.typed；按它自己的类型标注检查，而不是整个当作 Any。
 [[tool.mypy.overrides]]
