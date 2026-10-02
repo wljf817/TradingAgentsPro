@@ -43,6 +43,38 @@ allowed-confusables = ["，", "；", "：", "？", "！", "‘", "’", "（", "
 "uuid.uuid1".msg = "ID 通过 ID 生成端口获取，回放时才能重现"
 "uuid.uuid4".msg = "ID 通过 ID 生成端口获取，回放时才能重现"
 
+[tool.ruff.lint.per-file-ignores]
+# 时区守卫要调用 time.tzset()。
+"tests/conftest.py" = ["TID251"]
+
+[tool.importlinter]
+root_package = "tradingagentspro"
+
+# 顶层分层：上层可以依赖下层；workflows 和 integrations 互相不能 import。
+[[tool.importlinter.contracts]]
+id = "top-layers"
+name = "顶层分层"
+type = "layers"
+containers = ["tradingagentspro"]
+layers = ["bootstrap", "workflows | integrations", "modules", "contracts", "shared"]
+
+# 模块内部分层：service 和 repo 互相独立；模块里只能出现这几种文件。
+# 每一层都是可选的，因为模块是逐步长出来的。
+[[tool.importlinter.contracts]]
+id = "module-layers"
+name = "模块内部分层"
+type = "layers"
+containers = ["tradingagentspro.modules.*"]
+layers = ["(service) | (repo)", "(ports)", "(domain)", "(config)"]
+exhaustive = true
+
+# 任何一层的兄弟包之间都不能循环依赖。
+[[tool.importlinter.contracts]]
+id = "acyclic"
+name = "包之间无循环依赖"
+type = "acyclic_siblings"
+ancestors = ["tradingagentspro"]
+
 [tool.mypy]
 python_version = "3.13"
 strict = true
