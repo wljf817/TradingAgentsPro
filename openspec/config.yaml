@@ -46,7 +46,7 @@ context: |
   - 扩展靠新增实现再注册，不改已有代码：新数据源或券商写新适配器，新风控规则实现 RiskRule，新 agent 加 prompt 并注册
   - live / paper / replay 共用同一套业务代码，只在 bootstrap 切换实现
   - 金额、价格、数量用 Decimal；时间从 Clock 取并存 UTC，交易日用交易所日历库
-  - 任何计算都不能依赖本机时区；time 模块全项目禁用（Ruff 强制），读取时间和等待都通过 Clock
+  - 任何计算都不能依赖本机时区；time 模块全项目禁用（Ruff 强制），读取时间通过 Clock，等待用 DBOS 的持久化休眠
   - 外部写操作必须幂等（客户端订单 ID、task_id 去重）；DBOS 工作流保持确定性，I/O 和模型调用放在 step 里
 
   简单优先（禁止过度复杂化）：
