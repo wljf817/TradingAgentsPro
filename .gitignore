@@ -27,3 +27,7 @@ htmlcov/
 .idea/
 .vscode/
 .DS_Store
+
+# Agent instructions (local only)
+AGENTS.md
+CLAUDE.md
