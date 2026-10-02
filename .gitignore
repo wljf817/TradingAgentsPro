@@ -18,6 +18,8 @@ wheels/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.hypothesis/
+.import_linter_cache/
 .coverage
 htmlcov/
 

@@ -15,6 +15,9 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "grimp>=3.17",
+    "hypothesis>=6.168.3",
+    "import-linter>=2.15",
     "mypy>=2.3.1",
     "pytest>=9.1.1",
     "ruff>=0.16.9",
@@ -25,7 +28,20 @@ line-length = 100
 target-version = "py313"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = ["E", "F", "I", "UP", "B", "DTZ", "TID", "RUF"]
+# 中文全角标点不算易混淆字符；西里尔字母等仍然会报。
+allowed-confusables = ["，", "；", "：", "？", "！", "‘", "’", "（", "）", "～", "％", "＋", "－", "＝"]
+
+# 时间和 ID 都要能在回放时重现，只能从 Clock 和 ID 生成端口获取。
+# 需要放行的实现文件在 per-file-ignores 里单独放行 TID251。
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"time".msg = "time 模块全项目禁用：读取时间和等待都通过 Clock"
+"datetime.datetime.now".msg = "当前时间通过 Clock 获取"
+"datetime.datetime.utcnow".msg = "当前时间通过 Clock 获取"
+"datetime.datetime.today".msg = "当前时间通过 Clock 获取"
+"datetime.date.today".msg = "当前日期通过 Clock 获取"
+"uuid.uuid1".msg = "ID 通过 ID 生成端口获取，回放时才能重现"
+"uuid.uuid4".msg = "ID 通过 ID 生成端口获取，回放时才能重现"
 
 [tool.mypy]
 python_version = "3.13"
