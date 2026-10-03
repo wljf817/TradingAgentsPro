@@ -1,0 +1,12 @@
+#!/bin/sh
+# 提交前跑一遍和 CI 相同的检查，任何一项失败就拒绝提交。
+# 启用：git config core.hooksPath .githooks
+# 检查的是工作区的全部文件，不只是暂存的部分。
+set -e
+
+uv run ruff check
+uv run ruff format --check
+uv run mypy
+uv run lint-imports
+uv run pytest -q
+openspec validate --all --strict --no-interactive
