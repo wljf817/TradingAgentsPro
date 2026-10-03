@@ -4,6 +4,7 @@
 真实规则的具体场景在 test_rules.py。
 """
 
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from hypothesis import given
@@ -93,6 +94,16 @@ def test_emergency_threshold_only_for_opening_plans_that_are_not_rejected() -> N
     assert adjusted.emergency_threshold == Decimal("0.1")
     assert rejected.emergency_threshold is None
     assert exit_plan.emergency_threshold is None
+
+
+def test_expiry_for_every_plan_that_is_not_rejected() -> None:
+    close = datetime(2026, 10, 14, 20, tzinfo=UTC)
+
+    assert decide(REQUEST, [], 100).expires_at == close
+    assert decide(REQUEST, [_at_most(40)], 100).expires_at == close
+    assert decide(REQUEST, [_always_fails("甲")], 100).expires_at is None
+    exit_request = baseline_request(plan=close_plan("AAA", "科技"))
+    assert decide(exit_request, [], 100).expires_at == close
 
 
 @given(st.lists(st.integers(0, 300), max_size=5), st.integers(1, 300))

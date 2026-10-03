@@ -24,7 +24,8 @@ from tradingagentspro.modules.risk.domain.request import OpeningReservation, Sel
 class Reservation:
     """一个通过或调整的方案的预留。
 
-    - decision：风控结果，最终股数就是预留股数
+    - decision：首次检查的风控结果
+    - rechecked：最近一次下单前再校验的结果（通过或调整）；没有再校验过时为 None
     - filled：这个方案的订单到目前为止累计成交的股数
     - released：方案或订单已经结束，剩余部分已经释放
 
@@ -33,14 +34,16 @@ class Reservation:
 
     plan: TradePlan
     decision: RiskDecision
+    rechecked: RiskDecision | None = None
     filled: int = 0
     released: bool = False
 
     @property
     def quantity(self) -> int:
-        """预留股数：风控给出的最终股数。"""
-        assert self.decision.quantity is not None  # 只有通过或调整的方案才有预留
-        return self.decision.quantity
+        """预留股数：最近一次再校验的最终股数；没有再校验过时是首次检查的最终股数。"""
+        latest = self.decision if self.rechecked is None else self.rechecked
+        assert latest.quantity is not None  # 只有通过或调整的结果才会存进预留
+        return latest.quantity
 
     @property
     def remaining(self) -> int:
@@ -56,6 +59,12 @@ class Reservation:
         if not self.is_active:
             return self
         return replace(self, filled=filled)
+
+    def recheck(self, decision: RiskDecision) -> Self:
+        """再校验通过或调整，预留股数改为它的最终股数；已结束的预留原样返回。"""
+        if not self.is_active:
+            return self
+        return replace(self, rechecked=decision)
 
     def release(self) -> Self:
         """方案或订单结束，释放剩余部分；已结束的预留原样返回。"""

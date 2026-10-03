@@ -25,6 +25,12 @@ _sectors = st.sampled_from(SECTORS)
 _last_trade_days = st.dictionaries(
     _symbols, st.dates(SAMPLE_FIRST_DAY, SAMPLE_LAST_DAY), max_size=3
 )
+# 样例日历范围内的时刻。Hypothesis 要求上下限不带时区，生成的时间由 timezones 加上 UTC。
+_moments = st.datetimes(
+    datetime(2026, 9, 2),  # noqa: DTZ001
+    datetime(2027, 1, 27),  # noqa: DTZ001
+    timezones=st.just(UTC),
+)
 
 
 def _money(max_value: int | str, min_value: str = "0.01") -> st.SearchStrategy[Decimal]:
@@ -64,6 +70,8 @@ def plans(draw: st.DrawFn) -> TradePlan:
             limit_price=draw(_money(500)),
             stop_price=draw(_money(600)),
             emergency_threshold=draw(st.none() | _money("0.99")),
+            expires_at=draw(st.none() | _moments),
+            max_price_deviation=draw(st.none() | _money("0.99")),
         )
     order_type = draw(st.sampled_from(OrderType))
     return TradePlan(
@@ -74,6 +82,7 @@ def plans(draw: st.DrawFn) -> TradePlan:
         quantity=None if action is TradeAction.CLOSE else draw(st.integers(1, 2000)),
         order_type=order_type,
         limit_price=draw(_money(500)) if order_type is OrderType.LIMIT else None,
+        expires_at=draw(st.none() | _moments),
     )
 
 
@@ -97,9 +106,7 @@ def risk_requests(draw: st.DrawFn) -> RiskRequest:
     sell_reservations = draw(
         st.lists(st.builds(SellReservation, _symbols, st.integers(1, 300)), max_size=2)
     )
-    # Hypothesis 要求上下限不带时区，生成的时间由 timezones 加上 UTC。
-    first, last = datetime(2026, 9, 2), datetime(2027, 1, 27)  # noqa: DTZ001
-    now = draw(st.datetimes(first, last, timezones=st.just(UTC)))
+    now = draw(_moments)
     config = RiskConfig(
         max_positions=draw(st.integers(1, 8)),
         min_trade_interval_sessions=draw(st.integers(1, 3)),

@@ -3,7 +3,7 @@
 from decimal import Decimal
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 
 class RiskOutcome(StrEnum):
@@ -26,6 +26,7 @@ class RiskDecision(BaseModel):
 
     - quantity：最终股数；拒绝时为 None
     - emergency_threshold：生效的紧急阈值；只有开仓类方案通过或调整时才有
+    - expires_at：生效的有效期；通过或调整时才有，四种动作都有
     - violations：调整时是请求股数下不通过的规则，拒绝时是 1 股时不通过的规则，通过时为空
     """
 
@@ -34,4 +35,5 @@ class RiskDecision(BaseModel):
     outcome: RiskOutcome
     quantity: int | None
     emergency_threshold: Decimal | None
+    expires_at: AwareDatetime | None
     violations: tuple[RiskViolation, ...]

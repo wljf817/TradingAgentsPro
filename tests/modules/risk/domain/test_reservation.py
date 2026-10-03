@@ -1,5 +1,6 @@
 """预留记录和预留占用额度的测试。场景见 openspec 的 risk-reservations spec「预留占用的额度」。"""
 
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from tests.modules.risk.builders import baseline_account, baseline_plan, holding, reduce_plan
@@ -15,14 +16,22 @@ from tradingagentspro.modules.risk import (
 from tradingagentspro.modules.risk.domain.reservation import opening_reservation, sell_reservation
 
 BUFFER = RiskConfig().cost_buffer_ratio
+EXPIRES_AT = datetime(2026, 10, 14, 20, tzinfo=UTC)
+
+
+def _decision(quantity: int, outcome: RiskOutcome = RiskOutcome.PASSED) -> RiskDecision:
+    return RiskDecision(
+        outcome=outcome,
+        quantity=quantity,
+        emergency_threshold=None,
+        expires_at=EXPIRES_AT,
+        violations=(),
+    )
 
 
 def _reserved(plan: TradePlan, quantity: int) -> Reservation:
     """风控按 quantity 股通过这个方案后的预留，还没有成交。"""
-    decision = RiskDecision(
-        outcome=RiskOutcome.PASSED, quantity=quantity, emergency_threshold=None, violations=()
-    )
-    return Reservation(plan=plan, decision=decision)
+    return Reservation(plan=plan, decision=_decision(quantity))
 
 
 def _add_ccc() -> TradePlan:
@@ -125,3 +134,30 @@ def test_ended_reservation_does_not_change() -> None:
     assert released.fill(30) == released
     assert filled.release() == filled
     assert filled.fill(30) == filled
+
+
+# 再校验后的预留（pre-order-recheck spec「再校验后的预留」）
+
+
+def test_reserved_quantity_is_the_first_decision_before_any_recheck() -> None:
+    reservation = _reserved(baseline_plan(), 100)
+
+    assert reservation.rechecked is None
+    assert reservation.quantity == 100
+
+
+def test_recheck_changes_the_reserved_quantity_and_keeps_the_first_decision() -> None:
+    first = _reserved(baseline_plan(), 100)
+    rechecked = first.recheck(_decision(40, RiskOutcome.ADJUSTED))
+
+    assert rechecked.decision == first.decision
+    assert rechecked.quantity == 40
+    assert rechecked.remaining == 40
+    assert rechecked.fill(10).remaining == 30
+    assert opening_reservation(rechecked, baseline_account(), BUFFER).cash == Decimal(2010)
+
+
+def test_ended_reservation_ignores_a_recheck() -> None:
+    released = _reserved(baseline_plan(), 100).release()
+
+    assert released.recheck(_decision(40, RiskOutcome.ADJUSTED)) == released

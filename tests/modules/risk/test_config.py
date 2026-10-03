@@ -18,3 +18,6 @@ def test_defaults_are_used_when_no_config_is_given() -> None:
     assert config.emergency_threshold_min == Decimal("0.03")
     assert config.emergency_threshold_max == Decimal("0.20")
     assert config.emergency_threshold_default == Decimal("0.08")
+    assert config.price_deviation_min == Decimal("0.01")
+    assert config.price_deviation_max == Decimal("0.10")
+    assert config.price_deviation_default == Decimal("0.03")

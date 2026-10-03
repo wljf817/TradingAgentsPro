@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 
 class TradeAction(StrEnum):
@@ -33,6 +33,9 @@ class TradePlan(BaseModel):
     「交易方案的格式」。清仓不写股数，表示卖出全部可卖数量。
 
     plan_id 由创建方案的一方生成；预留、成交、释放、人工确认和下单都用它指向这个方案。
+
+    expires_at 和 max_price_deviation 在下单前再校验时使用，见 pre-order-recheck spec；
+    没填时由风控给出默认值。
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -46,6 +49,8 @@ class TradePlan(BaseModel):
     limit_price: Decimal | None = Field(default=None, gt=0)
     stop_price: Decimal | None = Field(default=None, gt=0)
     emergency_threshold: Decimal | None = Field(default=None, gt=0, lt=1)
+    expires_at: AwareDatetime | None = None
+    max_price_deviation: Decimal | None = Field(default=None, gt=0, lt=1)
 
     @model_validator(mode="after")
     def _check_fields_for_action(self) -> Self:
@@ -61,6 +66,10 @@ class TradePlan(BaseModel):
                 raise ValueError("买入和加仓只能用限价单")
             if self.stop_price is None:
                 raise ValueError("买入和加仓必须写止损价")
-        elif self.stop_price is not None or self.emergency_threshold is not None:
-            raise ValueError("减仓和清仓不能写止损价和紧急阈值")
+        elif (
+            self.stop_price is not None
+            or self.emergency_threshold is not None
+            or self.max_price_deviation is not None
+        ):
+            raise ValueError("减仓和清仓不能写止损价、紧急阈值和允许价格偏离")
         return self

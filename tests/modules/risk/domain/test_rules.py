@@ -77,7 +77,18 @@ def test_passes() -> None:
     assert decision.outcome is PASSED
     assert decision.quantity == 100
     assert decision.emergency_threshold == Decimal("0.08")
+    assert decision.expires_at == datetime(2026, 10, 14, 20, tzinfo=UTC)
     assert decision.violations == ()
+
+
+def test_effective_expiry() -> None:
+    given = _check(plan=baseline_plan(expires_at=datetime(2026, 10, 16, 20, tzinfo=UTC)))
+    after_hours = _check(now=datetime(2026, 10, 14, 21, tzinfo=UTC))
+    exit_plan = _check(plan=reduce_plan("AAA", "科技", 60))
+
+    assert given.expires_at == datetime(2026, 10, 16, 20, tzinfo=UTC)
+    assert after_hours.expires_at == datetime(2026, 10, 15, 20, tzinfo=UTC)
+    assert exit_plan.expires_at == datetime(2026, 10, 14, 20, tzinfo=UTC)
 
 
 def test_the_tightest_rule_limits_the_quantity() -> None:
@@ -93,6 +104,7 @@ def test_rejects_when_one_share_fails() -> None:
     decision = _check(account=baseline_account(settled_cash=Decimal(50)))
 
     assert (decision.outcome, decision.quantity) == (REJECTED, None)
+    assert (decision.emergency_threshold, decision.expires_at) == (None, None)
     assert _rules(decision) == ["已结算资金"]
 
 
@@ -269,6 +281,21 @@ def test_emergency_threshold_out_of_range_is_rejected(threshold: str) -> None:
 
     assert decision.outcome is REJECTED
     assert _rules(decision) == ["紧急阈值"]
+
+
+@pytest.mark.parametrize("deviation", [None, "0.01", "0.10"])
+def test_max_price_deviation_at_the_bounds_passes(deviation: str | None) -> None:
+    plan = baseline_plan(max_price_deviation=Decimal(deviation) if deviation else None)
+
+    assert _check(plan=plan).outcome is PASSED
+
+
+@pytest.mark.parametrize("deviation", ["0.009", "0.11"])
+def test_max_price_deviation_out_of_range_is_rejected(deviation: str) -> None:
+    decision = _check(plan=baseline_plan(max_price_deviation=Decimal(deviation)))
+
+    assert decision.outcome is REJECTED
+    assert _rules(decision) == ["允许价格偏离"]
 
 
 @pytest.mark.parametrize("plan", [baseline_plan(), add_aaa(10, 110, 105)])

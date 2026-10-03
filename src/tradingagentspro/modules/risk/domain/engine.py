@@ -6,6 +6,7 @@ from tradingagentspro.contracts.risk import RiskDecision, RiskOutcome, RiskViola
 from tradingagentspro.contracts.trade_plan import TradeAction
 from tradingagentspro.modules.risk.domain.exposure import (
     effective_emergency_threshold,
+    effective_expiry,
     sellable_quantity,
 )
 from tradingagentspro.modules.risk.domain.request import RiskRequest
@@ -36,7 +37,11 @@ def decide(request: RiskRequest, rules: Sequence[RiskRule], requested: int) -> R
     at_one = violations_at(1)
     if at_one:
         return RiskDecision(
-            outcome=RiskOutcome.REJECTED, quantity=None, emergency_threshold=None, violations=at_one
+            outcome=RiskOutcome.REJECTED,
+            quantity=None,
+            emergency_threshold=None,
+            expires_at=None,
+            violations=at_one,
         )
     at_requested = violations_at(requested)
     if not at_requested:
@@ -58,11 +63,15 @@ def _approved(
     quantity: int,
     violations: tuple[RiskViolation, ...],
 ) -> RiskDecision:
-    """通过或调整的结果；开仓类方案带上生效的紧急阈值。"""
+    """通过或调整的结果：带上生效的有效期；开仓类方案还带上生效的紧急阈值。"""
     plan = request.plan
     threshold = (
         effective_emergency_threshold(plan, request.config) if plan.action.is_opening else None
     )
     return RiskDecision(
-        outcome=outcome, quantity=quantity, emergency_threshold=threshold, violations=violations
+        outcome=outcome,
+        quantity=quantity,
+        emergency_threshold=threshold,
+        expires_at=effective_expiry(plan, request.now, request.calendar),
+        violations=violations,
     )

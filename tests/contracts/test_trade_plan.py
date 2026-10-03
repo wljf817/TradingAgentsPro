@@ -1,5 +1,6 @@
 """交易方案格式的测试。场景见 openspec 的 risk-rules spec「交易方案的格式」。"""
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -11,6 +12,7 @@ from tradingagentspro.contracts.trade_plan import OrderType, TradeAction, TradeP
 
 BUY, ADD, REDUCE, CLOSE = TradeAction.BUY, TradeAction.ADD, TradeAction.REDUCE, TradeAction.CLOSE
 PLAN_ID = UUID(int=1)
+EXPIRES_AT = datetime(2026, 10, 15, 20, tzinfo=UTC)
 
 
 def _plan(action: TradeAction, **changes: Any) -> dict[str, Any]:
@@ -44,6 +46,18 @@ def test_valid_opening_and_exit_plans() -> None:
         limit_price=Decimal(50),
         stop_price=Decimal(45),
     )
+    add = TradePlan(
+        plan_id=UUID(int=4),
+        symbol="AAA",
+        sector="科技",
+        action=ADD,
+        quantity=50,
+        order_type=OrderType.LIMIT,
+        limit_price=Decimal(110),
+        stop_price=Decimal(95),
+        expires_at=EXPIRES_AT,
+        max_price_deviation=Decimal("0.05"),
+    )
     reduce = TradePlan(
         plan_id=UUID(int=2),
         symbol="AAA",
@@ -59,11 +73,14 @@ def test_valid_opening_and_exit_plans() -> None:
         action=CLOSE,
         order_type=OrderType.LIMIT,
         limit_price=Decimal(120),
+        expires_at=EXPIRES_AT,
     )
 
     assert buy.emergency_threshold is None
+    assert (buy.expires_at, buy.max_price_deviation) == (None, None)
+    assert (add.expires_at, add.max_price_deviation) == (EXPIRES_AT, Decimal("0.05"))
     assert reduce.limit_price is None
-    assert close.quantity is None
+    assert (close.quantity, close.expires_at) == (None, EXPIRES_AT)
 
 
 @pytest.mark.parametrize("action", [BUY, CLOSE])
@@ -128,6 +145,20 @@ def test_emergency_threshold_inside_the_bounds_is_valid() -> None:
     plan = TradePlan.model_validate(_plan(BUY, emergency_threshold=Decimal("0.08")))
 
     assert plan.emergency_threshold == Decimal("0.08")
+
+
+def test_expiry_without_a_time_zone() -> None:
+    _assert_format_error(_plan(BUY, expires_at=datetime(2026, 10, 15, 20)))  # noqa: DTZ001
+
+
+@pytest.mark.parametrize("action", [REDUCE, CLOSE])
+def test_exit_plan_with_max_price_deviation(action: TradeAction) -> None:
+    _assert_format_error(_plan(action, max_price_deviation=Decimal("0.03")))
+
+
+@pytest.mark.parametrize("deviation", [Decimal(0), Decimal(1)])
+def test_max_price_deviation_format_bounds(deviation: Decimal) -> None:
+    _assert_format_error(_plan(BUY, max_price_deviation=deviation))
 
 
 def test_symbol_and_sector_must_not_be_empty() -> None:

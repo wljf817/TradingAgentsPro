@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class RiskConfig(BaseModel):
-    """风控阈值。比例都是相对权益的小数；紧急阈值是跌幅比例。"""
+    """风控阈值。比例都是相对权益的小数；紧急阈值是跌幅比例；允许价格偏离是相对限价的比例。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -28,3 +28,8 @@ class RiskConfig(BaseModel):
     emergency_threshold_min: Decimal = Field(default=Decimal("0.03"), gt=0)
     emergency_threshold_max: Decimal = Field(default=Decimal("0.20"), gt=0)
     emergency_threshold_default: Decimal = Field(default=Decimal("0.08"), gt=0)
+    # 方案的允许价格偏离必须在下限和上限之间（含两端），没填时用默认值。
+    # 偏离是下单前再校验时实时最新价相对限价的比例，涨跌都算
+    price_deviation_min: Decimal = Field(default=Decimal("0.01"), gt=0)
+    price_deviation_max: Decimal = Field(default=Decimal("0.10"), gt=0)
+    price_deviation_default: Decimal = Field(default=Decimal("0.03"), gt=0)

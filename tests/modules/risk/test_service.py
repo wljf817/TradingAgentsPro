@@ -1,13 +1,20 @@
-"""风控用例的测试：检查并预留、上报成交、释放。场景见 openspec 的 risk-reservations spec。"""
+"""风控用例的测试：检查并预留、上报成交、释放、下单前再校验。
 
+场景见 openspec 的 risk-reservations spec 和 pre-order-recheck spec。
+"""
+
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from hypothesis import given
+from hypothesis import event, given
 from hypothesis import strategies as st
 
+from tests.fakes.clock import FakeClock
 from tests.fakes.reservations import InMemoryReservationStore
 from tests.modules.risk.builders import (
+    BASELINE_NOW,
     baseline_account,
     baseline_plan,
     close_plan,
@@ -24,8 +31,8 @@ from tests.modules.risk.domain.strategies import (
 )
 from tradingagentspro.contracts.account import AccountSnapshot
 from tradingagentspro.contracts.risk import RiskDecision, RiskOutcome
-from tradingagentspro.contracts.trade_plan import TradePlan
-from tradingagentspro.modules.risk import RiskConfig, RiskService
+from tradingagentspro.contracts.trade_plan import OrderType, TradeAction, TradePlan
+from tradingagentspro.modules.risk import OutsideSessionError, RiskConfig, RiskService
 from tradingagentspro.modules.risk.domain.exposure import ZERO, holding_risk
 from tradingagentspro.modules.risk.domain.reservation import opening_reservation
 
@@ -33,6 +40,10 @@ PASSED, ADJUSTED, REJECTED = RiskOutcome.PASSED, RiskOutcome.ADJUSTED, RiskOutco
 
 # 已结算资金 10,050：正好够两个 100 股、限价 50 的买入方案（每个 5,025）
 TIGHT = baseline_account(settled_cash=Decimal(10_050))
+AFTER_HOURS = datetime(2026, 10, 14, 21, tzinfo=UTC)
+BEFORE_OPEN = datetime(2026, 10, 15, 13, tzinfo=UTC)
+NEXT_OPEN = datetime(2026, 10, 15, 13, 30, tzinfo=UTC)
+NEXT_DAY = datetime(2026, 10, 15, 14, tzinfo=UTC)
 
 
 def _check(
@@ -40,6 +51,28 @@ def _check(
 ) -> RiskDecision:
     """按基准账户（或给定的账户）检查方案，熔断没有触发。"""
     return service.check(plan, account or baseline_account(), daily_loss_breaker_tripped=False)
+
+
+def _recheck(
+    service: RiskService,
+    plan: TradePlan,
+    account: AccountSnapshot | None = None,
+    last_price: str | None = None,
+    daily_loss_breaker_tripped: bool = False,
+) -> RiskDecision:
+    """再校验：默认实时账户是基准账户，实时价等于限价（市价单用 1），熔断没有触发。"""
+    price = Decimal(last_price) if last_price else (plan.limit_price or Decimal(1))
+    return service.recheck(
+        plan.plan_id, account or baseline_account(), price, daily_loss_breaker_tripped
+    )
+
+
+def _clocked(
+    store: InMemoryReservationStore, now: datetime = BASELINE_NOW
+) -> tuple[RiskService, FakeClock]:
+    """从 now 开始的风控用例和它的时钟。"""
+    clock = FakeClock(now)
+    return risk_service(store, clock=clock), clock
 
 
 def _rules(decision: RiskDecision) -> list[str]:
@@ -291,6 +324,375 @@ def test_two_plans_submitted_together(bbb_first: bool) -> None:
     assert reserved <= TIGHT.settled_cash
 
 
+# 下单前再校验（pre-order-recheck spec）：时机
+
+
+def test_recheck_before_the_open_raises() -> None:
+    store = InMemoryReservationStore()
+    service, clock = _clocked(store, AFTER_HOURS)
+    bbb = baseline_plan()
+    _check(service, bbb)
+
+    clock.set(BEFORE_OPEN)
+    with pytest.raises(OutsideSessionError):
+        _recheck(service, bbb)
+
+    assert _reserved_shares(store, bbb) == 100
+
+
+# 再校验：有效期
+
+
+def test_recheck_voids_an_in_session_plan_after_the_close() -> None:
+    store = InMemoryReservationStore()
+    service, clock = _clocked(store)
+    bbb = baseline_plan()
+    first = _check(service, bbb)
+
+    clock.set(NEXT_DAY)
+    decision = _recheck(service, bbb)
+
+    assert first.expires_at == datetime(2026, 10, 14, 20, tzinfo=UTC)
+    assert decision.outcome is REJECTED
+    assert _rules(decision) == ["有效期"]
+    assert _reserved_shares(store, bbb) is None
+
+
+def test_recheck_an_after_hours_plan_at_the_next_open() -> None:
+    store = InMemoryReservationStore()
+    service, clock = _clocked(store, AFTER_HOURS)
+    bbb = baseline_plan()
+    first = _check(service, bbb)
+
+    clock.set(NEXT_OPEN)
+    decision = _recheck(service, bbb)
+
+    assert (first.outcome, first.expires_at) == (PASSED, datetime(2026, 10, 15, 20, tzinfo=UTC))
+    assert (decision.outcome, decision.quantity) == (PASSED, 100)
+    assert decision.emergency_threshold == Decimal("0.08")
+    assert decision.expires_at == datetime(2026, 10, 15, 20, tzinfo=UTC)
+
+
+def test_recheck_voids_the_plan_at_its_own_expiry() -> None:
+    store = InMemoryReservationStore()
+    service, clock = _clocked(store)
+    bbb = baseline_plan(expires_at=datetime(2026, 10, 14, 16, tzinfo=UTC))
+    _check(service, bbb)
+
+    clock.set(datetime(2026, 10, 14, 15, 59, tzinfo=UTC))
+    before = _recheck(service, bbb)
+    clock.set(datetime(2026, 10, 14, 16, tzinfo=UTC))
+    at_expiry = _recheck(service, bbb)
+
+    assert (before.outcome, before.quantity) == (PASSED, 100)
+    assert at_expiry.outcome is REJECTED
+    assert _rules(at_expiry) == ["有效期"]
+    assert _reserved_shares(store, bbb) is None
+
+
+def test_recheck_voids_an_expired_exit_plan() -> None:
+    store = InMemoryReservationStore()
+    service, clock = _clocked(store)
+    reduce = reduce_plan("AAA", "科技", 60)
+    _check(service, reduce)
+
+    clock.set(NEXT_DAY)
+    decision = _recheck(service, reduce)
+    closed = _check(service, close_plan("AAA", "科技"))
+
+    assert decision.outcome is REJECTED
+    assert _rules(decision) == ["有效期"]
+    assert (closed.outcome, closed.quantity) == (PASSED, 100)
+
+
+# 再校验：价格偏离
+
+
+@pytest.mark.parametrize("last_price", ["51.5", "48.5"])
+def test_recheck_passes_when_the_deviation_equals_the_allowed_value(last_price: str) -> None:
+    service = risk_service(InMemoryReservationStore())
+    bbb = baseline_plan()
+    _check(service, bbb)
+
+    decision = _recheck(service, bbb, last_price=last_price)
+
+    assert (decision.outcome, decision.quantity) == (PASSED, 100)
+
+
+@pytest.mark.parametrize("last_price", ["51.55", "48.45"])
+def test_recheck_voids_the_plan_when_the_deviation_is_too_large(last_price: str) -> None:
+    store = InMemoryReservationStore()
+    service = risk_service(store)
+    bbb = baseline_plan()
+    _check(service, bbb)
+
+    decision = _recheck(service, bbb, last_price=last_price)
+
+    assert decision.outcome is REJECTED
+    assert _rules(decision) == ["价格偏离"]
+    assert _reserved_shares(store, bbb) is None
+
+
+def test_recheck_uses_the_plan_s_own_allowed_deviation() -> None:
+    service = risk_service(InMemoryReservationStore())
+    bbb = baseline_plan(max_price_deviation=Decimal("0.05"))
+    _check(service, bbb)
+
+    within = _recheck(service, bbb, last_price="52.5")
+    over = _recheck(service, bbb, last_price="52.55")
+
+    assert (within.outcome, within.quantity) == (PASSED, 100)
+    assert over.outcome is REJECTED
+    assert _rules(over) == ["价格偏离"]
+
+
+def test_recheck_voids_an_after_hours_plan_that_gaps_at_the_open() -> None:
+    store = InMemoryReservationStore()
+    service, clock = _clocked(store, AFTER_HOURS)
+    bbb = baseline_plan()
+    _check(service, bbb)
+
+    clock.set(NEXT_OPEN)
+    decision = _recheck(service, bbb, last_price="53")
+
+    assert decision.outcome is REJECTED
+    assert _rules(decision) == ["价格偏离"]
+    assert _reserved_shares(store, bbb) is None
+
+
+def test_recheck_does_not_check_the_deviation_of_exit_plans() -> None:
+    service = risk_service(InMemoryReservationStore())
+    reduce = reduce_plan("AAA", "科技", 60).model_copy(
+        update={"order_type": OrderType.LIMIT, "limit_price": Decimal(120)}
+    )
+    _check(service, reduce)
+
+    decision = _recheck(service, reduce, last_price="100")
+
+    assert (decision.outcome, decision.quantity) == (PASSED, 60)
+
+
+# 再校验：跌破止损价
+
+
+def test_recheck_voids_the_plan_when_the_price_reaches_the_stop() -> None:
+    store = InMemoryReservationStore()
+    service = risk_service(store)
+    bbb = baseline_plan(stop_price=Decimal(49))
+    _check(service, bbb)
+
+    decision = _recheck(service, bbb, last_price="49")
+
+    assert decision.outcome is REJECTED
+    assert _rules(decision) == ["跌破止损价"]
+    assert _reserved_shares(store, bbb) is None
+
+
+def test_recheck_passes_when_the_price_is_above_the_stop() -> None:
+    service = risk_service(InMemoryReservationStore())
+    bbb = baseline_plan(stop_price=Decimal(49))
+    _check(service, bbb)
+
+    decision = _recheck(service, bbb, last_price="49.01")
+
+    assert (decision.outcome, decision.quantity) == (PASSED, 100)
+
+
+def test_recheck_lists_both_the_deviation_and_the_stop() -> None:
+    service = risk_service(InMemoryReservationStore())
+    bbb = baseline_plan(stop_price=Decimal(49))
+    _check(service, bbb)
+
+    decision = _recheck(service, bbb, last_price="48")
+
+    assert decision.outcome is REJECTED
+    assert set(_rules(decision)) == {"价格偏离", "跌破止损价"}
+
+
+# 再校验：按实时数据重跑风控
+
+
+def test_recheck_does_not_count_the_plan_s_own_reservation() -> None:
+    store = InMemoryReservationStore()
+    service = risk_service(store)
+    bbb = baseline_plan()
+    _check(service, bbb, TIGHT)
+    ccc = _check(service, _buy("CCC", 150, 48), TIGHT)
+
+    decision = _recheck(service, bbb, TIGHT)
+
+    assert (ccc.outcome, ccc.quantity) == (ADJUSTED, 100)
+    assert (decision.outcome, decision.quantity) == (PASSED, 100)
+    assert decision.violations == ()
+
+
+def test_recheck_adjusts_when_live_cash_is_short() -> None:
+    service = risk_service(InMemoryReservationStore())
+    bbb = baseline_plan()
+    _check(service, bbb)
+
+    decision = _recheck(service, bbb, baseline_account(settled_cash=Decimal(2010)))
+
+    assert (decision.outcome, decision.quantity) == (ADJUSTED, 40)
+    assert _rules(decision) == ["已结算资金"]
+
+
+def test_recheck_does_not_go_above_the_confirmed_quantity() -> None:
+    service = risk_service(InMemoryReservationStore())
+    plan = baseline_plan(quantity=300)
+    first = _check(service, plan, baseline_account(settled_cash=Decimal(5025)))
+
+    decision = _recheck(service, plan, baseline_account())
+
+    assert (first.outcome, first.quantity) == (ADJUSTED, 100)
+    assert (decision.outcome, decision.quantity) == (PASSED, 100)
+
+
+def test_recheck_voids_the_plan_when_the_breaker_has_tripped() -> None:
+    store = InMemoryReservationStore()
+    service = risk_service(store)
+    bbb = baseline_plan()
+    _check(service, bbb)
+
+    decision = _recheck(service, bbb, daily_loss_breaker_tripped=True)
+
+    assert decision.outcome is REJECTED
+    assert _rules(decision) == ["单日亏损熔断"]
+    assert _reserved_shares(store, bbb) is None
+
+
+def test_recheck_of_a_close_sells_the_live_sellable_quantity() -> None:
+    store = InMemoryReservationStore()
+    service = risk_service(store)
+    close = close_plan("AAA", "科技")
+    _check(service, close)
+
+    partly_stopped = _recheck(service, close, _holding_aaa(60))
+    shares_after_partly = _reserved_shares(store, close)
+    fully_stopped = _recheck(service, close, baseline_account(positions=()))
+
+    assert (partly_stopped.outcome, partly_stopped.quantity) == (PASSED, 60)
+    assert shares_after_partly == 60
+    assert fully_stopped.outcome is REJECTED
+    assert _rules(fully_stopped) == ["可卖数量"]
+    assert _reserved_shares(store, close) is None
+
+
+def test_recheck_adjusts_a_reduce_over_the_live_holding() -> None:
+    service = risk_service(InMemoryReservationStore())
+    reduce = reduce_plan("AAA", "科技", 60)
+    _check(service, reduce)
+
+    decision = _recheck(service, reduce, _holding_aaa(40))
+
+    assert (decision.outcome, decision.quantity) == (ADJUSTED, 40)
+    assert _rules(decision) == ["可卖数量"]
+
+
+# 再校验后的预留
+
+
+def test_recheck_shrinks_the_reservation_and_never_grows_it_back() -> None:
+    store = InMemoryReservationStore()
+    service = risk_service(store)
+    bbb = baseline_plan()
+    _check(service, bbb)
+
+    adjusted = _recheck(service, bbb, baseline_account(settled_cash=Decimal(2010)))
+    reservation = store.get(bbb.plan_id)
+    again = _recheck(service, bbb, baseline_account())
+
+    assert (adjusted.outcome, adjusted.quantity) == (ADJUSTED, 40)
+    assert reservation is not None
+    taken = opening_reservation(reservation, baseline_account(), RiskConfig().cost_buffer_ratio)
+    assert (taken.cash, taken.market_value, taken.risk) == (
+        Decimal(2010),
+        Decimal(2000),
+        Decimal(210),
+    )
+    assert (again.outcome, again.quantity) == (PASSED, 40)
+
+
+def test_checking_again_after_a_recheck_returns_the_first_result() -> None:
+    store = InMemoryReservationStore()
+    service = risk_service(store)
+    bbb = baseline_plan()
+    first = _check(service, bbb)
+    _recheck(service, bbb, baseline_account(settled_cash=Decimal(2010)))
+
+    again = _check(service, bbb)
+
+    assert again == first
+    assert (again.outcome, again.quantity) == (PASSED, 100)
+    assert _reserved_shares(store, bbb) == 40
+
+
+# 再校验：已经结束的方案
+
+
+def test_recheck_of_a_plan_voided_while_waiting_for_the_open() -> None:
+    store = InMemoryReservationStore()
+    service, clock = _clocked(store, AFTER_HOURS)
+    bbb = baseline_plan()
+    _check(service, bbb)
+    service.release(bbb.plan_id)  # 同一股票有新案件排队，方案作废
+
+    clock.set(NEXT_OPEN)
+    decision = _recheck(service, bbb)
+
+    assert decision.outcome is REJECTED
+    assert _rules(decision) == ["方案已结束"]
+
+
+def test_recheck_of_an_already_voided_plan() -> None:
+    service = risk_service(InMemoryReservationStore())
+    bbb = baseline_plan()
+    _check(service, bbb)
+    _recheck(service, bbb, last_price="53")
+
+    decision = _recheck(service, bbb, last_price="50")
+
+    assert decision.outcome is REJECTED
+    assert _rules(decision) == ["方案已结束"]
+
+
+def test_recheck_of_a_plan_rejected_by_the_risk_check() -> None:
+    store = InMemoryReservationStore()
+    service = risk_service(store)
+    bbb = baseline_plan()
+    _check(service, bbb, baseline_account(settled_cash=Decimal(50)))
+
+    decision = _recheck(service, bbb)
+
+    assert decision.outcome is REJECTED
+    assert _rules(decision) == ["方案已结束"]
+    assert store.get(bbb.plan_id) is None
+
+
+# 一次只处理一个方案：再校验和检查按两种先后顺序各跑一遍（design D7）
+
+
+@pytest.mark.parametrize("recheck_first", [True, False])
+def test_recheck_and_check_together(recheck_first: bool) -> None:
+    store = InMemoryReservationStore()
+    service = risk_service(store)
+    bbb, ccc = baseline_plan(), _buy("CCC", 150, 48)
+    _check(service, bbb, TIGHT)
+
+    if recheck_first:
+        rechecked = _recheck(service, bbb, TIGHT)
+        checked = _check(service, ccc, TIGHT)
+    else:
+        checked = _check(service, ccc, TIGHT)
+        rechecked = _recheck(service, bbb, TIGHT)
+
+    assert (rechecked.outcome, rechecked.quantity) == (PASSED, 100)
+    assert (checked.outcome, checked.quantity) == (ADJUSTED, 100)
+    buffer = RiskConfig().cost_buffer_ratio
+    reserved = sum(opening_reservation(r, TIGHT, buffer).cash for r in store.active())
+    assert reserved <= TIGHT.settled_cash
+
+
 # 合计不超限：后续方案按剩余额度检查（design D9）
 
 
@@ -322,23 +724,54 @@ def _assert_within_limits(store: InMemoryReservationStore, account: AccountSnaps
         assert sum(r.remaining for r in selling if r.plan.symbol == symbol) <= held.get(symbol, 0)
 
 
-_steps = st.lists(st.one_of(plans(), passable_opening_plans(), st.integers(0, 20)), max_size=12)
+@dataclass(frozen=True)
+class _Recheck:
+    """再校验已检查过的第几个方案。"""
+
+    index: int
+
+
+_steps = st.lists(
+    st.one_of(
+        plans(),
+        passable_opening_plans(),
+        st.integers(0, 20),
+        st.builds(_Recheck, st.integers(0, 20)),
+    ),
+    max_size=12,
+)
 
 
 @given(accounts_within_limits(), _steps)
 def test_holdings_plus_reservations_never_exceed_the_limits(
-    account: AccountSnapshot, steps: list[TradePlan | int]
+    account: AccountSnapshot, steps: list[TradePlan | int | _Recheck]
 ) -> None:
-    """依次检查方案；整数表示释放已检查过的第几个方案。每一步之后都不超限。"""
+    """依次检查方案；整数表示释放已检查过的第几个方案，_Recheck 表示再校验它，实时数据
+    和检查时相同。每一步之后都不超限；除清仓外，再校验的股数不超过再校验前的预留股数。
+    """
     store = InMemoryReservationStore()
     service = risk_service(store)
     checked: list[TradePlan] = []
 
     for step in steps:
-        if isinstance(step, int):
-            if checked:
-                service.release(checked[step % len(checked)].plan_id)
-        else:
+        if isinstance(step, TradePlan):
             _check(service, step, account)
             checked.append(step)
+        elif checked:
+            index = step.index if isinstance(step, _Recheck) else step
+            plan = checked[index % len(checked)]
+            if isinstance(step, int):
+                service.release(plan.plan_id)
+            else:
+                _assert_recheck_does_not_grow(store, service, plan, account)
         _assert_within_limits(store, account)
+
+
+def _assert_recheck_does_not_grow(
+    store: InMemoryReservationStore, service: RiskService, plan: TradePlan, account: AccountSnapshot
+) -> None:
+    before = _reserved_shares(store, plan)
+    decision = _recheck(service, plan, account)
+    event(f"再校验：{'有效预留' if before else '没有有效预留'}，{decision.outcome}")
+    if before is not None and plan.action is not TradeAction.CLOSE:
+        assert decision.quantity is None or decision.quantity <= before

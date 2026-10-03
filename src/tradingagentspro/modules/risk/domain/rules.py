@@ -11,6 +11,7 @@ from tradingagentspro.contracts.trade_plan import TradePlan
 from tradingagentspro.modules.risk.domain.exposure import (
     ZERO,
     effective_emergency_threshold,
+    effective_price_deviation,
     execution_day,
     holding_of,
     holding_risk,
@@ -204,6 +205,21 @@ def emergency_threshold(request: RiskRequest, quantity: int) -> RiskViolation | 
     )
 
 
+def price_deviation_range(request: RiskRequest, quantity: int) -> RiskViolation | None:
+    """生效的允许价格偏离在下限和上限之间（含两端）；方案没填时用默认值。"""
+    config = request.config
+    deviation = effective_price_deviation(request.plan, config)
+    if config.price_deviation_min <= deviation <= config.price_deviation_max:
+        return None
+    return RiskViolation(
+        rule="允许价格偏离",
+        message=(
+            f"允许价格偏离 {deviation} 不在 {config.price_deviation_min} "
+            f"到 {config.price_deviation_max} 之间"
+        ),
+    )
+
+
 def daily_loss_breaker(request: RiskRequest, quantity: int) -> RiskViolation | None:
     """今天的单日亏损熔断没有触发。"""
     if not request.daily_loss_breaker_tripped:
@@ -222,6 +238,7 @@ OPENING_RULES: tuple[RiskRule, ...] = (
     trade_interval,
     stop_below_limit,
     emergency_threshold,
+    price_deviation_range,
     daily_loss_breaker,
 )
 

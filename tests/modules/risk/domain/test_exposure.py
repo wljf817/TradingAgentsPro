@@ -7,6 +7,8 @@ from tests.modules.risk.builders import AAA, NYSE, baseline_account, baseline_pl
 from tradingagentspro.modules.risk import OpeningReservation, RiskConfig, SellReservation
 from tradingagentspro.modules.risk.domain.exposure import (
     effective_emergency_threshold,
+    effective_expiry,
+    effective_price_deviation,
     execution_day,
     holding_of,
     holding_risk,
@@ -108,3 +110,25 @@ def test_effective_emergency_threshold_defaults_when_not_given() -> None:
     assert effective_emergency_threshold(baseline_plan(), config) == Decimal("0.08")
     plan = baseline_plan(emergency_threshold=Decimal("0.20"))
     assert effective_emergency_threshold(plan, config) == Decimal("0.20")
+
+
+# 有效期和允许价格偏离
+
+
+def test_effective_expiry_defaults_to_the_close_of_the_execution_day() -> None:
+    assert effective_expiry(baseline_plan(), _utc(10, 14, 15), NYSE) == _utc(10, 14, 20)  # 盘中
+    assert effective_expiry(baseline_plan(), _utc(10, 14, 21), NYSE) == _utc(10, 15, 20)  # 盘后
+
+
+def test_effective_expiry_uses_the_plan_when_given() -> None:
+    plan = baseline_plan(expires_at=_utc(10, 16, 20))
+
+    assert effective_expiry(plan, _utc(10, 14, 15), NYSE) == _utc(10, 16, 20)
+
+
+def test_effective_price_deviation_defaults_when_not_given() -> None:
+    config = RiskConfig()
+
+    assert effective_price_deviation(baseline_plan(), config) == Decimal("0.03")
+    plan = baseline_plan(max_price_deviation=Decimal("0.05"))
+    assert effective_price_deviation(plan, config) == Decimal("0.05")
