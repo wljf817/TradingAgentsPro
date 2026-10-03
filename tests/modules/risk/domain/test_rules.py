@@ -24,7 +24,7 @@ from tests.modules.risk.builders import (
 from tests.modules.risk.domain.strategies import risk_requests
 from tradingagentspro.contracts.account import AccountSnapshot
 from tradingagentspro.contracts.risk import RiskDecision, RiskOutcome
-from tradingagentspro.contracts.trade_plan import OrderType, TradeAction, TradePlan
+from tradingagentspro.contracts.trade_plan import TradeAction, TradePlan
 from tradingagentspro.modules.risk import (
     OpeningReservation,
     RiskConfig,
@@ -300,12 +300,10 @@ def test_rejection_lists_every_failing_rule() -> None:
 
 def test_actual_holdings_decide_between_new_position_and_add() -> None:
     config = RiskConfig(max_positions=1)
-    buy_aaa = TradePlan(
+    buy_aaa = baseline_plan(
         symbol="AAA",
         sector="科技",
-        action=TradeAction.BUY,
         quantity=10,
-        order_type=OrderType.LIMIT,
         limit_price=Decimal(110),
         stop_price=Decimal(105),
     )

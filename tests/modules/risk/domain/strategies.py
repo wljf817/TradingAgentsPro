@@ -51,6 +51,7 @@ def _plans(draw: st.DrawFn) -> TradePlan:
     symbol, sector = draw(_symbols), draw(_sectors)
     if action.is_opening:
         return TradePlan(
+            plan_id=draw(st.uuids()),
             symbol=symbol,
             sector=sector,
             action=action,
@@ -62,6 +63,7 @@ def _plans(draw: st.DrawFn) -> TradePlan:
         )
     order_type = draw(st.sampled_from(OrderType))
     return TradePlan(
+        plan_id=draw(st.uuids()),
         symbol=symbol,
         sector=sector,
         action=action,

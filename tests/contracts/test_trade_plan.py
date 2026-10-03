@@ -2,6 +2,7 @@
 
 from decimal import Decimal
 from typing import Any
+from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
@@ -9,6 +10,7 @@ from pydantic import ValidationError
 from tradingagentspro.contracts.trade_plan import OrderType, TradeAction, TradePlan
 
 BUY, ADD, REDUCE, CLOSE = TradeAction.BUY, TradeAction.ADD, TradeAction.REDUCE, TradeAction.CLOSE
+PLAN_ID = UUID(int=1)
 
 
 def _plan(action: TradeAction, **changes: Any) -> dict[str, Any]:
@@ -22,7 +24,8 @@ def _plan(action: TradeAction, **changes: Any) -> dict[str, Any]:
         }
     else:
         fields = {"quantity": 60 if action is REDUCE else None, "order_type": OrderType.MARKET}
-    return {"symbol": "BBB", "sector": "医疗", "action": action} | fields | changes
+    base = {"plan_id": PLAN_ID, "symbol": "BBB", "sector": "医疗", "action": action}
+    return base | fields | changes
 
 
 def _assert_format_error(fields: dict[str, Any]) -> None:
@@ -32,6 +35,7 @@ def _assert_format_error(fields: dict[str, Any]) -> None:
 
 def test_valid_opening_and_exit_plans() -> None:
     buy = TradePlan(
+        plan_id=UUID(int=1),
         symbol="BBB",
         sector="医疗",
         action=BUY,
@@ -41,9 +45,15 @@ def test_valid_opening_and_exit_plans() -> None:
         stop_price=Decimal(45),
     )
     reduce = TradePlan(
-        symbol="AAA", sector="科技", action=REDUCE, quantity=60, order_type=OrderType.MARKET
+        plan_id=UUID(int=2),
+        symbol="AAA",
+        sector="科技",
+        action=REDUCE,
+        quantity=60,
+        order_type=OrderType.MARKET,
     )
     close = TradePlan(
+        plan_id=UUID(int=3),
         symbol="AAA",
         sector="科技",
         action=CLOSE,
@@ -54,6 +64,18 @@ def test_valid_opening_and_exit_plans() -> None:
     assert buy.emergency_threshold is None
     assert reduce.limit_price is None
     assert close.quantity is None
+
+
+@pytest.mark.parametrize("action", [BUY, CLOSE])
+def test_plan_without_plan_id(action: TradeAction) -> None:
+    fields = _plan(action)
+    del fields["plan_id"]
+
+    _assert_format_error(fields)
+
+
+def test_plan_id_must_be_a_uuid() -> None:
+    _assert_format_error(_plan(BUY, plan_id="plan-1"))
 
 
 @pytest.mark.parametrize(

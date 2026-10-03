@@ -3,6 +3,7 @@
 from decimal import Decimal
 from enum import StrEnum
 from typing import Self
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -30,10 +31,13 @@ class TradePlan(BaseModel):
 
     方案最终来自模型输出，所以在这里校验格式；按动作区分的要求见 risk-rules spec
     「交易方案的格式」。清仓不写股数，表示卖出全部可卖数量。
+
+    plan_id 由创建方案的一方生成；预留、成交、释放、人工确认和下单都用它指向这个方案。
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    plan_id: UUID
     symbol: str = Field(min_length=1)
     sector: str = Field(min_length=1)
     action: TradeAction

@@ -2,7 +2,9 @@
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from itertools import count
 from typing import Any
+from uuid import UUID
 
 from tests.fakes.calendar import sample_nyse_calendar
 from tradingagentspro.contracts.account import AccountSnapshot, Position
@@ -11,6 +13,13 @@ from tradingagentspro.modules.risk import RiskConfig, RiskRequest
 
 NYSE = sample_nyse_calendar()
 BASELINE_NOW = datetime(2026, 10, 14, 15, tzinfo=UTC)  # 周三，盘中
+
+_plan_ids = count(1)
+
+
+def next_plan_id() -> UUID:
+    """每次给出一个新的方案 ID：UUID(int=1)、UUID(int=2)……测试只要求它们互不相同。"""
+    return UUID(int=next(_plan_ids))
 
 
 def holding(
@@ -47,8 +56,9 @@ def baseline_account(**changes: Any) -> AccountSnapshot:
 
 
 def baseline_plan(**changes: Any) -> TradePlan:
-    """买入 BBB（医疗）100 股，限价 50，止损价 45，不填紧急阈值。"""
+    """买入 BBB（医疗）100 股，限价 50，止损价 45，不填紧急阈值；方案 ID 每次都是新的。"""
     fields: dict[str, Any] = {
+        "plan_id": next_plan_id(),
         "symbol": "BBB",
         "sector": "医疗",
         "action": TradeAction.BUY,
@@ -60,9 +70,12 @@ def baseline_plan(**changes: Any) -> TradePlan:
     return TradePlan(**(fields | changes))
 
 
-def add_aaa(quantity: int, limit_price: int, stop_price: int) -> TradePlan:
-    """加仓 AAA（科技）。"""
+def add_aaa(
+    quantity: int, limit_price: int, stop_price: int, plan_id: UUID | None = None
+) -> TradePlan:
+    """加仓 AAA（科技）。没有指定方案 ID 时用一个新的。"""
     return TradePlan(
+        plan_id=plan_id or next_plan_id(),
         symbol="AAA",
         sector="科技",
         action=TradeAction.ADD,
@@ -73,9 +86,10 @@ def add_aaa(quantity: int, limit_price: int, stop_price: int) -> TradePlan:
     )
 
 
-def reduce_plan(symbol: str, sector: str, quantity: int) -> TradePlan:
-    """市价减仓。"""
+def reduce_plan(symbol: str, sector: str, quantity: int, plan_id: UUID | None = None) -> TradePlan:
+    """市价减仓。没有指定方案 ID 时用一个新的。"""
     return TradePlan(
+        plan_id=plan_id or next_plan_id(),
         symbol=symbol,
         sector=sector,
         action=TradeAction.REDUCE,
@@ -84,10 +98,14 @@ def reduce_plan(symbol: str, sector: str, quantity: int) -> TradePlan:
     )
 
 
-def close_plan(symbol: str, sector: str) -> TradePlan:
-    """市价清仓。"""
+def close_plan(symbol: str, sector: str, plan_id: UUID | None = None) -> TradePlan:
+    """市价清仓。没有指定方案 ID 时用一个新的。"""
     return TradePlan(
-        symbol=symbol, sector=sector, action=TradeAction.CLOSE, order_type=OrderType.MARKET
+        plan_id=plan_id or next_plan_id(),
+        symbol=symbol,
+        sector=sector,
+        action=TradeAction.CLOSE,
+        order_type=OrderType.MARKET,
     )
 
 
