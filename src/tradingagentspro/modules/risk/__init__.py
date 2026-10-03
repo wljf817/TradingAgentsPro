@@ -1,6 +1,7 @@
-"""风控引擎：按开仓类和减仓类规则检查交易方案，给出通过、调整或拒绝。
+"""风控引擎：按开仓类和减仓类规则检查交易方案，给出通过、调整或拒绝；通过的方案预留额度。
 
-规则见 openspec 的 risk-rules spec。模块之外的代码只能 import 这里导出的名字。
+规则见 openspec 的 risk-rules spec，预留见 risk-reservations spec。
+模块之外的代码只能 import 这里导出的名字。
 """
 
 from tradingagentspro.modules.risk.config import RiskConfig
@@ -10,5 +11,17 @@ from tradingagentspro.modules.risk.domain.request import (
     RiskRequest,
     SellReservation,
 )
+from tradingagentspro.modules.risk.domain.reservation import Reservation
+from tradingagentspro.modules.risk.ports import ReservationStore
+from tradingagentspro.modules.risk.service import RiskService
 
-__all__ = ["OpeningReservation", "RiskConfig", "RiskRequest", "SellReservation", "evaluate_plan"]
+__all__ = [
+    "OpeningReservation",
+    "Reservation",
+    "ReservationStore",
+    "RiskConfig",
+    "RiskRequest",
+    "RiskService",
+    "SellReservation",
+    "evaluate_plan",
+]

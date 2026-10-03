@@ -1,4 +1,4 @@
-"""风控测试的数据：risk-rules spec「风控的输入和判定」里的基准数据，以及常用的方案。"""
+"""风控测试的数据：risk-rules spec「风控的输入和判定」里的基准数据、常用的方案和风控用例。"""
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -7,9 +7,10 @@ from typing import Any
 from uuid import UUID
 
 from tests.fakes.calendar import sample_nyse_calendar
+from tests.fakes.clock import FakeClock
 from tradingagentspro.contracts.account import AccountSnapshot, Position
 from tradingagentspro.contracts.trade_plan import OrderType, TradeAction, TradePlan
-from tradingagentspro.modules.risk import RiskConfig, RiskRequest
+from tradingagentspro.modules.risk import ReservationStore, RiskConfig, RiskRequest, RiskService
 
 NYSE = sample_nyse_calendar()
 BASELINE_NOW = datetime(2026, 10, 14, 15, tzinfo=UTC)  # 周三，盘中
@@ -122,3 +123,14 @@ def baseline_request(**changes: Any) -> RiskRequest:
         "config": RiskConfig(),
     }
     return RiskRequest(**(fields | changes))
+
+
+def risk_service(store: ReservationStore, **changes: Any) -> RiskService:
+    """风控用例：基准时刻的测试时钟、纽交所样例日历、默认阈值；changes 覆盖其中的参数。"""
+    fields: dict[str, Any] = {
+        "store": store,
+        "clock": FakeClock(BASELINE_NOW),
+        "calendar": NYSE,
+        "config": RiskConfig(),
+    }
+    return RiskService(**(fields | changes))
