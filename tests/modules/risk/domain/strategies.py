@@ -33,6 +33,16 @@ _moments = st.datetimes(
 )
 
 
+# 每笔佣金和往返佣金占比上限
+_commissions = st.integers(0, 10).map(Decimal)
+_commission_ratios = st.sampled_from([Decimal("0.005"), Decimal("0.01"), Decimal("0.05")])
+commission_configs = st.builds(
+    RiskConfig,
+    commission_per_order=_commissions,
+    max_round_trip_commission_ratio=_commission_ratios,
+)
+
+
 def _money(max_value: int | str, min_value: str = "0.01") -> st.SearchStrategy[Decimal]:
     return st.decimals(min_value=Decimal(min_value), max_value=Decimal(max_value), places=2)
 
@@ -110,6 +120,8 @@ def risk_requests(draw: st.DrawFn) -> RiskRequest:
     config = RiskConfig(
         max_positions=draw(st.integers(1, 8)),
         min_trade_interval_sessions=draw(st.integers(1, 3)),
+        commission_per_order=draw(_commissions),
+        max_round_trip_commission_ratio=draw(_commission_ratios),
     )
     return RiskRequest(
         plan=draw(plans()),
@@ -125,7 +137,7 @@ def risk_requests(draw: st.DrawFn) -> RiskRequest:
 
 @st.composite
 def accounts_within_limits(draw: st.DrawFn) -> AccountSnapshot:
-    """持仓一开始就满足默认阈值下的组合合计风险和板块集中度的账户。
+    """持仓一开始就满足默认配置（计入每笔佣金）下的组合合计风险和板块集中度的账户。
 
     先生成持仓，再按持仓算出满足这两项上限所需的最低权益，权益比它至少多 50,000，
     免得开仓方案大多 1 股都通不过。最多 4 只持仓，不会超过默认的最多持仓数。
@@ -133,7 +145,7 @@ def accounts_within_limits(draw: st.DrawFn) -> AccountSnapshot:
     """
     config = RiskConfig()
     positions = draw(_positions())
-    total_risk = sum((holding_risk(p, config.cost_buffer_ratio) for p in positions), ZERO)
+    total_risk = sum((holding_risk(p, config) for p in positions), ZERO)
     sector_values = (
         sum((p.quantity * p.last_price for p in positions if p.sector == sector), ZERO)
         for sector in SECTORS

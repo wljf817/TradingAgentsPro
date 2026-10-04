@@ -16,6 +16,7 @@ from tests.fakes.reservations import InMemoryReservationStore
 from tests.modules.risk.builders import (
     BASELINE_NOW,
     baseline_account,
+    baseline_config,
     baseline_plan,
     close_plan,
     holding,
@@ -166,7 +167,7 @@ def test_after_a_partial_fill_the_rest_stays_reserved() -> None:
     assert _reserved_shares(store, bbb) == 70
     reservation = store.get(bbb.plan_id)
     assert reservation is not None
-    taken = opening_reservation(reservation, baseline_account(), RiskConfig().cost_buffer_ratio)
+    taken = opening_reservation(reservation, baseline_account(), baseline_config())
     assert (taken.cash, taken.market_value) == (Decimal("3517.5"), Decimal(3500))
 
 
@@ -319,8 +320,8 @@ def test_two_plans_submitted_together(bbb_first: bool) -> None:
     # 先检查的方案按完整的额度检查
     assert (first_decision.outcome, first_decision.quantity) == (PASSED, first.quantity)
     # 后检查的方案按剩余额度检查，两份预留的资金合计不超过已结算资金
-    buffer = RiskConfig().cost_buffer_ratio
-    reserved = sum(opening_reservation(r, TIGHT, buffer).cash for r in store.active())
+    config = baseline_config()
+    reserved = sum(opening_reservation(r, TIGHT, config).cash for r in store.active())
     assert len(store.active()) == 2
     assert reserved <= TIGHT.settled_cash
 
@@ -605,13 +606,30 @@ def test_recheck_shrinks_the_reservation_and_never_grows_it_back() -> None:
 
     assert (adjusted.outcome, adjusted.quantity) == (ADJUSTED, 40)
     assert reservation is not None
-    taken = opening_reservation(reservation, baseline_account(), RiskConfig().cost_buffer_ratio)
+    taken = opening_reservation(reservation, baseline_account(), baseline_config())
     assert (taken.cash, taken.market_value, taken.risk) == (
         Decimal(2010),
         Decimal(2000),
         Decimal(210),
     )
     assert (again.outcome, again.quantity) == (PASSED, 40)
+
+
+def test_recheck_voids_the_plan_when_the_commission_ratio_gets_too_high() -> None:
+    """spec「再校验调小股数后佣金占比过高时作废」：每笔佣金 2。"""
+    store = InMemoryReservationStore()
+    service = risk_service(store, config=baseline_config(commission_per_order=Decimal(2)))
+    bbb = baseline_plan()
+    _check(service, bbb)
+
+    adjusted = _recheck(service, bbb, baseline_account(settled_cash=Decimal(404)))
+    shares = _reserved_shares(store, bbb)
+    voided = _recheck(service, bbb, baseline_account(settled_cash=Decimal(403)))
+
+    assert (adjusted.outcome, adjusted.quantity, shares) == (ADJUSTED, 8, 8)
+    assert voided.outcome is REJECTED
+    assert [v.rule for v in voided.violations] == ["已结算资金", "佣金占比"]
+    assert _reserved_shares(store, bbb) is None
 
 
 def test_checking_again_after_a_recheck_returns_the_first_result() -> None:
@@ -689,29 +707,28 @@ def test_recheck_and_check_together(recheck_first: bool) -> None:
 
     assert (rechecked.outcome, rechecked.quantity) == (PASSED, 100)
     assert (checked.outcome, checked.quantity) == (ADJUSTED, 100)
-    buffer = RiskConfig().cost_buffer_ratio
-    reserved = sum(opening_reservation(r, TIGHT, buffer).cash for r in store.active())
+    config = baseline_config()
+    reserved = sum(opening_reservation(r, TIGHT, config).cash for r in store.active())
     assert reserved <= TIGHT.settled_cash
 
 
-# 合计不超限：后续方案按剩余额度检查（design D9）
+# 合计不超限：后续方案按剩余额度检查（design D9）。用默认配置，佣金也计入（本变更 design D5）
+
+DEFAULT_CONFIG = RiskConfig()
 
 
 def _assert_within_limits(store: InMemoryReservationStore, account: AccountSnapshot) -> None:
     """持仓加全部有效预留，满足已结算资金、组合合计风险、板块集中度、最多持仓数，
     并且每只股票的卖出预留之和不超过持仓股数。
     """
-    config = RiskConfig()
-    buffer_ratio = config.cost_buffer_ratio
+    config = DEFAULT_CONFIG
     active = store.active()
-    opening = [
-        opening_reservation(r, account, buffer_ratio) for r in active if r.plan.action.is_opening
-    ]
+    opening = [opening_reservation(r, account, config) for r in active if r.plan.action.is_opening]
     selling = [r for r in active if not r.plan.action.is_opening]
     held = {p.symbol: p.quantity for p in account.positions}
 
     assert sum((r.cash for r in opening), ZERO) <= account.settled_cash
-    total_risk = sum((holding_risk(p, buffer_ratio) for p in account.positions), ZERO)
+    total_risk = sum((holding_risk(p, config) for p in account.positions), ZERO)
     total_risk += sum((r.risk for r in opening), ZERO)
     assert total_risk <= account.equity * config.max_total_risk_ratio
     for sector in SECTORS:
@@ -751,7 +768,7 @@ def test_holdings_plus_reservations_never_exceed_the_limits(
     和检查时相同。每一步之后都不超限；除清仓外，再校验的股数不超过再校验前的预留股数。
     """
     store = InMemoryReservationStore()
-    service = risk_service(store)
+    service = risk_service(store, config=DEFAULT_CONFIG)
     checked: list[TradePlan] = []
 
     for step in steps:

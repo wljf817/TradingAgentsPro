@@ -27,7 +27,8 @@ class RiskDecision(BaseModel):
     - quantity：最终股数；拒绝时为 None
     - emergency_threshold：生效的紧急阈值；只有开仓类方案通过或调整时才有
     - expires_at：生效的有效期；通过或调整时才有，四种动作都有
-    - violations：调整时是请求股数下不通过的规则，拒绝时是 1 股时不通过的规则，通过时为空
+    - violations：调整时是请求股数下不通过的规则，拒绝时是 1 股时不通过的规则，通过时为空；
+      开仓方案因为佣金占比被拒绝时，是请求股数下不通过的规则加上「佣金占比」
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

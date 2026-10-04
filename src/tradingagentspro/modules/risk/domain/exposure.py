@@ -21,10 +21,15 @@ def holding_of(account: AccountSnapshot, symbol: str) -> Position | None:
     return next((p for p in account.positions if p.symbol == symbol), None)
 
 
-def holding_risk(position: Position, buffer_ratio: Decimal) -> Decimal:
-    """已有持仓的计划风险，按均价计算；算出负数时记 0。"""
+def holding_risk(position: Position, config: RiskConfig) -> Decimal:
+    """已有持仓的计划风险，按均价计算，计入止损卖出的一笔佣金；算出负数时记 0。"""
     quantity, cost = position.quantity, position.average_cost
-    return max(ZERO, quantity * (cost - position.stop_price) + quantity * cost * buffer_ratio)
+    risk = (
+        quantity * (cost - position.stop_price)
+        + quantity * cost * config.cost_buffer_ratio
+        + config.commission_per_order
+    )
+    return max(ZERO, risk)
 
 
 def merged_risk(
@@ -32,17 +37,19 @@ def merged_risk(
     quantity: int,
     limit_price: Decimal,
     stop_price: Decimal,
-    buffer_ratio: Decimal,
+    config: RiskConfig,
 ) -> Decimal:
     """持仓加上方案买入部分后的计划风险，整只股票用方案的止损价；算出负数时记 0。
 
     按展开式计算，不先算合并后的均价，避免除法。没有持仓时就是新买入的计划风险。
+    计入两笔佣金：方案买入一笔，止损卖出一笔。整只股票只有一张止损单，加仓也是两笔。
     """
     held, cost = (holding.quantity, holding.average_cost) if holding else (0, ZERO)
     risk = (
         held * (cost - stop_price)
         + quantity * (limit_price - stop_price)
-        + (held * cost + quantity * limit_price) * buffer_ratio
+        + (held * cost + quantity * limit_price) * config.cost_buffer_ratio
+        + 2 * config.commission_per_order
     )
     return max(ZERO, risk)
 

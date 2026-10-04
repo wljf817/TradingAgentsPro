@@ -28,7 +28,8 @@ def evaluate_plan(request: RiskRequest) -> RiskDecision:
 def decide(request: RiskRequest, rules: Sequence[RiskRule], requested: int) -> RiskDecision:
     """1 股都通不过就拒绝；请求股数能通过就通过；否则调整为能通过的最大股数。
 
-    依赖每条规则的单调性，用二分查找找最大股数。
+    依赖每条规则的单调性，用二分查找找最大股数。开仓方案得出最终股数之后，再检查佣金占比，
+    不通过就改为拒绝：股数越小越通不过，所以它不是规则，不参与二分查找。
     """
 
     def violations_at(quantity: int) -> tuple[RiskViolation, ...]:
@@ -36,25 +37,50 @@ def decide(request: RiskRequest, rules: Sequence[RiskRule], requested: int) -> R
 
     at_one = violations_at(1)
     if at_one:
-        return RiskDecision(
-            outcome=RiskOutcome.REJECTED,
-            quantity=None,
-            emergency_threshold=None,
-            expires_at=None,
-            violations=at_one,
-        )
+        return _rejected(at_one)
     at_requested = violations_at(requested)
     if not at_requested:
-        return _approved(request, RiskOutcome.PASSED, requested, ())
+        outcome, quantity = RiskOutcome.PASSED, requested
+    else:
+        passing, failing = 1, requested
+        while failing - passing > 1:
+            middle = (passing + failing) // 2
+            if violations_at(middle):
+                failing = middle
+            else:
+                passing = middle
+        outcome, quantity = RiskOutcome.ADJUSTED, passing
+    if (violation := _commission_ratio(request, quantity)) is not None:
+        return _rejected((*at_requested, violation))
+    return _approved(request, outcome, quantity, at_requested)
 
-    passing, failing = 1, requested
-    while failing - passing > 1:
-        middle = (passing + failing) // 2
-        if violations_at(middle):
-            failing = middle
-        else:
-            passing = middle
-    return _approved(request, RiskOutcome.ADJUSTED, passing, at_requested)
+
+def _commission_ratio(request: RiskRequest, quantity: int) -> RiskViolation | None:
+    """开仓方案：买卖两笔佣金不超过成交额乘以往返佣金占比上限。减仓类方案不检查。"""
+    plan, config = request.plan, request.config
+    if not plan.action.is_opening:
+        return None
+    assert plan.limit_price is not None  # 方案格式保证开仓方案有限价
+    round_trip = 2 * config.commission_per_order
+    value = quantity * plan.limit_price
+    cap = value * config.max_round_trip_commission_ratio
+    if round_trip <= cap:
+        return None
+    return RiskViolation(
+        rule="佣金占比",
+        message=f"往返佣金 {round_trip:,.2f}，超过 {quantity} 股成交额对应的上限 {cap:,.2f}",
+    )
+
+
+def _rejected(violations: tuple[RiskViolation, ...]) -> RiskDecision:
+    """拒绝的结果：没有最终股数、生效的紧急阈值和有效期。"""
+    return RiskDecision(
+        outcome=RiskOutcome.REJECTED,
+        quantity=None,
+        emergency_threshold=None,
+        expires_at=None,
+        violations=violations,
+    )
 
 
 def _approved(

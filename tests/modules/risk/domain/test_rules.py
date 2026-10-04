@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-from hypothesis import given
+from hypothesis import assume, given
 from hypothesis import strategies as st
 
 from tests.fakes.calendar import sample_nyse_calendar
@@ -15,6 +15,7 @@ from tests.modules.risk.builders import (
     AAA,
     add_aaa,
     baseline_account,
+    baseline_config,
     baseline_plan,
     baseline_request,
     close_plan,
@@ -27,7 +28,6 @@ from tradingagentspro.contracts.risk import RiskDecision, RiskOutcome
 from tradingagentspro.contracts.trade_plan import TradeAction, TradePlan
 from tradingagentspro.modules.risk import (
     OpeningReservation,
-    RiskConfig,
     RiskRequest,
     SellReservation,
     evaluate_plan,
@@ -36,6 +36,7 @@ from tradingagentspro.modules.risk.domain.rules import EXIT_RULES, OPENING_RULES
 from tradingagentspro.shared.trading_calendar import CalendarRangeError
 
 PASSED, ADJUSTED, REJECTED = RiskOutcome.PASSED, RiskOutcome.ADJUSTED, RiskOutcome.REJECTED
+WITH_COMMISSION = baseline_config(commission_per_order=Decimal(2))
 
 
 def _check(**changes: Any) -> RiskDecision:
@@ -62,7 +63,12 @@ def _tech_buy(quantity: int) -> TradePlan:
 
 @given(risk_requests(), st.integers(2, 2000))
 def test_every_registered_rule_is_monotone(request: RiskRequest, quantity: int) -> None:
-    rules = OPENING_RULES if request.plan.action.is_opening else EXIT_RULES
+    """止损价不低于限价的开仓方案除外，它们总被「止损价」规则拒绝（本变更 design D7）。"""
+    plan = request.plan
+    assume(
+        plan.stop_price is None or plan.limit_price is None or plan.stop_price < plan.limit_price
+    )
+    rules = OPENING_RULES if plan.action.is_opening else EXIT_RULES
     for rule in rules:
         if rule(request, quantity) is None:
             assert rule(request, quantity - 1) is None
@@ -118,6 +124,16 @@ def test_adjusts_when_settled_cash_is_short() -> None:
     assert _rules(decision) == ["已结算资金"]
 
 
+@pytest.mark.parametrize(("settled_cash", "quantity"), [(2012, 40), (2011, 39)])
+def test_settled_cash_counts_the_buy_commission(settled_cash: int, quantity: int) -> None:
+    """spec「已结算资金计入买入佣金」：40 股连同一笔买入佣金恰好需要 2,012。"""
+    account = baseline_account(settled_cash=Decimal(settled_cash))
+    decision = _check(config=WITH_COMMISSION, account=account)
+
+    assert (decision.outcome, decision.quantity) == (ADJUSTED, quantity)
+    assert _rules(decision) == ["已结算资金"]
+
+
 def test_adjusts_when_over_the_position_limit() -> None:
     decision = _check(plan=add_aaa(100, 110, 105))
 
@@ -129,6 +145,14 @@ def test_adjusts_when_over_the_trade_risk_limit() -> None:
     decision = _check(plan=baseline_plan(quantity=300))
 
     assert (decision.outcome, decision.quantity) == (ADJUSTED, 190)
+    assert _rules(decision) == ["单笔计划风险"]
+
+
+def test_trade_risk_counts_the_buy_and_sell_commissions() -> None:
+    """spec「单笔计划风险计入买卖佣金」：189 股的计划风险是 996.25，190 股是 1,001.5。"""
+    decision = _check(config=WITH_COMMISSION, plan=baseline_plan(quantity=300))
+
+    assert (decision.outcome, decision.quantity) == (ADJUSTED, 189)
     assert _rules(decision) == ["单笔计划风险"]
 
 
@@ -175,7 +199,7 @@ def test_reserved_risk_counts_toward_total_risk() -> None:
     ccc = OpeningReservation("CCC", "能源", Decimal(5025), Decimal(5000), Decimal(425))
 
     decision = _check(
-        config=RiskConfig(max_total_risk_ratio=Decimal("0.02")),
+        config=baseline_config(max_total_risk_ratio=Decimal("0.02")),
         opening_reservations=(ccc,),
         plan=baseline_plan(quantity=150),
     )
@@ -198,7 +222,8 @@ def test_reserved_market_value_counts_toward_its_sector() -> None:
 
 def test_changing_a_threshold_changes_the_result() -> None:
     decision = _check(
-        config=RiskConfig(max_trade_risk_ratio=Decimal("0.02")), plan=baseline_plan(quantity=300)
+        config=baseline_config(max_trade_risk_ratio=Decimal("0.02")),
+        plan=baseline_plan(quantity=300),
     )
 
     assert (decision.outcome, decision.quantity) == (PASSED, 300)
@@ -208,7 +233,7 @@ def test_changing_a_threshold_changes_the_result() -> None:
 
 
 def test_rejects_a_new_position_when_positions_are_full() -> None:
-    decision = _check(config=RiskConfig(max_positions=1))
+    decision = _check(config=baseline_config(max_positions=1))
 
     assert decision.outcome is REJECTED
     assert _rules(decision) == ["最多持仓数"]
@@ -309,7 +334,7 @@ def test_no_opening_after_the_daily_loss_breaker_trips(plan: TradePlan) -> None:
 def test_stocks_with_opening_reservations_take_position_slots() -> None:
     ccc = OpeningReservation("CCC", "能源", Decimal(5025), Decimal(5000), Decimal(425))
 
-    decision = _check(config=RiskConfig(max_positions=2), opening_reservations=(ccc,))
+    decision = _check(config=baseline_config(max_positions=2), opening_reservations=(ccc,))
 
     assert decision.outcome is REJECTED
     assert _rules(decision) == ["最多持仓数"]
@@ -326,7 +351,7 @@ def test_rejection_lists_every_failing_rule() -> None:
 
 
 def test_actual_holdings_decide_between_new_position_and_add() -> None:
-    config = RiskConfig(max_positions=1)
+    config = baseline_config(max_positions=1)
     buy_aaa = baseline_plan(
         symbol="AAA",
         sector="科技",

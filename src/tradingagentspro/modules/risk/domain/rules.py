@@ -27,7 +27,8 @@ class RiskRule(Protocol):
     """一条风控规则：按 quantity 股执行能通过时返回 None，否则返回违规。
 
     必须满足单调性：某个股数能通过，任何更小的正整数股数也能通过。判定靠这个性质
-    找出能通过的最大股数。
+    找出能通过的最大股数。止损价不低于限价的开仓方案除外：它们总被「止损价」规则拒绝，
+    判定在 1 股时就给出拒绝。
     """
 
     def __call__(self, request: RiskRequest, quantity: int) -> RiskViolation | None: ...
@@ -48,16 +49,17 @@ def _merged_risk(request: RiskRequest, quantity: int) -> Decimal:
     plan = request.plan
     limit_price, stop_price = _prices(plan)
     holding = holding_of(request.account, plan.symbol)
-    return merged_risk(holding, quantity, limit_price, stop_price, request.config.cost_buffer_ratio)
+    return merged_risk(holding, quantity, limit_price, stop_price, request.config)
 
 
 # 开仓类规则
 
 
 def settled_cash(request: RiskRequest, quantity: int) -> RiskViolation | None:
-    """股数乘以限价乘以（1 + 缓冲比例），不超过已结算资金减去开仓预留的资金。"""
+    """股数乘以限价乘以（1 + 缓冲比例），加上一笔买入佣金，不超过已结算资金减去开仓预留的资金。"""
     limit_price, _ = _prices(request.plan)
-    cost = quantity * limit_price * (1 + request.config.cost_buffer_ratio)
+    config = request.config
+    cost = quantity * limit_price * (1 + config.cost_buffer_ratio) + config.commission_per_order
     reserved = sum((r.cash for r in request.opening_reservations), ZERO)
     available = request.account.settled_cash - reserved
     if cost <= available:
@@ -100,11 +102,7 @@ def total_risk(request: RiskRequest, quantity: int) -> RiskViolation | None:
     """
     plan, account, config = request.plan, request.account, request.config
     others = sum(
-        (
-            holding_risk(p, config.cost_buffer_ratio)
-            for p in account.positions
-            if p.symbol != plan.symbol
-        ),
+        (holding_risk(p, config) for p in account.positions if p.symbol != plan.symbol),
         ZERO,
     )
     reserved = sum((r.risk for r in request.opening_reservations), ZERO)

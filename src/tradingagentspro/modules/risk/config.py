@@ -20,8 +20,12 @@ class RiskConfig(BaseModel):
     max_sector_ratio: Decimal = Field(default=Decimal("0.40"), gt=0)
     # 持仓和有开仓预留的股票合计不超过这么多只
     max_positions: int = Field(default=8, gt=0)
-    # 费用和滑点缓冲 = 成交额乘以这个比例
+    # 滑点等按成交额计算的缓冲 = 成交额乘以这个比例；不含佣金
     cost_buffer_ratio: Decimal = Field(default=Decimal("0.005"), gt=0)
+    # 每笔订单的佣金和平台费，买入、卖出各算一笔
+    commission_per_order: Decimal = Field(default=Decimal(2), ge=0)
+    # 开仓方案买卖两笔佣金不超过成交额乘以这个比例
+    max_round_trip_commission_ratio: Decimal = Field(default=Decimal("0.01"), gt=0)
     # 同一股票两次交易至少相隔这么多个交易日
     min_trade_interval_sessions: int = Field(default=1, gt=0)
     # 方案的紧急阈值必须在下限和上限之间（含两端），没填时用默认值

@@ -107,12 +107,11 @@ class RiskService:
     ) -> RiskRequest:
         """检查这个方案的输入：其他方案的预留是除它自己以外的全部有效预留。"""
         others = [r for r in self._store.active() if r.plan.plan_id != plan.plan_id]
-        buffer_ratio = self._config.cost_buffer_ratio
         return RiskRequest(
             plan=plan,
             account=account,
             opening_reservations=tuple(
-                opening_reservation(r, account, buffer_ratio)
+                opening_reservation(r, account, self._config)
                 for r in others
                 if r.plan.action.is_opening
             ),

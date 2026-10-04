@@ -5,12 +5,12 @@
 """
 
 from dataclasses import dataclass, replace
-from decimal import Decimal
 from typing import Self
 
 from tradingagentspro.contracts.account import AccountSnapshot
 from tradingagentspro.contracts.risk import RiskDecision
 from tradingagentspro.contracts.trade_plan import TradePlan
+from tradingagentspro.modules.risk.config import RiskConfig
 from tradingagentspro.modules.risk.domain.exposure import (
     ZERO,
     holding_of,
@@ -74,24 +74,25 @@ class Reservation:
 
 
 def opening_reservation(
-    reservation: Reservation, account: AccountSnapshot, buffer_ratio: Decimal
+    reservation: Reservation, account: AccountSnapshot, config: RiskConfig
 ) -> OpeningReservation:
     """开仓预留占用的资金、市值和风险，按剩余股数和当前持仓计算。
 
-    风险只计这只股票增加的部分，因为已有持仓的计划风险已经计入组合合计风险。增加的部分
-    为负数时记 0：加仓成交之前，整只股票还是旧的止损价。
+    资金加一笔买入佣金。风险只计这只股票增加的部分，因为已有持仓的计划风险已经计入组合
+    合计风险，增加的部分自然包含方案买入的那一笔佣金。增加的部分为负数时记 0：加仓成交
+    之前，整只股票还是旧的止损价。
     """
     plan, quantity = reservation.plan, reservation.remaining
     assert plan.limit_price is not None  # 方案格式保证开仓方案有限价和止损价
     assert plan.stop_price is not None
     holding = holding_of(account, plan.symbol)
-    merged = merged_risk(holding, quantity, plan.limit_price, plan.stop_price, buffer_ratio)
-    held = holding_risk(holding, buffer_ratio) if holding else ZERO
+    merged = merged_risk(holding, quantity, plan.limit_price, plan.stop_price, config)
+    held = holding_risk(holding, config) if holding else ZERO
     value = quantity * plan.limit_price
     return OpeningReservation(
         symbol=plan.symbol,
         sector=plan.sector,
-        cash=value * (1 + buffer_ratio),
+        cash=value * (1 + config.cost_buffer_ratio) + config.commission_per_order,
         market_value=value,
         risk=max(ZERO, merged - held),
     )

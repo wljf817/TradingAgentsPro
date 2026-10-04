@@ -3,19 +3,25 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from tests.modules.risk.builders import baseline_account, baseline_plan, holding, reduce_plan
+from tests.modules.risk.builders import (
+    baseline_account,
+    baseline_config,
+    baseline_plan,
+    holding,
+    reduce_plan,
+)
 from tradingagentspro.contracts.account import AccountSnapshot
 from tradingagentspro.contracts.risk import RiskDecision, RiskOutcome
 from tradingagentspro.contracts.trade_plan import TradeAction, TradePlan
 from tradingagentspro.modules.risk import (
     OpeningReservation,
     Reservation,
-    RiskConfig,
     SellReservation,
 )
 from tradingagentspro.modules.risk.domain.reservation import opening_reservation, sell_reservation
 
-BUFFER = RiskConfig().cost_buffer_ratio
+CONFIG = baseline_config()
+WITH_COMMISSION = baseline_config(commission_per_order=Decimal(2))
 EXPIRES_AT = datetime(2026, 10, 14, 20, tzinfo=UTC)
 
 
@@ -61,7 +67,7 @@ def _with_ccc(quantity: int, average_cost: str, stop_price: int) -> AccountSnaps
 def test_new_position_reservation() -> None:
     reservation = _reserved(baseline_plan(), 100)
 
-    assert opening_reservation(reservation, baseline_account(), BUFFER) == OpeningReservation(
+    assert opening_reservation(reservation, baseline_account(), CONFIG) == OpeningReservation(
         symbol="BBB",
         sector="医疗",
         cash=Decimal(5025),
@@ -73,8 +79,8 @@ def test_new_position_reservation() -> None:
 def test_add_reservation_counts_the_increase_in_risk_against_current_holdings() -> None:
     reservation = _reserved(_add_ccc(), 50)
 
-    before_fill = opening_reservation(reservation, _with_ccc(100, "50", 45), BUFFER)
-    after_fill = opening_reservation(reservation.fill(25), _with_ccc(125, "50.4", 48), BUFFER)
+    before_fill = opening_reservation(reservation, _with_ccc(100, "50", 45), CONFIG)
+    after_fill = opening_reservation(reservation.fill(25), _with_ccc(125, "50.4", 48), CONFIG)
 
     # 合并后的计划风险 438 低于已有持仓的 525，增加的部分记 0
     assert before_fill == OpeningReservation(
@@ -87,6 +93,36 @@ def test_add_reservation_counts_the_increase_in_risk_against_current_holdings() 
         cash=Decimal("1306.5"),
         market_value=Decimal(1300),
         risk=Decimal("106.5"),
+    )
+
+
+def test_new_position_reservation_counts_commissions() -> None:
+    """spec「新建仓的预留计入佣金」：资金加一笔买入佣金，风险加买卖两笔。"""
+    reservation = _reserved(baseline_plan(), 100)
+
+    assert opening_reservation(reservation, baseline_account(), WITH_COMMISSION) == (
+        OpeningReservation(
+            symbol="BBB",
+            sector="医疗",
+            cash=Decimal(5027),
+            market_value=Decimal(5000),
+            risk=Decimal(529),
+        )
+    )
+
+
+def test_add_reservation_counts_the_add_buy_commission() -> None:
+    """spec「加仓的预留计入加仓买入的佣金」：合并后 442，减去已有持仓的 333.5。"""
+    reservation = _reserved(_add_ccc(), 50).fill(25)
+
+    taken = opening_reservation(reservation, _with_ccc(125, "50.4", 48), WITH_COMMISSION)
+
+    assert taken == OpeningReservation(
+        symbol="CCC",
+        sector="能源",
+        cash=Decimal("1308.5"),
+        market_value=Decimal(1300),
+        risk=Decimal("108.5"),
     )
 
 
@@ -154,7 +190,7 @@ def test_recheck_changes_the_reserved_quantity_and_keeps_the_first_decision() ->
     assert rechecked.quantity == 40
     assert rechecked.remaining == 40
     assert rechecked.fill(10).remaining == 30
-    assert opening_reservation(rechecked, baseline_account(), BUFFER).cash == Decimal(2010)
+    assert opening_reservation(rechecked, baseline_account(), CONFIG).cash == Decimal(2010)
 
 
 def test_ended_reservation_ignores_a_recheck() -> None:

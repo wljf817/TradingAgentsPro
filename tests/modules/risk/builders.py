@@ -110,8 +110,13 @@ def close_plan(symbol: str, sector: str, plan_id: UUID | None = None) -> TradePl
     )
 
 
+def baseline_config(**changes: Any) -> RiskConfig:
+    """基准配置：默认阈值，只有每笔佣金为 0。spec 的基准数据不计佣金，佣金的场景另外写明。"""
+    return RiskConfig(**({"commission_per_order": Decimal(0)} | changes))
+
+
 def baseline_request(**changes: Any) -> RiskRequest:
-    """基准数据加基准方案：没有预留，熔断没有触发，默认阈值，纽交所样例日历。"""
+    """基准数据加基准方案：没有预留，熔断没有触发，基准配置，纽交所样例日历。"""
     fields: dict[str, Any] = {
         "plan": baseline_plan(),
         "account": baseline_account(),
@@ -120,17 +125,17 @@ def baseline_request(**changes: Any) -> RiskRequest:
         "daily_loss_breaker_tripped": False,
         "now": BASELINE_NOW,
         "calendar": NYSE,
-        "config": RiskConfig(),
+        "config": baseline_config(),
     }
     return RiskRequest(**(fields | changes))
 
 
 def risk_service(store: ReservationStore, **changes: Any) -> RiskService:
-    """风控用例：基准时刻的测试时钟、纽交所样例日历、默认阈值；changes 覆盖其中的参数。"""
+    """风控用例：基准时刻的测试时钟、纽交所样例日历、基准配置；changes 覆盖其中的参数。"""
     fields: dict[str, Any] = {
         "store": store,
         "clock": FakeClock(BASELINE_NOW),
         "calendar": NYSE,
-        "config": RiskConfig(),
+        "config": baseline_config(),
     }
     return RiskService(**(fields | changes))
