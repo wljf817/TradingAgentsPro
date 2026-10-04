@@ -10,5 +10,7 @@ class ExecutionConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    # 订单变为状态未知之后，等这么久才再查询券商
+    # 订单或止损单变为状态未知之后，等这么久才再查询券商
     unknown_lookup_delay: timedelta = Field(default=timedelta(seconds=30), gt=timedelta(0))
+    # 止损单挂单或改单被券商拒绝后，立即用同样的内容重试几次
+    stop_immediate_retries: int = Field(default=1, ge=0)

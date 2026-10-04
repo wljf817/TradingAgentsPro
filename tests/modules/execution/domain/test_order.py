@@ -80,6 +80,7 @@ def test_buy_plan_becomes_a_pending_limit_buy_order() -> None:
         quantity=100,
         deadline=BASELINE_CLOSE,
         created_at=BASELINE_NOW,
+        stop_price=Decimal(45),
     )
     assert order.status is OrderStatus.PENDING
     assert order.broker_order_id is None
@@ -111,12 +112,39 @@ def test_reduce_plan_becomes_a_market_sell_order() -> None:
     assert order.quantity == 60
 
 
+@pytest.mark.parametrize(
+    ("plan", "stop_price"),
+    [
+        (baseline_plan(), Decimal(45)),
+        (add_aaa(), Decimal(95)),
+        (reduce_aaa(), None),
+        (close_aaa(), None),
+    ],
+    ids=["buy", "add", "reduce", "close"],
+)
+def test_opening_orders_record_the_plan_stop_price(
+    plan: TradePlan, stop_price: Decimal | None
+) -> None:
+    """order-lifecycle spec「提交订单」：买入、加仓取方案的止损价，减仓、清仓没有。"""
+    assert new_order(plan, decision(), BASELINE_SESSION, BASELINE_NOW).stop_price == stop_price
+
+
 def test_quantity_is_the_final_quantity_of_the_recheck() -> None:
     adjusted = new_order(baseline_plan(), decision(60), BASELINE_SESSION, BASELINE_NOW)
     close = new_order(close_aaa(), decision(100), BASELINE_SESSION, BASELINE_NOW)
 
     assert adjusted.quantity == 60
     assert close.quantity == 100
+
+
+def test_unsent_orders_are_pending_or_never_accepted_unknown() -> None:
+    """还没确认券商收到的订单：待提交，或者券商从没受理过的状态未知订单。"""
+    assert _order().unsent
+    assert _order(status=OrderStatus.UNKNOWN, unknown_since=BASELINE_NOW).unsent
+    assert not _order(
+        status=OrderStatus.UNKNOWN, unknown_since=BASELINE_NOW, broker_order_id="B1"
+    ).unsent
+    assert not _order(status=OrderStatus.SUBMITTED, broker_order_id="B1").unsent
 
 
 def test_client_order_id_is_the_plan_id() -> None:

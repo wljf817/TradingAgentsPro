@@ -17,5 +17,8 @@ class InMemoryOrderStore:
     def open_orders(self) -> tuple[Order, ...]:
         return tuple(o for o in self._orders.values() if not o.status.is_terminal)
 
+    def of_symbol(self, symbol: str) -> tuple[Order, ...]:
+        return tuple(o for o in self._orders.values() if o.symbol == symbol)
+
     def save(self, order: Order) -> None:
         self._orders[order.plan_id] = order

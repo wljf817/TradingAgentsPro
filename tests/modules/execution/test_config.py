@@ -9,10 +9,19 @@ from tradingagentspro.modules.execution import ExecutionConfig
 
 
 def test_default_config() -> None:
-    assert ExecutionConfig().unknown_lookup_delay == timedelta(seconds=30)
+    config = ExecutionConfig()
+
+    assert config.unknown_lookup_delay == timedelta(seconds=30)
+    assert config.stop_immediate_retries == 1
 
 
 @pytest.mark.parametrize("delay", [timedelta(0), timedelta(seconds=-1)])
 def test_lookup_delay_must_be_positive(delay: timedelta) -> None:
     with pytest.raises(ValidationError):
         ExecutionConfig(unknown_lookup_delay=delay)
+
+
+def test_immediate_retries_must_not_be_negative() -> None:
+    """order-lifecycle spec「立即重试次数小于 0」。"""
+    with pytest.raises(ValidationError):
+        ExecutionConfig(stop_immediate_retries=-1)

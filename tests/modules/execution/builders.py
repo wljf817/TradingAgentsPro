@@ -10,9 +10,18 @@ from typing import Any
 from uuid import UUID
 
 from tests.fakes.calendar import sample_nyse_calendar
+from tests.fakes.protections import InMemoryProtectionStore
+from tests.fakes.stops import FakeStopBroker
 from tradingagentspro.contracts.risk import RiskDecision, RiskOutcome
 from tradingagentspro.contracts.trade_plan import OrderType, TradeAction, TradePlan
-from tradingagentspro.modules.execution import Broker, ExecutionConfig, ExecutionService, OrderStore
+from tradingagentspro.modules.execution import (
+    Broker,
+    ExecutionConfig,
+    ExecutionService,
+    OrderStore,
+    ProtectionStore,
+    StopBroker,
+)
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.trading_calendar import TradingSession
 
@@ -90,6 +99,38 @@ def close_aaa() -> TradePlan:
     )
 
 
+def add_bbb(quantity: int = 50) -> TradePlan:
+    """stop-protection spec 的 P2：加仓 BBB（医疗），限价 52，止损价 48。"""
+    return baseline_plan(
+        action=TradeAction.ADD,
+        quantity=quantity,
+        limit_price=Decimal(52),
+        stop_price=Decimal(48),
+    )
+
+
+def reduce_bbb(quantity: int = 60) -> TradePlan:
+    """stop-protection spec 的 P3：市价减仓 BBB（医疗）。"""
+    return baseline_plan(
+        action=TradeAction.REDUCE,
+        quantity=quantity,
+        order_type=OrderType.MARKET,
+        limit_price=None,
+        stop_price=None,
+    )
+
+
+def close_bbb() -> TradePlan:
+    """stop-protection spec 的 P4：市价清仓 BBB（医疗），不写股数。"""
+    return baseline_plan(
+        action=TradeAction.CLOSE,
+        quantity=None,
+        order_type=OrderType.MARKET,
+        limit_price=None,
+        stop_price=None,
+    )
+
+
 def decision(quantity: int = 100, expires_at: datetime = BASELINE_CLOSE) -> RiskDecision:
     """再校验通过的结果，最终股数和生效的有效期。默认值就是基准结果：100 股、当天收盘。"""
     return RiskDecision(
@@ -102,12 +143,19 @@ def decision(quantity: int = 100, expires_at: datetime = BASELINE_CLOSE) -> Risk
 
 
 def execution_service(
-    store: OrderStore, broker: Broker, clock: Clock, config: ExecutionConfig | None = None
+    store: OrderStore,
+    broker: Broker,
+    clock: Clock,
+    config: ExecutionConfig | None = None,
+    stops: StopBroker | None = None,
+    protections: ProtectionStore | None = None,
 ) -> ExecutionService:
-    """执行用例：纽交所样例日历；没有指定配置时用默认配置。"""
+    """执行用例：纽交所样例日历；没有指定的配置用默认配置，止损单接口和止损保护存储用新的替身。"""
     return ExecutionService(
         broker=broker,
+        stops=stops or FakeStopBroker(),
         store=store,
+        protections=protections or InMemoryProtectionStore(),
         clock=clock,
         calendar=NYSE,
         config=config or ExecutionConfig(),

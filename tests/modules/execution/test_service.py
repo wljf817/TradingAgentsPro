@@ -17,6 +17,8 @@ from hypothesis.stateful import RuleBasedStateMachine, initialize, invariant, ru
 from tests.fakes.broker import FakeBroker
 from tests.fakes.clock import FakeClock
 from tests.fakes.orders import InMemoryOrderStore
+from tests.fakes.protections import InMemoryProtectionStore
+from tests.fakes.stops import FakeStopBroker
 from tests.modules.execution.builders import (
     BASELINE_CLOSE,
     BASELINE_NOW,
@@ -29,7 +31,7 @@ from tests.modules.execution.builders import (
     reduce_aaa,
 )
 from tradingagentspro.contracts.risk import RiskDecision
-from tradingagentspro.contracts.trade_plan import OrderType, TradePlan
+from tradingagentspro.contracts.trade_plan import OrderType, TradeAction, TradePlan
 from tradingagentspro.modules.execution import (
     BrokerOrderStatus,
     ExecutionConfig,
@@ -61,13 +63,17 @@ class _Env:
 
     store: InMemoryOrderStore
     broker: FakeBroker
+    stops: FakeStopBroker
+    protections: InMemoryProtectionStore
     clock: FakeClock
     config: ExecutionConfig
     service: ExecutionService
 
     def restart(self) -> None:
-        """进程重启：用同一个存储和假券商重新创建执行用例。"""
-        self.service = execution_service(self.store, self.broker, self.clock, self.config)
+        """进程重启：用同一套存储和假券商重新创建执行用例。"""
+        self.service = execution_service(
+            self.store, self.broker, self.clock, self.config, self.stops, self.protections
+        )
 
     def submit(self, plan: TradePlan, result: RiskDecision | None = None) -> Order:
         return self.service.submit(plan, result or decision())
@@ -91,8 +97,11 @@ class _Env:
 
 def _env(now: datetime = BASELINE_NOW, config: ExecutionConfig | None = None) -> _Env:
     store, broker, clock = InMemoryOrderStore(), FakeBroker(), FakeClock(now)
+    stops, protections = FakeStopBroker(), InMemoryProtectionStore()
+    broker.positions["AAA"] = 100  # 基准数据：持有 AAA 100 股，没有 AAA 的止损单
     config = config or ExecutionConfig()
-    return _Env(store, broker, clock, config, execution_service(store, broker, clock, config))
+    service = execution_service(store, broker, clock, config, stops, protections)
+    return _Env(store, broker, stops, protections, clock, config, service)
 
 
 def _pending(env: _Env, plan: TradePlan, result: RiskDecision | None = None) -> Order:
@@ -120,17 +129,19 @@ def test_buy_plan_submits_a_limit_buy_order() -> None:
     assert order.created_at == BASELINE_NOW
     assert order.filled == 0
     assert order.broker_order_id == env.broker.order(str(plan.plan_id)).broker_order_id
+    assert order.stop_price == Decimal(45)
 
 
 def test_reduce_plan_submits_a_market_sell_order() -> None:
     env, plan = _env(), reduce_aaa(60)
 
-    env.submit(plan, decision(60))
+    order = env.submit(plan, decision(60))
 
     [placed] = env.broker.placed
     assert placed.client_order_id == str(plan.plan_id)
     assert (placed.side, placed.symbol, placed.quantity) == (OrderSide.SELL, "AAA", 60)
     assert (placed.order_type, placed.limit_price) == (OrderType.MARKET, None)
+    assert order.stop_price is None
 
 
 def test_orders_use_the_final_quantity_of_the_recheck() -> None:
@@ -309,6 +320,27 @@ def test_broker_refuses_the_order() -> None:
 
     assert (order.status, order.filled) == (OrderStatus.REJECTED, 0)
     assert order.broker_order_id is None
+
+
+def test_no_sell_before_the_stop_yields_its_shares() -> None:
+    """spec「止损单还没让出股数时不提交卖单」。"""
+    env, p1 = _env(), baseline_plan()
+    env.submit(p1)
+    env.update(p1, FILLED, 100)
+    env.broker.positions["BBB"] = 100
+    env.track(p1, BASELINE_NOW)  # 挂上 BBB-STOP-1，100 股
+    p3 = baseline_plan(
+        action=TradeAction.REDUCE,
+        quantity=60,
+        order_type=OrderType.MARKET,
+        limit_price=None,
+        stop_price=None,
+    )
+
+    order = env.submit(p3, decision(60))
+
+    assert env.calls(p3) == ["find"]
+    assert order.status is OrderStatus.PENDING
 
 
 def test_process_exited_after_placing_before_saving() -> None:

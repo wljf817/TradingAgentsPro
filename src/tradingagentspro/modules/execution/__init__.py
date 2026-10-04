@@ -14,11 +14,27 @@ from tradingagentspro.modules.execution.domain.order import (
     OrderStatus,
     new_order,
 )
+from tradingagentspro.modules.execution.domain.protection import (
+    Protection,
+    StopAction,
+    StopOrder,
+    StopReport,
+    StopStatus,
+    StopTarget,
+    UnprotectedPositionError,
+    backup_stop_due,
+    next_action,
+    stop_price_of,
+    stop_target,
+    stop_yields,
+)
 from tradingagentspro.modules.execution.ports import (
     Broker,
     BrokerUnavailableError,
     OrderRejectedError,
     OrderStore,
+    ProtectionStore,
+    StopBroker,
 )
 from tradingagentspro.modules.execution.service import ExecutionService
 
@@ -35,5 +51,19 @@ __all__ = [
     "OrderSide",
     "OrderStatus",
     "OrderStore",
+    "Protection",
+    "ProtectionStore",
+    "StopAction",
+    "StopBroker",
+    "StopOrder",
+    "StopReport",
+    "StopStatus",
+    "StopTarget",
+    "UnprotectedPositionError",
+    "backup_stop_due",
     "new_order",
+    "next_action",
+    "stop_price_of",
+    "stop_target",
+    "stop_yields",
 ]

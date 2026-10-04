@@ -73,6 +73,7 @@ class Order:
 
     - quantity：委托股数，是再校验的最终股数
     - deadline：截止时刻，到了还没结束就撤单
+    - stop_price：买入、加仓订单取方案的止损价，卖单没有；止损单用它，见 stop-protection spec
     - broker_order_id：券商订单号；券商受理过才有
     - filled、average_price：累计成交股数和成交均价
     - unknown_since：变为状态未知的时刻；不是状态未知时为 None
@@ -89,6 +90,7 @@ class Order:
     quantity: int
     deadline: datetime
     created_at: datetime
+    stop_price: Decimal | None = None
     status: OrderStatus = OrderStatus.PENDING
     broker_order_id: str | None = None
     filled: int = 0
@@ -105,6 +107,13 @@ class Order:
     def blocks_new_orders(self) -> bool:
         """待提交或状态未知：还没确认券商那边的情况，这只股票暂停新订单。"""
         return self.status in (OrderStatus.PENDING, OrderStatus.UNKNOWN)
+
+    @property
+    def unsent(self) -> bool:
+        """还没确认券商收到：待提交，或者券商从没受理过（没有券商订单号）的状态未知订单。"""
+        return self.status is OrderStatus.PENDING or (
+            self.status is OrderStatus.UNKNOWN and self.broker_order_id is None
+        )
 
     def lookup_due(self, now: datetime, delay: timedelta) -> bool:
         """可以查询券商了：不是状态未知，或者变为状态未知已经满 delay。"""
@@ -167,6 +176,7 @@ def new_order(
     """方案按再校验结果（通过或调整）建立的订单，状态是待提交。
 
     买入、加仓是买单，减仓、清仓是卖单；截止时刻是生效的有效期和当天收盘中较早的那个。
+    买单记下方案的止损价。
     """
     assert decision.quantity is not None  # 通过或调整的结果才有最终股数和生效的有效期
     assert decision.expires_at is not None
@@ -179,6 +189,7 @@ def new_order(
         quantity=decision.quantity,
         deadline=min(decision.expires_at, session.close),
         created_at=now,
+        stop_price=plan.stop_price,
     )
 
 

@@ -17,7 +17,8 @@ class FakeBroker:
     """满足执行模块的 Broker。
 
     - calls：按顺序记录每次调用的（操作, 客户端订单 ID），操作是 find、place、cancel；
-      失败的调用也记录
+      查询持仓记为（position, 股票）。失败的调用也记录
+    - positions：券商那边每只股票的持仓股数，由测试设定；没有设定的是 0
     - failures：安排的失败真正发生时，按顺序记录（操作, 是否生效后才失败）
     - placed：券商收到并受理的提交，按顺序记录提交时的订单
     - cancel_requests：被接受的撤单请求，按顺序记录客户端订单 ID。撤单只记下请求，不改变订单，
@@ -32,7 +33,13 @@ class FakeBroker:
         self._orders: dict[str, BrokerOrder] = {}
         self._accepted: list[str] = []
         self._lost: set[str] = set()
-        self._failures: dict[str, list[bool]] = {"find": [], "place": [], "cancel": []}
+        self.positions: dict[str, int] = {}
+        self._failures: dict[str, list[bool]] = {
+            "find": [],
+            "place": [],
+            "cancel": [],
+            "position": [],
+        }
         self._reject_next_place = False
         self._broker_ids = count(1)
 
@@ -61,6 +68,11 @@ class FakeBroker:
         self.cancel_requests.append(order.client_order_id)
         if after_effect:
             raise BrokerUnavailableError("撤单的响应超时")
+
+    def position(self, symbol: str) -> int:
+        if self._record("position", symbol):
+            raise BrokerUnavailableError("查询持仓超时")  # 查询没有副作用，生效前后失败一样
+        return self.positions.get(symbol, 0)
 
     # 测试安排券商那边的情况
 
@@ -92,7 +104,7 @@ class FakeBroker:
         )
 
     def fail_next(self, operation: str, *, after_effect: bool = False) -> None:
-        """下一次 operation（find、place 或 cancel）调用抛 BrokerUnavailableError。
+        """下一次 operation（find、place、cancel 或 position）调用抛 BrokerUnavailableError。
 
         after_effect 为真时，调用先生效再抛异常。同一种调用安排多次时按顺序排队，每次调用用掉一个。
         """
@@ -126,7 +138,10 @@ class FakeBroker:
 
     def _call(self, operation: str, order: Order) -> bool:
         """记下这次调用。安排了失败时：生效前失败直接抛异常；生效后失败返回 True，由调用方抛。"""
-        self.calls.append((operation, order.client_order_id))
+        return self._record(operation, order.client_order_id)
+
+    def _record(self, operation: str, key: str) -> bool:
+        self.calls.append((operation, key))
         failures = self._failures[operation]
         if not failures:
             return False
