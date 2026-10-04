@@ -32,9 +32,10 @@ from tests.modules.risk.domain.strategies import (
 from tradingagentspro.contracts.account import AccountSnapshot
 from tradingagentspro.contracts.risk import RiskDecision, RiskOutcome
 from tradingagentspro.contracts.trade_plan import OrderType, TradeAction, TradePlan
-from tradingagentspro.modules.risk import OutsideSessionError, RiskConfig, RiskService
+from tradingagentspro.modules.risk import RiskConfig, RiskService
 from tradingagentspro.modules.risk.domain.exposure import ZERO, holding_risk
 from tradingagentspro.modules.risk.domain.reservation import opening_reservation
+from tradingagentspro.shared.trading_calendar import OutsideSessionError
 
 PASSED, ADJUSTED, REJECTED = RiskOutcome.PASSED, RiskOutcome.ADJUSTED, RiskOutcome.REJECTED
 

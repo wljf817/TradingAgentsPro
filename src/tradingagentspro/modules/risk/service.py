@@ -12,11 +12,7 @@ from tradingagentspro.contracts.risk import RiskDecision
 from tradingagentspro.contracts.trade_plan import TradePlan
 from tradingagentspro.modules.risk.config import RiskConfig
 from tradingagentspro.modules.risk.domain.engine import evaluate_plan
-from tradingagentspro.modules.risk.domain.recheck import (
-    OutsideSessionError,
-    plan_ended,
-    recheck_plan,
-)
+from tradingagentspro.modules.risk.domain.recheck import plan_ended, recheck_plan
 from tradingagentspro.modules.risk.domain.request import RiskRequest
 from tradingagentspro.modules.risk.domain.reservation import (
     Reservation,
@@ -25,7 +21,7 @@ from tradingagentspro.modules.risk.domain.reservation import (
 )
 from tradingagentspro.modules.risk.ports import ReservationStore
 from tradingagentspro.shared.clock import Clock
-from tradingagentspro.shared.trading_calendar import TradingCalendar
+from tradingagentspro.shared.trading_calendar import OutsideSessionError, TradingCalendar
 
 
 class RiskService:

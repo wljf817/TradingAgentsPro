@@ -14,10 +14,6 @@ from tradingagentspro.modules.risk.domain.reservation import Reservation
 from tradingagentspro.modules.risk.domain.rules import EXIT_RULES, OPENING_RULES
 
 
-class OutsideSessionError(RuntimeError):
-    """不在常规交易时段内调用再校验。"""
-
-
 def recheck_plan(
     request: RiskRequest, reservation: Reservation, last_price: Decimal
 ) -> RiskDecision:

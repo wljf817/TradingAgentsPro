@@ -7,7 +7,6 @@
 
 from tradingagentspro.modules.risk.config import RiskConfig
 from tradingagentspro.modules.risk.domain.engine import evaluate_plan
-from tradingagentspro.modules.risk.domain.recheck import OutsideSessionError
 from tradingagentspro.modules.risk.domain.request import (
     OpeningReservation,
     RiskRequest,
@@ -19,7 +18,6 @@ from tradingagentspro.modules.risk.service import RiskService
 
 __all__ = [
     "OpeningReservation",
-    "OutsideSessionError",
     "Reservation",
     "ReservationStore",
     "RiskConfig",

@@ -19,6 +19,10 @@ class CalendarRangeError(LookupError):
     """查询超出了交易日数据的覆盖范围，答案无法确定。"""
 
 
+class OutsideSessionError(RuntimeError):
+    """在常规交易时段之外调用了只能在盘中做的操作，比如下单前再校验、提交新订单。"""
+
+
 class TradingCalendar:
     """用一段连续区间里的全部交易时段构造，交易时段按交易日的顺序传入。
 
