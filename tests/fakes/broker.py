@@ -10,6 +10,7 @@ from tradingagentspro.modules.execution import (
     BrokerUnavailableError,
     Order,
     OrderRejectedError,
+    WorkingOrder,
 )
 
 
@@ -17,7 +18,8 @@ class FakeBroker:
     """满足执行模块的 Broker。
 
     - calls：按顺序记录每次调用的（操作, 客户端订单 ID），操作是 find、place、cancel；
-      查询持仓记为（position, 股票）。失败的调用也记录
+      查询持仓记为（position, 股票），读取全部挂单、全部持仓记为（working_orders, "*"）、
+      （all_positions, "*"）。失败的调用也记录
     - positions：券商那边每只股票的持仓股数，由测试设定；没有设定的是 0
     - failures：安排的失败真正发生时，按顺序记录（操作, 是否生效后才失败）
     - placed：券商收到并受理的提交，按顺序记录提交时的订单
@@ -31,19 +33,24 @@ class FakeBroker:
         self.placed: list[Order] = []
         self.cancel_requests: list[str] = []
         self._orders: dict[str, BrokerOrder] = {}
+        self._symbols: dict[str, str] = {}
         self._accepted: list[str] = []
         self._lost: set[str] = set()
+        self._listed_while_lost: set[str] = set()
+        self._extra: list[WorkingOrder] = []
         self.positions: dict[str, int] = {}
         self._failures: dict[str, list[bool]] = {
             "find": [],
             "place": [],
             "cancel": [],
             "position": [],
+            "working_orders": [],
+            "all_positions": [],
         }
         self._reject_next_place = False
         self._broker_ids = count(1)
 
-    # 执行模块调用的三个操作
+    # 执行模块调用的操作
 
     def find(self, order: Order) -> BrokerOrder | None:
         if self._call("find", order):
@@ -74,6 +81,22 @@ class FakeBroker:
             raise BrokerUnavailableError("查询持仓超时")  # 查询没有副作用，生效前后失败一样
         return self.positions.get(symbol, 0)
 
+    def working_orders(self) -> tuple[WorkingOrder, ...]:
+        if self._record("working_orders", "*"):
+            raise BrokerUnavailableError("读取全部挂单超时")
+        ours = tuple(
+            WorkingOrder(self._symbols[cid], cid, report.broker_order_id)
+            for cid, report in self._orders.items()
+            if report.status is BrokerOrderStatus.WORKING
+            and (cid not in self._lost or cid in self._listed_while_lost)
+        )
+        return ours + tuple(self._extra)
+
+    def all_positions(self) -> dict[str, int]:
+        if self._record("all_positions", "*"):
+            raise BrokerUnavailableError("读取全部持仓超时")
+        return {symbol: shares for symbol, shares in self.positions.items() if shares > 0}
+
     # 测试安排券商那边的情况
 
     def accept(self, order: Order) -> BrokerOrder:
@@ -85,8 +108,22 @@ class FakeBroker:
             average_price=None,
         )
         self._orders[order.client_order_id] = accepted
+        self._symbols[order.client_order_id] = order.symbol
         self._accepted.append(order.client_order_id)
         return accepted
+
+    def add_working(
+        self, symbol: str, client_order_id: str, broker_order_id: str | None = None
+    ) -> WorkingOrder:
+        """券商另外挂着一笔订单：只出现在全部挂单里，按客户端订单 ID 查询时不会查到它。
+
+        不记为一次调用。
+        """
+        working = WorkingOrder(
+            symbol, client_order_id, broker_order_id or f"X{len(self._extra) + 1}"
+        )
+        self._extra.append(working)
+        return working
 
     def update(
         self,
@@ -104,7 +141,9 @@ class FakeBroker:
         )
 
     def fail_next(self, operation: str, *, after_effect: bool = False) -> None:
-        """下一次 operation（find、place、cancel 或 position）调用抛 BrokerUnavailableError。
+        """下一次 operation 调用抛 BrokerUnavailableError。
+
+        operation 是 find、place、cancel、position、working_orders 或 all_positions。
 
         after_effect 为真时，调用先生效再抛异常。同一种调用安排多次时按顺序排队，每次调用用掉一个。
         """
@@ -119,9 +158,14 @@ class FakeBroker:
         """下一次提交被券商拒绝受理。"""
         self._reject_next_place = True
 
-    def lose(self, client_order_id: str) -> None:
-        """券商查不到这笔订单，即使它受理过。"""
+    def lose(self, client_order_id: str, *, listed: bool = False) -> None:
+        """券商按客户端订单 ID 查不到这笔订单，即使它受理过。
+
+        listed 为真时，它仍挂着的话，全部挂单里还有它；默认全部挂单里也没有。
+        """
         self._lost.add(client_order_id)
+        if listed:
+            self._listed_while_lost.add(client_order_id)
 
     # 测试检查券商那边的情况
 

@@ -9,18 +9,17 @@ from itertools import count
 from typing import Any
 from uuid import UUID
 
+from tests.fakes.broker import FakeBroker
 from tests.fakes.calendar import sample_nyse_calendar
 from tests.fakes.protections import InMemoryProtectionStore
 from tests.fakes.stops import FakeStopBroker
 from tradingagentspro.contracts.risk import RiskDecision, RiskOutcome
 from tradingagentspro.contracts.trade_plan import OrderType, TradeAction, TradePlan
 from tradingagentspro.modules.execution import (
-    Broker,
     ExecutionConfig,
     ExecutionService,
     OrderStore,
     ProtectionStore,
-    StopBroker,
 )
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.trading_calendar import TradingSession
@@ -144,19 +143,33 @@ def decision(quantity: int = 100, expires_at: datetime = BASELINE_CLOSE) -> Risk
 
 def execution_service(
     store: OrderStore,
-    broker: Broker,
+    broker: FakeBroker,
     clock: Clock,
     config: ExecutionConfig | None = None,
-    stops: StopBroker | None = None,
+    stops: FakeStopBroker | None = None,
     protections: ProtectionStore | None = None,
+    *,
+    reconciled: bool = True,
 ) -> ExecutionService:
-    """执行用例：纽交所样例日历；没有指定的配置用默认配置，止损单接口和止损保护存储用新的替身。"""
-    return ExecutionService(
+    """执行用例：纽交所样例日历；没有指定的配置用默认配置，止损单接口和止损保护存储用新的替身。
+
+    reconciled 为真时，新建以后先对账一次，再去掉这次对账留在替身里的调用记录，相当于各个 spec
+    基准数据里的"执行模块已经完成一次没有不一致的对账"。重启的场景传 False。
+    """
+    stops = stops or FakeStopBroker()
+    service = ExecutionService(
         broker=broker,
-        stops=stops or FakeStopBroker(),
+        stops=stops,
         store=store,
         protections=protections or InMemoryProtectionStore(),
         clock=clock,
         calendar=NYSE,
         config=config or ExecutionConfig(),
     )
+    if reconciled:
+        broker_calls, stop_calls = len(broker.calls), len(stops.calls)
+        result = service.reconcile()
+        assert result.clean, result
+        del broker.calls[broker_calls:]
+        del stops.calls[stop_calls:]
+    return service

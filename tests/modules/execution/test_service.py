@@ -1,7 +1,8 @@
 """执行用例的测试：提交订单、跟进订单、到期撤单、状态未知和暂停。
 
 场景见 openspec 的 order-lifecycle spec。测试用假券商安排券商那边的情况，用测试时钟拨动时间；
-"重启"是用同一个存储和假券商重新创建执行用例。
+"重启"是用同一个存储和假券商重新创建执行用例。基准数据里执行模块已经完成一次没有不一致的对账，
+新建的执行用例都先对账一次；重启之后的执行用例还没有对过账。
 """
 
 from collections.abc import Callable
@@ -70,9 +71,15 @@ class _Env:
     service: ExecutionService
 
     def restart(self) -> None:
-        """进程重启：用同一套存储和假券商重新创建执行用例。"""
+        """进程重启：用同一套存储和假券商重新创建执行用例，还没有对过账。"""
         self.service = execution_service(
-            self.store, self.broker, self.clock, self.config, self.stops, self.protections
+            self.store,
+            self.broker,
+            self.clock,
+            self.config,
+            self.stops,
+            self.protections,
+            reconciled=False,
         )
 
     def submit(self, plan: TradePlan, result: RiskDecision | None = None) -> Order:
@@ -98,9 +105,9 @@ class _Env:
 def _env(now: datetime = BASELINE_NOW, config: ExecutionConfig | None = None) -> _Env:
     store, broker, clock = InMemoryOrderStore(), FakeBroker(), FakeClock(now)
     stops, protections = FakeStopBroker(), InMemoryProtectionStore()
-    broker.positions["AAA"] = 100  # 基准数据：持有 AAA 100 股，没有 AAA 的止损单
     config = config or ExecutionConfig()
     service = execution_service(store, broker, clock, config, stops, protections)
+    broker.positions["AAA"] = 100  # 基准数据：持有 AAA 100 股，没有 AAA 的止损单
     return _Env(store, broker, stops, protections, clock, config, service)
 
 
@@ -677,11 +684,17 @@ _MATCHING_STATUSES = {
 
 
 class OrderLifecycleMachine(RuleBasedStateMachine):
-    """随机交错跟进、券商那边的变化、券商调用失败和重启，检查订单只往前走、不会重复下单。"""
+    """随机交错跟进、券商那边的变化、券商调用失败和重启，检查订单只往前走、不会重复下单。
+
+    重启之后先对账。只有执行模块在操作券商，所以对账都没有不一致，
+    见 add-reconciliation 的 design D7。
+    """
 
     def __init__(self) -> None:
         super().__init__()
         self.env = _env()
+        # 状态机不用基准数据里的 AAA 持仓：没有对应的买单，对账会报成来历不明
+        del self.env.broker.positions["AAA"]
         self.plan = baseline_plan()
         self.cid = str(self.plan.plan_id)
         self.previous: Order | None = None
@@ -785,6 +798,12 @@ class OrderLifecycleMachine(RuleBasedStateMachine):
     def restart(self) -> None:
         self.env.restart()
         event("重启")
+        self._call(self._reconcile)
+
+    def _reconcile(self) -> Order:
+        """对账，检查没有不一致，返回对账之后的订单。"""
+        assert self.env.service.reconcile().clean
+        return self._order()
 
     @invariant()
     def broker_has_at_most_one_order(self) -> None:

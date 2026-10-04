@@ -26,7 +26,7 @@ modules/execution
   domain/reconciliation.py  新增：WorkingOrder、Listing、Reconciliation、NotReconciledError、
                             ReconcileMismatchError，以及 stray_orders、extra_stops、position_explained
   domain/order.py           Order 增加 end_missing
-  ports.py                  Broker 增加 working_orders、positions；StopBroker 增加 working_stops；
+  ports.py                  Broker 增加 working_orders、all_positions；StopBroker 增加 working_stops；
                             ProtectionStore 增加 active
   service.py                ExecutionService 增加 reconcile；submit 增加两条检查；
                             内部的跟进和对齐可以接收 Listing
@@ -64,7 +64,7 @@ modules/execution
 reconcile()
   working = broker.working_orders()        任何一项超时或断线：抛 BrokerUnavailableError，
   stops   = stops.working_stops()          什么都没改，对账状态不变（D5）
-  positions = broker.positions()
+  positions = broker.all_positions()
   |
   stray = stray_orders(working, store.open_orders())             D2
   extra = extra_stops(stops, 当前止损单在用的股票)                 D2
@@ -248,7 +248,7 @@ class Broker(Protocol):
     def working_orders(self) -> tuple[WorkingOrder, ...]:
         """券商那边全部挂着的订单，不含止损单；包括部分成交、正在撤单的。"""
 
-    def positions(self) -> Mapping[str, int]:
+    def all_positions(self) -> Mapping[str, int]:
         """券商那边的全部持仓：股票到股数，只含股数大于 0 的。"""
 
 
@@ -275,7 +275,7 @@ class ProtectionStore(Protocol):
 ### D7 测试
 
 ```
-tests/fakes/broker.py         FakeBroker 增加 working_orders、positions；add_working 安排券商另外挂着的单；
+tests/fakes/broker.py         FakeBroker 增加 working_orders、all_positions；add_working 安排券商另外挂着的单；
                               lose 增加 listed 参数：查不到时挂单里是否还有它，默认没有
 tests/fakes/stops.py          FakeStopBroker 增加 working_stops、add_working；lose 同上
 tests/fakes/protections.py    InMemoryProtectionStore 增加 active

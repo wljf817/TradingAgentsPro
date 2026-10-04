@@ -307,6 +307,31 @@ def test_expire_unsent_order_from_unknown() -> None:
     assert order.filled == 0
 
 
+def test_order_missing_at_the_broker_before_the_deadline_is_cancelled() -> None:
+    """reconciliation spec「结束查不到的订单和止损单」：累计成交和成交均价保留已经记下的。"""
+    order = _order(
+        status=OrderStatus.UNKNOWN,
+        broker_order_id="B1",
+        filled=30,
+        average_price=Decimal("49.90"),
+        unknown_since=BASELINE_NOW,
+    )
+
+    ended = order.end_missing(BASELINE_CLOSE - SECOND)
+
+    assert ended == replace(order, status=OrderStatus.CANCELLED, unknown_since=None)
+
+
+@pytest.mark.parametrize("now", [BASELINE_CLOSE, BASELINE_CLOSE + SECOND])
+def test_order_missing_at_the_broker_from_the_deadline_is_expired(now: datetime) -> None:
+    order = _order(status=OrderStatus.PARTIALLY_FILLED, broker_order_id="B1", filled=30)
+
+    ended = order.end_missing(now)
+
+    assert ended.status is OrderStatus.EXPIRED
+    assert ended.filled == 30
+
+
 def test_request_cancel_keeps_the_status() -> None:
     order = _order(status=OrderStatus.SUBMITTED, broker_order_id="B1").request_cancel()
 
@@ -322,6 +347,7 @@ def test_terminal_orders_do_not_change(status: OrderStatus) -> None:
     assert order.reject() is order
     assert order.expire_unsent() is order
     assert order.request_cancel() is order
+    assert order.end_missing(BASELINE_NOW) is order
 
 
 # 判断

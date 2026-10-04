@@ -1,11 +1,13 @@
 """执行模块需要的外部接口：券商、券商的止损单、订单存储和止损保护存储。"""
 
+from collections.abc import Mapping
 from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
 
 from tradingagentspro.modules.execution.domain.order import BrokerOrder, Order
 from tradingagentspro.modules.execution.domain.protection import Protection, StopOrder, StopReport
+from tradingagentspro.modules.execution.domain.reconciliation import WorkingOrder
 
 
 class BrokerUnavailableError(RuntimeError):
@@ -39,6 +41,14 @@ class Broker(Protocol):
 
     def position(self, symbol: str) -> int:
         """券商那边这只股票的持仓股数；没有持仓时为 0。"""
+        ...
+
+    def working_orders(self) -> tuple[WorkingOrder, ...]:
+        """券商那边全部挂着（已受理、未结束）的订单，不含止损单；包括部分成交、正在撤单的。"""
+        ...
+
+    def all_positions(self) -> Mapping[str, int]:
+        """券商那边的全部持仓：股票到股数，只含股数大于 0 的。"""
         ...
 
 
@@ -91,6 +101,10 @@ class StopBroker(Protocol):
         """请求撤单，结果由之后的查询得知；已经结束、撤不了时也正常返回。"""
         ...
 
+    def working_stops(self) -> tuple[WorkingOrder, ...]:
+        """券商那边全部挂着的止损单。改单还在替换过程中时，新旧两笔只算一张。"""
+        ...
+
 
 class ProtectionStore(Protocol):
     """止损保护的存储：按股票保存最新的记录。
@@ -100,6 +114,10 @@ class ProtectionStore(Protocol):
 
     def get(self, symbol: str) -> Protection | None:
         """这只股票的止损保护；没有记录时为 None。"""
+        ...
+
+    def active(self) -> tuple[Protection, ...]:
+        """需要对齐的记录：当前止损单还没结束（还没挂出去、挂着、状态未知），或者是无保护仓位。"""
         ...
 
     def save(self, protection: Protection) -> None:

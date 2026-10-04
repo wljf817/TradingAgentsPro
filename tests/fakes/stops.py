@@ -10,6 +10,7 @@ from tradingagentspro.modules.execution import (
     OrderRejectedError,
     StopOrder,
     StopReport,
+    WorkingOrder,
 )
 
 
@@ -17,7 +18,7 @@ class FakeStopBroker:
     """满足执行模块的 StopBroker，用法和 FakeBroker 一致。
 
     - calls：按顺序记录每次调用的（操作, 客户端订单 ID），操作是 find、place、modify、cancel；
-      失败和被拒的调用也记录
+      读取全部挂着的止损单记为（working_stops, "*"）。失败和被拒的调用也记录
     - placed：券商受理的挂单，按顺序记录挂单时的止损单
     - modify_requests：被接受的改单请求（客户端订单 ID, 股数, 止损价）
     - cancel_requests：被接受的撤单请求的客户端订单 ID
@@ -33,16 +34,19 @@ class FakeStopBroker:
         self._symbols: dict[str, str] = {}
         self._accepted: list[str] = []
         self._lost: set[str] = set()
+        self._listed_while_lost: set[str] = set()
+        self._extra: list[WorkingOrder] = []
         self._failures: dict[str, list[bool]] = {
             "find": [],
             "place": [],
             "modify": [],
             "cancel": [],
+            "working_stops": [],
         }
         self._rejections: dict[str, int] = {"place": 0, "modify": 0}
         self._broker_ids = count(1)
 
-    # 执行模块调用的四个操作
+    # 执行模块调用的操作
 
     def find(self, stop: StopOrder) -> StopReport | None:
         if self._call("find", stop):
@@ -73,6 +77,17 @@ class FakeStopBroker:
         if after_effect:
             raise BrokerUnavailableError("撤单的响应超时")
 
+    def working_stops(self) -> tuple[WorkingOrder, ...]:
+        if self._record("working_stops", "*"):
+            raise BrokerUnavailableError("读取全部止损单超时")
+        ours = tuple(
+            WorkingOrder(self._symbols[cid], cid, report.broker_order_id)
+            for cid, report in self._stops.items()
+            if report.status is BrokerOrderStatus.WORKING
+            and (cid not in self._lost or cid in self._listed_while_lost)
+        )
+        return ours + tuple(self._extra)
+
     # 测试安排券商那边的情况
 
     def accept(self, stop: StopOrder) -> StopReport:
@@ -87,6 +102,19 @@ class FakeStopBroker:
         self._symbols[stop.client_order_id] = stop.symbol
         self._accepted.append(stop.client_order_id)
         return accepted
+
+    def add_working(
+        self, symbol: str, client_order_id: str, broker_order_id: str | None = None
+    ) -> WorkingOrder:
+        """券商另外挂着一张止损单：只出现在全部止损单里，按客户端订单 ID 查询时不会查到它。
+
+        不记为一次调用。
+        """
+        working = WorkingOrder(
+            symbol, client_order_id, broker_order_id or f"SX{len(self._extra) + 1}"
+        )
+        self._extra.append(working)
+        return working
 
     def update(
         self,
@@ -118,8 +146,9 @@ class FakeStopBroker:
         self.cancel_requests.clear()
 
     def fail_next(self, operation: str, *, after_effect: bool = False) -> None:
-        """下一次 operation（find、place、modify 或 cancel）调用抛 BrokerUnavailableError。
+        """下一次 operation 调用抛 BrokerUnavailableError。
 
+        operation 是 find、place、modify、cancel 或 working_stops。
         after_effect 为真时，调用先生效再抛异常。同一种调用安排多次时按顺序排队。
         """
         self._failures[operation].append(after_effect)
@@ -134,9 +163,14 @@ class FakeStopBroker:
         """接下来 times 次 operation（place 或 modify）被券商拒绝受理。"""
         self._rejections[operation] += times
 
-    def lose(self, client_order_id: str) -> None:
-        """券商查不到这张止损单，即使它受理过。"""
+    def lose(self, client_order_id: str, *, listed: bool = False) -> None:
+        """券商按客户端订单 ID 查不到这张止损单，即使它受理过。
+
+        listed 为真时，它仍挂着的话，全部止损单里还有它；默认全部止损单里也没有。
+        """
         self._lost.add(client_order_id)
+        if listed:
+            self._listed_while_lost.add(client_order_id)
 
     # 测试检查券商那边的情况
 
@@ -162,7 +196,10 @@ class FakeStopBroker:
 
     def _call(self, operation: str, stop: StopOrder) -> bool:
         """记下这次调用。安排了失败时：生效前失败直接抛异常；生效后失败返回 True，由调用方抛。"""
-        self.calls.append((operation, stop.client_order_id))
+        return self._record(operation, stop.client_order_id)
+
+    def _record(self, operation: str, key: str) -> bool:
+        self.calls.append((operation, key))
         failures = self._failures[operation]
         if not failures:
             return False

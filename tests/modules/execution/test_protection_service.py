@@ -34,8 +34,10 @@ from tradingagentspro.contracts.risk import RiskDecision
 from tradingagentspro.contracts.trade_plan import OrderType, TradePlan
 from tradingagentspro.modules.execution import (
     BrokerOrderStatus,
+    BrokerUnavailableError,
     ExecutionConfig,
     ExecutionService,
+    NotReconciledError,
     Order,
     OrderPausedError,
     OrderSide,
@@ -75,9 +77,15 @@ class _Env:
     service: ExecutionService
 
     def restart(self) -> None:
-        """进程重启：用同一套存储和假券商重新创建执行用例。"""
+        """进程重启：用同一套存储和假券商重新创建执行用例，还没有对过账。"""
         self.service = execution_service(
-            self.store, self.broker, self.clock, self.config, self.stops, self.protections
+            self.store,
+            self.broker,
+            self.clock,
+            self.config,
+            self.stops,
+            self.protections,
+            reconciled=False,
         )
 
     def submit(self, plan: TradePlan, result: RiskDecision | None = None) -> Order:
@@ -759,7 +767,9 @@ _BUYING = (OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED)
 
 class StopProtectionMachine(RuleBasedStateMachine):
     """随机交错买入成交、卖单提交和成交、止损单的改单撤单生效、止损单触发、券商调用失败或被拒、
-    重启和拨动时间，检查止损单和卖单不会合计超过持仓，最终止损单对齐到目标。
+    重启、对账和拨动时间，检查止损单和卖单不会合计超过持仓，最终止损单对齐到目标。
+
+    只有执行模块在操作券商，所以每次完成的对账都没有不一致（add-reconciliation 的 design D7）。
     """
 
     def __init__(self) -> None:
@@ -820,7 +830,7 @@ class StopProtectionMachine(RuleBasedStateMachine):
         final = self.position if close else min(quantity, self.position)
         try:
             self.env.submit(plan, decision(final))
-        except OrderPausedError:
+        except (OrderPausedError, NotReconciledError):
             return
         self.plans.append(plan)
 
@@ -856,7 +866,7 @@ class StopProtectionMachine(RuleBasedStateMachine):
             event("止损单触发")
 
     @rule(
-        operation=st.sampled_from(["find", "place", "modify", "cancel"]),
+        operation=st.sampled_from(["find", "place", "modify", "cancel", "working_stops"]),
         after_effect=st.booleans(),
     )
     def stop_call_fails(self, operation: str, after_effect: bool) -> None:
@@ -867,7 +877,9 @@ class StopProtectionMachine(RuleBasedStateMachine):
         self.env.stops.reject_next(operation)
 
     @rule(
-        operation=st.sampled_from(["find", "place", "cancel", "position"]),
+        operation=st.sampled_from(
+            ["find", "place", "cancel", "position", "working_orders", "all_positions"]
+        ),
         after_effect=st.booleans(),
     )
     def broker_call_fails(self, operation: str, after_effect: bool) -> None:
@@ -875,7 +887,19 @@ class StopProtectionMachine(RuleBasedStateMachine):
 
     @rule()
     def restart(self) -> None:
+        """重启之后先对账；对账失败时，执行用例在下一次对账完成之前不接受新订单。"""
         self.env.restart()
+        self.reconcile()
+
+    @rule()
+    def reconcile(self) -> None:
+        try:
+            result = self.env.service.reconcile()
+        except BrokerUnavailableError:
+            event("对账失败")
+            return
+        event("对账完成")
+        assert result.clean, result
 
     @rule(seconds=st.integers(0, 60))
     def track_everything(self, seconds: int) -> None:
@@ -916,6 +940,7 @@ class StopProtectionMachine(RuleBasedStateMachine):
             self.stop_and_sells_never_exceed_the_position()
         self.env.stops.settle()
         self.env.protect()
+        assert self.env.service.reconcile().clean
         target = stop_target(self.position, self.env.store.of_symbol("BBB"))
         working = list(self.env.stops.working("BBB").values())
         if target.quantity == 0:

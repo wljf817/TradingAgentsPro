@@ -1,6 +1,6 @@
-"""执行模块的用例：提交订单，跟进订单到终态，对齐止损单。
+"""执行模块的用例：提交订单，跟进订单到终态，对齐止损单，和券商对账。
 
-见 order-lifecycle spec 和 stop-protection spec。
+见 order-lifecycle spec、stop-protection spec 和 reconciliation spec。
 """
 
 from datetime import datetime
@@ -30,6 +30,15 @@ from tradingagentspro.modules.execution.domain.protection import (
 )
 from tradingagentspro.modules.execution.domain.protection import (
     backup_stop_due as _backup_stop_due,
+)
+from tradingagentspro.modules.execution.domain.reconciliation import (
+    Listing,
+    NotReconciledError,
+    ReconcileMismatchError,
+    Reconciliation,
+    extra_stops,
+    position_explained,
+    stray_orders,
 )
 from tradingagentspro.modules.execution.ports import (
     Broker,
@@ -67,16 +76,24 @@ class ExecutionService:
         self._clock = clock
         self._calendar = calendar
         self._config = config
+        self._last: Reconciliation | None = None  # 最近一次完成的对账；新建以后还没有
 
     def submit(self, plan: TradePlan, decision: RiskDecision) -> Order:
         """按方案和它的再校验结果（通过或调整）提交订单，返回跟进一次之后的订单。
 
-        这个方案已经有订单时不新建，只跟进一次。新建订单只能在常规交易时段内，
-        否则抛 OutsideSessionError；这只股票有其他订单待提交或状态未知时，抛 OrderPausedError，
-        调用方要等一会儿再从下单前再校验开始；买单的股票是无保护仓位时，抛
-        UnprotectedPositionError。
+        这个方案已经有订单时不新建，只跟进一次。新建订单之前依次检查：
+        - 还没完成过对账时，抛 NotReconciledError，调用方等对账完成再从下单前再校验开始
+        - 最近一次对账有不一致时，买单抛 ReconcileMismatchError
+        - 只能在常规交易时段内，否则抛 OutsideSessionError
+        - 这只股票有其他订单待提交或状态未知时，抛 OrderPausedError，调用方要等一会儿再从
+          下单前再校验开始
+        - 买单的股票是无保护仓位时，抛 UnprotectedPositionError
         """
         if self._store.get(plan.plan_id) is None:
+            if self._last is None:
+                raise NotReconciledError("执行模块启动以后还没完成过对账，不能提交新订单")
+            if plan.action.is_opening and not self._last.clean:
+                raise ReconcileMismatchError("最近一次对账有不一致，暂停开仓")
             now = self._clock.now()
             session = self._calendar.session_at(now)
             if session is None:
@@ -98,6 +115,13 @@ class ExecutionService:
         还没提交出去的卖单，先对齐止损单，止损单让出股数之后才提交，见 design D5。
         跟进之后对齐这只股票的止损单；已经对齐过、订单又没变化时不再对齐。
         """
+        return self._track(plan_id, None)
+
+    def _track(self, plan_id: UUID, listing: Listing | None) -> Order:
+        """跟进一次订单。对账时 listing 是读到的券商挂单，平时为 None。
+
+        见 add-reconciliation 的 design D4。
+        """
         order = self._store.get(plan_id)
         assert order is not None  # 只跟进提交过的方案
         now = self._clock.now()
@@ -105,14 +129,14 @@ class ExecutionService:
             return order
         aligned, may_place = False, True
         if order.side is OrderSide.SELL and order.unsent:
-            protection, target = self._align(order.symbol, now)
+            protection, target = self._align(order.symbol, now, listing)
             aligned = True
             may_place = target is not None and stop_yields(protection, target)
-        updated = self._advance(order, now, may_place)
+        updated = self._advance(order, now, may_place, listing)
         if updated != order:
             self._store.save(updated)
         if not aligned or updated != order:
-            self._align(updated.symbol, now)
+            self._align(updated.symbol, now, listing)
         return updated
 
     def protect(self, symbol: str) -> Protection | None:
@@ -122,6 +146,41 @@ class ExecutionService:
         """
         protection, _ = self._align(symbol, self._clock.now())
         return protection
+
+    def reconcile(self) -> Reconciliation:
+        """和券商全量对账，返回不一致的地方，见 reconciliation spec「对账」和 design D1。
+
+        先读券商的全部挂单、止损单和持仓；读取超时或断线时抛 BrokerUnavailableError，
+        不改变任何东西。读到以后先比对，再跟进每笔未结束的订单、对齐需要对齐的股票，
+        最后找来历不明的持仓。完成以后记为最近一次对账。可以重复调用。
+        """
+        working = self._broker.working_orders()
+        working_stops = self._stops.working_stops()
+        positions = self._broker.all_positions()
+        stray = stray_orders(working, self._store.open_orders())
+        in_use = {
+            symbol
+            for symbol in {s.symbol for s in working_stops}
+            if (p := self._protections.get(symbol))
+            and p.stop is not None
+            and p.stop.status is not StopStatus.ENDED
+        }
+        extra = extra_stops(working_stops, in_use)
+        listing = Listing(
+            order_ids=frozenset(w.broker_order_id for w in working),
+            stop_symbols=frozenset(s.symbol for s in working_stops),
+        )
+        for order in self._store.open_orders():
+            self._track(order.plan_id, listing)
+        for symbol in sorted(set(positions) | {p.symbol for p in self._protections.active()}):
+            self._align(symbol, self._clock.now(), listing)
+        unexplained = tuple(
+            (symbol, shares)
+            for symbol, shares in sorted(positions.items())
+            if not position_explained(self._store.of_symbol(symbol))
+        )
+        self._last = Reconciliation(stray, extra, unexplained)
+        return self._last
 
     def backup_stop_due(self, symbol: str, last_price: Decimal) -> bool:
         """这只股票的本地备用止损现在该不该触发：无保护仓位、盘中、最新价不高于止损价。
@@ -135,19 +194,22 @@ class ExecutionService:
             in_session=self._calendar.session_at(self._clock.now()) is not None,
         )
 
-    def _advance(self, order: Order, now: datetime, may_place: bool) -> Order:
+    def _advance(
+        self, order: Order, now: datetime, may_place: bool, listing: Listing | None
+    ) -> Order:
         """先查询再处理，见 add-order-state-machine 的 design D6。
 
-        查到就按回报更新；受理过却查不到记为状态未知；没受理过又查不到，截止前提交（may_place
-        为假时这次不提交）、截止后记为已过期。之后到了截止时刻的请求撤单。任何一次券商调用超时
-        或断线，就在已经得到的结果上记为状态未知。
+        查到就按回报更新；受理过却查不到记为状态未知，对账时 listing 里也没有它就结束；没受理过
+        又查不到，截止前提交（may_place 为假时这次不提交）、截止后记为已过期。之后到了截止时刻的
+        请求撤单。任何一次券商调用超时或断线，就在已经得到的结果上记为状态未知。
         """
         try:
             report = self._broker.find(order)
             if report is not None:
                 order = order.apply(report, now)
             elif order.broker_order_id is not None:
-                order = order.mark_unknown(now)
+                gone = listing is not None and order.broker_order_id not in listing.order_ids
+                order = order.end_missing(now) if gone else order.mark_unknown(now)
             elif now >= order.deadline:
                 order = order.expire_unsent()
             elif may_place:
@@ -166,13 +228,17 @@ class ExecutionService:
             return order.reject()
         return order.apply(report, now)
 
-    def _align(self, symbol: str, now: datetime) -> tuple[Protection | None, StopTarget | None]:
-        """对齐这只股票的止损单，见 design D4。
+    def _align(
+        self, symbol: str, now: datetime, listing: Listing | None = None
+    ) -> tuple[Protection | None, StopTarget | None]:
+        """对齐这只股票的止损单，见 add-stop-protection 的 design D4。
 
         先查询当前这张止损单并按回报更新，再查询持仓、计算止损目标，按 next_action 处理。
         返回最新的止损保护和这次的止损目标。止损单状态未知、还没满等待时长时不调用券商；
         查询后仍是状态未知，或者查询持仓失败时，不再做别的处理。这些情况目标为 None。
-        止损单的券商调用超时或断线，止损单记为状态未知，见 design D9。
+        止损单的券商调用超时或断线，止损单记为状态未知，见 add-stop-protection 的 design D9。
+        对账时 listing 里这只股票一张止损单都没有，受理过却查不到的止损单就结束，
+        见 add-reconciliation 的 design D4。
         """
         original = self._protections.get(symbol)
         protection = original or Protection(symbol)
@@ -184,7 +250,13 @@ class ExecutionService:
                 report = self._stops.find(stop)
             except BrokerUnavailableError:
                 return self._save(original, protection.with_stop(stop.mark_unknown(now))), None
-            stop = stop.apply(report, now) if report else stop.not_found(now)
+            if report is not None:
+                stop = stop.apply(report, now)
+            elif listing is not None and stop.broker_order_id is not None:
+                gone = symbol not in listing.stop_symbols
+                stop = stop.end() if gone else stop.not_found(now)
+            else:
+                stop = stop.not_found(now)
             protection = protection.with_stop(stop)
             if stop.status is StopStatus.UNKNOWN:
                 return self._save(original, protection), None

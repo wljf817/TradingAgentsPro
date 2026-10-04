@@ -158,6 +158,14 @@ class Order:
         """截止时刻之后才确认券商没收到这笔订单。"""
         return self._end(OrderStatus.EXPIRED)
 
+    def end_missing(self, now: datetime) -> Self:
+        """受理过、查不到、券商挂单里也没有：早于截止时刻记为已撤销，否则记为已过期。
+
+        累计成交和成交均价保留已经记下的。只在对账时使用，见 reconciliation spec
+        「结束查不到的订单和止损单」。
+        """
+        return self._end(OrderStatus.CANCELLED if now < self.deadline else OrderStatus.EXPIRED)
+
     def request_cancel(self) -> Self:
         """已经成功请求撤单；状态不变，等券商回报撤销或失效。"""
         if self.status.is_terminal:
