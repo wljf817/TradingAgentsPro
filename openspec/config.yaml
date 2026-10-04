@@ -16,7 +16,7 @@ context: |
   - 完整版其他章节的问题，在人没有要求时一律忽略，不报告
 
   技术栈：Python 3.13 + uv（src 布局：src/tradingagentspro/）、DBOS、PydanticAI、Pydantic、
-  PostgreSQL、moomoo OpenAPI + OpenD、SEC EDGAR、discord.py；测试 pytest，检查 ruff 和 mypy（strict），CI 用 GitHub Actions。
+  PostgreSQL、moomoo OpenAPI + OpenD（行情和实盘交易）、Alpaca Trading API（模拟盘）、SEC EDGAR、discord.py；测试 pytest，检查 ruff 和 mypy（strict），CI 用 GitHub Actions。
 
   架构铁律（任何变更都不得违反）：
   - 只有 PM、子Agents、Reviewer、Critic 调用模型；触发、调度、风控、下单全部是确定性代码

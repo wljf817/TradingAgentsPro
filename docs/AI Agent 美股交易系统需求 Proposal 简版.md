@@ -93,7 +93,7 @@
 | 案件工作流、队列、定时任务 | DBOS |
 | Agent 调用和数据格式 | PydanticAI、Pydantic |
 | 存储 | PostgreSQL |
-| 行情、到价提醒和交易 | moomoo OpenAPI + OpenD |
+| 行情、到价提醒和实盘交易 | moomoo OpenAPI + OpenD |
 | 公告和财报原文 | SEC EDGAR |
 | 模型 | 子 agent 用 flash 模型；PM 用较强的模型；Critic 与 PM 不同厂商（含备用模型）；每个 agent 可配备用模型 |
 | 通知与人工确认 | Discord 机器人 |
