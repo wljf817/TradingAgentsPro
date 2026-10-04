@@ -766,8 +766,9 @@ _BUYING = (OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED)
 
 
 class StopProtectionMachine(RuleBasedStateMachine):
-    """随机交错买入成交、卖单提交和成交、止损单的改单撤单生效、止损单触发、券商调用失败或被拒、
-    重启、对账和拨动时间，检查止损单和卖单不会合计超过持仓，最终止损单对齐到目标。
+    """随机交错买入成交、卖单提交和成交、提前撤单、止损单的改单撤单生效、止损单触发、
+    券商调用失败或被拒、重启、对账和拨动时间，检查止损单和卖单不会合计超过持仓，
+    最终止损单对齐到目标。
 
     只有执行模块在操作券商，所以每次完成的对账都没有不一致（add-reconciliation 的 design D7）。
     """
@@ -847,6 +848,16 @@ class StopProtectionMachine(RuleBasedStateMachine):
             if self._working_at_broker(plan):
                 cid = str(plan.plan_id)
                 self.env.broker.update(cid, CANCELLED, self.env.broker.order(cid).filled, "50")
+
+    @rule()
+    def cancel_bbb_orders(self) -> None:
+        """撤掉 BBB 的订单，买单和卖单都撤。"""
+        unsent = [p for p in self._sells() if (o := self.env.store.get(p.plan_id)) and o.unsent]
+        self.env.service.cancel_orders("BBB")
+        for plan in unsent:
+            order = self.env.store.get(plan.plan_id)
+            if order is not None and order.status is OrderStatus.CANCELLED:
+                event("等让出的卖单被撤")
 
     @rule()
     def stop_requests_take_effect(self) -> None:

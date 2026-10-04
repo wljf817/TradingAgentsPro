@@ -1,7 +1,7 @@
 """订单记录和它的状态变化的测试，直接构造方案、再校验结果、订单和券商回报。
 
 场景见 openspec 的 order-lifecycle spec「提交订单」「订单状态和券商回报」，
-以及「到期撤单」「券商调用失败时状态未知」「状态未知时暂停这只股票的新订单」用到的判断。
+以及「到期撤单」「提前撤单」「券商调用失败时状态未知」「状态未知时暂停这只股票的新订单」用到的判断。
 """
 
 from dataclasses import replace
@@ -339,6 +339,32 @@ def test_request_cancel_keeps_the_status() -> None:
     assert order.cancel_requested
 
 
+@pytest.mark.parametrize(
+    "status", [OrderStatus.PENDING, OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED]
+)
+def test_want_cancel_records_the_cancel_request_only(status: OrderStatus) -> None:
+    order = _order(status=status, broker_order_id="B1", filled=30)
+
+    assert order.want_cancel() == replace(order, cancel_wanted=True)
+
+
+def test_want_cancel_keeps_an_unknown_order_waiting() -> None:
+    order = _order(status=OrderStatus.UNKNOWN, unknown_since=BASELINE_NOW)
+
+    assert order.want_cancel() == replace(order, cancel_wanted=True)
+
+
+def test_unsent_order_with_a_cancel_request_is_cancelled() -> None:
+    """有撤单要求，截止时刻之前确认券商没收到：已撤销，累计成交 0。"""
+    order = _order(status=OrderStatus.UNKNOWN, unknown_since=BASELINE_NOW, cancel_wanted=True)
+
+    ended = order.cancel_unsent()
+
+    assert ended.status is OrderStatus.CANCELLED
+    assert ended.filled == 0
+    assert ended.unknown_since is None
+
+
 @pytest.mark.parametrize("status", TERMINAL)
 def test_terminal_orders_do_not_change(status: OrderStatus) -> None:
     order = _order(status=status, broker_order_id="B1")
@@ -348,6 +374,8 @@ def test_terminal_orders_do_not_change(status: OrderStatus) -> None:
     assert order.expire_unsent() is order
     assert order.request_cancel() is order
     assert order.end_missing(BASELINE_NOW) is order
+    assert order.want_cancel() is order
+    assert order.cancel_unsent() is order
 
 
 # 判断
@@ -388,6 +416,37 @@ def test_cancel_is_requested_only_once() -> None:
 @pytest.mark.parametrize("status", [OrderStatus.PENDING, OrderStatus.UNKNOWN, *TERMINAL])
 def test_cancel_is_not_due_for_other_statuses(status: OrderStatus) -> None:
     assert not _order(status=status, unknown_since=BASELINE_NOW).cancel_due(BASELINE_CLOSE)
+
+
+@pytest.mark.parametrize("status", [OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED])
+def test_cancel_request_makes_the_cancel_due_before_the_deadline(status: OrderStatus) -> None:
+    order = _order(status=status, broker_order_id="B1", filled=30, cancel_wanted=True)
+
+    assert order.cancel_due(BASELINE_NOW)
+
+
+def test_cancel_request_does_not_repeat_a_requested_cancel() -> None:
+    order = _order(
+        status=OrderStatus.SUBMITTED,
+        broker_order_id="B1",
+        cancel_wanted=True,
+        cancel_requested=True,
+    )
+
+    assert not order.cancel_due(BASELINE_NOW)
+
+
+@pytest.mark.parametrize("status", [OrderStatus.PENDING, OrderStatus.UNKNOWN, *TERMINAL])
+def test_cancel_request_is_not_due_for_other_statuses(status: OrderStatus) -> None:
+    order = _order(status=status, unknown_since=BASELINE_NOW, cancel_wanted=True)
+
+    assert not order.cancel_due(BASELINE_NOW)
+
+
+def test_without_a_cancel_request_the_cancel_waits_for_the_deadline() -> None:
+    submitted = _order(status=OrderStatus.SUBMITTED, broker_order_id="B1")
+
+    assert not submitted.cancel_due(BASELINE_NOW)
 
 
 @pytest.mark.parametrize("status", list(OrderStatus))

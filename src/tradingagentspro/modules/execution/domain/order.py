@@ -1,4 +1,4 @@
-"""订单：一个方案的订单记录，以及它怎样随券商回报、券商调用失败和到期撤单变化。
+"""订单：一个方案的订单记录，以及它怎样随券商回报、券商调用失败、到期撤单和提前撤单变化。
 
 见 order-lifecycle spec。一个方案最多一个订单，客户端订单 ID 就是方案 ID。
 """
@@ -77,7 +77,8 @@ class Order:
     - broker_order_id：券商订单号；券商受理过才有
     - filled、average_price：累计成交股数和成交均价
     - unknown_since：变为状态未知的时刻；不是状态未知时为 None
-    - cancel_requested：已经成功请求过撤单
+    - cancel_requested：已经成功请求过撤单，到期撤单和提前撤单都算
+    - cancel_wanted：有撤单要求，跟进时不再提交，挂着的就请求撤单；见 spec「提前撤单」
 
     状态变化的方法都返回新的订单；终态的订单原样返回。
     """
@@ -97,6 +98,7 @@ class Order:
     average_price: Decimal | None = None
     unknown_since: datetime | None = None
     cancel_requested: bool = False
+    cancel_wanted: bool = False
 
     @property
     def client_order_id(self) -> str:
@@ -123,10 +125,10 @@ class Order:
         return now >= self.unknown_since + delay
 
     def cancel_due(self, now: datetime) -> bool:
-        """要请求撤单了：已提交或部分成交，到了截止时刻，还没请求过撤单。"""
+        """要请求撤单了：已提交或部分成交，到了截止时刻或者有撤单要求，还没请求过撤单。"""
         return (
             self.status in (OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED)
-            and now >= self.deadline
+            and (now >= self.deadline or self.cancel_wanted)
             and not self.cancel_requested
         )
 
@@ -165,6 +167,16 @@ class Order:
         「结束查不到的订单和止损单」。
         """
         return self._end(OrderStatus.CANCELLED if now < self.deadline else OrderStatus.EXPIRED)
+
+    def want_cancel(self) -> Self:
+        """记下撤单要求；状态不变，之后的跟进按它撤单。"""
+        if self.status.is_terminal:
+            return self
+        return replace(self, cancel_wanted=True)
+
+    def cancel_unsent(self) -> Self:
+        """有撤单要求，截止时刻之前确认券商没收到这笔订单：结束为已撤销，不再提交。"""
+        return self._end(OrderStatus.CANCELLED)
 
     def request_cancel(self) -> Self:
         """已经成功请求撤单；状态不变，等券商回报撤销或失效。"""

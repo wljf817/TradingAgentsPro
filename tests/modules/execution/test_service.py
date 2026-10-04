@@ -684,7 +684,8 @@ _MATCHING_STATUSES = {
 
 
 class OrderLifecycleMachine(RuleBasedStateMachine):
-    """随机交错跟进、券商那边的变化、券商调用失败和重启，检查订单只往前走、不会重复下单。
+    """随机交错跟进、提前撤单、券商那边的变化、券商调用失败和重启，检查订单只往前走、不会重复下单，
+    有撤单要求以后不再提交。
 
     重启之后先对账。只有执行模块在操作券商，所以对账都没有不一致，
     见 add-reconciliation 的 design D7。
@@ -701,6 +702,8 @@ class OrderLifecycleMachine(RuleBasedStateMachine):
         # 最近一次调用查询了券商、而且没有失败；之后券商那边又变化时清掉
         self.synced = False
         self.last_failure: tuple[str, bool] | None = None
+        # 第一次提前撤单之前，券商收到 P1 提交的次数；还没提前撤单时为 None
+        self.places_before_cancel: int | None = None
 
     def _order(self) -> Order:
         order = self.env.store.get(self.plan.plan_id)
@@ -744,6 +747,8 @@ class OrderLifecycleMachine(RuleBasedStateMachine):
             event(f"{operation} 失败（{'生效后' if after_effect else '生效前'}）后恢复")
         if order.status is OrderStatus.EXPIRED and order.filled > 0:
             event("部分成交后到期")
+        if order.status is OrderStatus.CANCELLED and order.cancel_wanted:
+            event("提前撤单后已撤销")
 
     @initialize(
         minutes=st.integers(1, 5),
@@ -763,6 +768,19 @@ class OrderLifecycleMachine(RuleBasedStateMachine):
     def track(self, seconds: int) -> None:
         self.env.clock.advance(timedelta(seconds=seconds))
         self._call(lambda: self.env.service.track(self.plan.plan_id))
+
+    @rule(seconds=st.integers(0, 120))
+    def cancel_early(self, seconds: int) -> None:
+        """拨动时间后撤掉 BBB 的订单。"""
+        self.env.clock.advance(timedelta(seconds=seconds))
+        if self.places_before_cancel is None:
+            self.places_before_cancel = self.env.broker.calls_for(self.cid).count("place")
+        self._call(self._cancel)
+
+    def _cancel(self) -> Order:
+        """撤掉 BBB 的订单，返回之后的订单。"""
+        self.env.service.cancel_orders("BBB")
+        return self._order()
 
     @rule(change=st.sampled_from(_BROKER_CHANGES), shares=st.integers(1, 40))
     def broker_changes(self, change: str, shares: int) -> None:
@@ -822,6 +840,12 @@ class OrderLifecycleMachine(RuleBasedStateMachine):
         self.previous = order
 
     @invariant()
+    def no_place_after_a_cancel_request(self) -> None:
+        if self.places_before_cancel is not None:
+            places = self.env.broker.calls_for(self.cid).count("place")
+            assert places == self.places_before_cancel, "有撤单要求以后不能再提交"
+
+    @invariant()
     def cancel_succeeds_at_most_once(self) -> None:
         broker = self.env.broker
         failed = sum(1 for operation, _ in broker.failures if operation == "cancel")
@@ -835,7 +859,11 @@ class OrderLifecycleMachine(RuleBasedStateMachine):
         if order.status is OrderStatus.UNKNOWN:
             return
         if broker.order_count(self.cid) == 0:
-            assert order.status in (OrderStatus.EXPIRED, OrderStatus.REJECTED)
+            # 有撤单要求、截止时刻之前确认券商没收到的，结束为已撤销
+            ended = (OrderStatus.EXPIRED, OrderStatus.REJECTED)
+            assert order.status in ended or (
+                order.cancel_wanted and order.status is OrderStatus.CANCELLED
+            )
             return
         reported = broker.order(self.cid)
         assert order.filled == reported.filled

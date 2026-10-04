@@ -1,8 +1,9 @@
-"""执行模块的用例：提交订单，跟进订单到终态，对齐止损单，和券商对账。
+"""执行模块的用例：提交订单，跟进订单到终态，提前撤单，对齐止损单，和券商对账。
 
 见 order-lifecycle spec、stop-protection spec 和 reconciliation spec。
 """
 
+from collections.abc import Iterable
 from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
@@ -112,7 +113,8 @@ class ExecutionService:
         """跟进一次这个方案的订单：查询券商并更新状态，需要时提交或撤单，返回最新的订单。
 
         终态的订单，以及状态未知还没满等待时长的订单，直接返回，不调用券商。订单有变化时才保存。
-        还没提交出去的卖单，先对齐止损单，止损单让出股数之后才提交，见 design D5。
+        还没提交出去的卖单，先对齐止损单，止损单让出股数之后才提交，见 design D5；
+        有撤单要求的不提交，也就不用先对齐，见 update-order-emergency-cancel 的 design D2。
         跟进之后对齐这只股票的止损单；已经对齐过、订单又没变化时不再对齐。
         """
         return self._track(plan_id, None)
@@ -128,7 +130,7 @@ class ExecutionService:
         if order.status.is_terminal or not order.lookup_due(now, self._config.unknown_lookup_delay):
             return order
         aligned, may_place = False, True
-        if order.side is OrderSide.SELL and order.unsent:
+        if order.side is OrderSide.SELL and order.unsent and not order.cancel_wanted:
             protection, target = self._align(order.symbol, now, listing)
             aligned = True
             may_place = target is not None and stop_yields(protection, target)
@@ -138,6 +140,28 @@ class ExecutionService:
         if not aligned or updated != order:
             self._align(updated.symbol, now, listing)
         return updated
+
+    def cancel_orders(self, symbol: str) -> tuple[Order, ...]:
+        """撤掉这只股票全部没结束的订单（买单和卖单），返回跟进一次之后的这些订单。
+
+        见 order-lifecycle spec「提前撤单」。任何时刻都可以调用，也可以重复调用。
+        """
+        return self._cancel(o for o in self._store.open_orders() if o.symbol == symbol)
+
+    def cancel_buy_orders(self) -> tuple[Order, ...]:
+        """撤掉全部没结束的买单，返回跟进一次之后的这些订单。
+
+        见 order-lifecycle spec「提前撤单」。任何时刻都可以调用，也可以重复调用。
+        """
+        return self._cancel(o for o in self._store.open_orders() if o.side is OrderSide.BUY)
+
+    def _cancel(self, orders: Iterable[Order]) -> tuple[Order, ...]:
+        """先给每笔订单记下撤单要求并保存，再各跟进一次：中途退出时，撤单要求都已经记下。"""
+        targets = tuple(orders)
+        for order in targets:
+            if not order.cancel_wanted:
+                self._store.save(order.want_cancel())
+        return tuple(self.track(o.plan_id) for o in targets)
 
     def protect(self, symbol: str) -> Protection | None:
         """单独对齐这只股票的止损单，返回最新的止损保护；没有记录、也不需要止损单时为 None。
@@ -200,8 +224,9 @@ class ExecutionService:
         """先查询再处理，见 add-order-state-machine 的 design D6。
 
         查到就按回报更新；受理过却查不到记为状态未知，对账时 listing 里也没有它就结束；没受理过
-        又查不到，截止前提交（may_place 为假时这次不提交）、截止后记为已过期。之后到了截止时刻的
-        请求撤单。任何一次券商调用超时或断线，就在已经得到的结果上记为状态未知。
+        又查不到，截止后记为已过期，截止前有撤单要求的记为已撤销，否则提交（may_place 为假时
+        这次不提交）。之后到了截止时刻或者有撤单要求的请求撤单。任何一次券商调用超时或断线，
+        就在已经得到的结果上记为状态未知。
         """
         try:
             report = self._broker.find(order)
@@ -212,6 +237,8 @@ class ExecutionService:
                 order = order.end_missing(now) if gone else order.mark_unknown(now)
             elif now >= order.deadline:
                 order = order.expire_unsent()
+            elif order.cancel_wanted:
+                order = order.cancel_unsent()
             elif may_place:
                 order = self._place(order, now)
             if order.cancel_due(now):
