@@ -331,6 +331,24 @@ def test_no_opening_after_the_daily_loss_breaker_trips(plan: TradePlan) -> None:
     assert _rules(decision) == ["单日亏损熔断"]
 
 
+@pytest.mark.parametrize("plan", [baseline_plan(), add_aaa(10, 110, 105)])
+def test_no_opening_in_degraded_mode(plan: TradePlan) -> None:
+    """spec「降级模式下禁止开仓」：买入和加仓都拒绝。"""
+    decision = _check(plan=plan, degraded=True)
+
+    assert decision.outcome is REJECTED
+    assert decision.quantity is None
+    assert _rules(decision) == ["降级模式"]
+
+
+def test_degraded_mode_and_the_breaker_together() -> None:
+    """spec「降级模式和熔断同时出现」：原因按登记顺序，先熔断后降级。"""
+    decision = _check(degraded=True, daily_loss_breaker_tripped=True)
+
+    assert decision.outcome is REJECTED
+    assert _rules(decision) == ["单日亏损熔断", "降级模式"]
+
+
 def test_stocks_with_opening_reservations_take_position_slots() -> None:
     ccc = OpeningReservation("CCC", "能源", Decimal(5025), Decimal(5000), Decimal(425))
 
@@ -415,6 +433,7 @@ def test_rejects_when_nothing_is_sellable() -> None:
 
 
 def test_exits_are_not_limited_by_opening_rules() -> None:
+    """spec「退出不受开仓类规则限制」：熔断、降级模式、交易间隔、资金和合计风险都不限制退出。"""
     ccc = holding("CCC", "能源", 400, 50, 50, 30)
     account = baseline_account(
         settled_cash=Decimal(0),
@@ -423,7 +442,10 @@ def test_exits_are_not_limited_by_opening_rules() -> None:
     )
 
     decision = _check(
-        plan=reduce_plan("AAA", "科技", 50), account=account, daily_loss_breaker_tripped=True
+        plan=reduce_plan("AAA", "科技", 50),
+        account=account,
+        daily_loss_breaker_tripped=True,
+        degraded=True,
     )
 
     assert (decision.outcome, decision.quantity) == (PASSED, 50)

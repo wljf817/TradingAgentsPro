@@ -207,6 +207,21 @@ def test_rejected_by_the_rules_on_recheck() -> None:
     assert _rules(decision) == ["单日亏损熔断"]
 
 
+def test_rejected_in_degraded_mode_on_recheck() -> None:
+    """pre-order-recheck spec「再校验时处于降级模式」。"""
+    decision = _recheck(_reserved(baseline_plan()), degraded=True)
+
+    assert decision.outcome is REJECTED
+    assert _rules(decision) == ["降级模式"]
+
+
+def test_exit_passes_recheck_in_degraded_mode() -> None:
+    """pre-order-recheck spec「降级模式下退出照常再校验」。"""
+    decision = _recheck(_reserved(close_plan("AAA", "科技")), degraded=True)
+
+    assert (decision.outcome, decision.quantity) == (PASSED, 100)
+
+
 def test_close_uses_the_live_sellable_quantity() -> None:
     reservation = _reserved(close_plan("AAA", "科技"))
 

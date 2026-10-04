@@ -1,4 +1,4 @@
-"""风控的输入：方案、账户数据、其他方案的预留、熔断状态、当前时刻、交易日历和阈值。"""
+"""风控的输入：方案、账户数据、其他方案的预留、熔断和降级模式的状态、当前时刻、交易日历和阈值。"""
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -31,13 +31,17 @@ class SellReservation:
 
 @dataclass(frozen=True, slots=True)
 class RiskRequest:
-    """检查一个方案需要的全部输入。now 是带时区的 UTC 时间。"""
+    """检查一个方案需要的全部输入。now 是带时区的 UTC 时间。
+
+    degraded 是系统是否处于降级模式，见 degraded-mode spec，由调用方从健康监控取来。
+    """
 
     plan: TradePlan
     account: AccountSnapshot
     opening_reservations: tuple[OpeningReservation, ...]
     sell_reservations: tuple[SellReservation, ...]
     daily_loss_breaker_tripped: bool
+    degraded: bool
     now: datetime
     calendar: TradingCalendar
     config: RiskConfig

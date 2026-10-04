@@ -49,10 +49,19 @@ NEXT_DAY = datetime(2026, 10, 15, 14, tzinfo=UTC)
 
 
 def _check(
-    service: RiskService, plan: TradePlan, account: AccountSnapshot | None = None
+    service: RiskService,
+    plan: TradePlan,
+    account: AccountSnapshot | None = None,
+    *,
+    degraded: bool = False,
 ) -> RiskDecision:
-    """按基准账户（或给定的账户）检查方案，熔断没有触发。"""
-    return service.check(plan, account or baseline_account(), daily_loss_breaker_tripped=False)
+    """按基准账户（或给定的账户）检查方案，熔断没有触发，默认不处于降级模式。"""
+    return service.check(
+        plan,
+        account or baseline_account(),
+        daily_loss_breaker_tripped=False,
+        degraded=degraded,
+    )
 
 
 def _recheck(
@@ -61,11 +70,18 @@ def _recheck(
     account: AccountSnapshot | None = None,
     last_price: str | None = None,
     daily_loss_breaker_tripped: bool = False,
+    degraded: bool = False,
 ) -> RiskDecision:
-    """再校验：默认实时账户是基准账户，实时价等于限价（市价单用 1），熔断没有触发。"""
+    """再校验：默认实时账户是基准账户，实时价等于限价（市价单用 1），熔断没有触发，
+    不处于降级模式。
+    """
     price = Decimal(last_price) if last_price else (plan.limit_price or Decimal(1))
     return service.recheck(
-        plan.plan_id, account or baseline_account(), price, daily_loss_breaker_tripped
+        plan.plan_id,
+        account or baseline_account(),
+        price,
+        daily_loss_breaker_tripped=daily_loss_breaker_tripped,
+        degraded=degraded,
     )
 
 
@@ -561,6 +577,46 @@ def test_recheck_voids_the_plan_when_the_breaker_has_tripped() -> None:
     assert decision.outcome is REJECTED
     assert _rules(decision) == ["单日亏损熔断"]
     assert _reserved_shares(store, bbb) is None
+
+
+def test_no_reservation_when_rejected_in_degraded_mode() -> None:
+    """risk-rules spec「降级模式下禁止开仓」：被拒绝的方案不预留。"""
+    store = InMemoryReservationStore()
+    service = risk_service(store)
+    bbb = baseline_plan()
+
+    decision = _check(service, bbb, degraded=True)
+
+    assert decision.outcome is REJECTED
+    assert _rules(decision) == ["降级模式"]
+    assert store.get(bbb.plan_id) is None
+
+
+def test_recheck_voids_the_plan_in_degraded_mode() -> None:
+    """pre-order-recheck spec「再校验时处于降级模式」。"""
+    store = InMemoryReservationStore()
+    service = risk_service(store)
+    bbb = baseline_plan()
+    _check(service, bbb)
+
+    decision = _recheck(service, bbb, degraded=True)
+
+    assert decision.outcome is REJECTED
+    assert _rules(decision) == ["降级模式"]
+    assert _reserved_shares(store, bbb) is None
+
+
+def test_exit_recheck_passes_in_degraded_mode() -> None:
+    """pre-order-recheck spec「降级模式下退出照常再校验」。"""
+    store = InMemoryReservationStore()
+    service = risk_service(store)
+    close = close_plan("AAA", "科技")
+    _check(service, close)
+
+    decision = _recheck(service, close, degraded=True)
+
+    assert (decision.outcome, decision.quantity) == (PASSED, 100)
+    assert _reserved_shares(store, close) == 100
 
 
 def test_recheck_of_a_close_sells_the_live_sellable_quantity() -> None:

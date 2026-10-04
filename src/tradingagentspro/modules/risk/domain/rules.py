@@ -225,6 +225,13 @@ def daily_loss_breaker(request: RiskRequest, quantity: int) -> RiskViolation | N
     return RiskViolation(rule="单日亏损熔断", message="今天的单日亏损熔断已经触发，禁止开仓")
 
 
+def degraded_mode(request: RiskRequest, quantity: int) -> RiskViolation | None:
+    """不处于降级模式。"""
+    if not request.degraded:
+        return None
+    return RiskViolation(rule="降级模式", message="系统处于降级模式，暂停开仓")
+
+
 OPENING_RULES: tuple[RiskRule, ...] = (
     settled_cash,
     position_limit,
@@ -238,6 +245,7 @@ OPENING_RULES: tuple[RiskRule, ...] = (
     emergency_threshold,
     price_deviation_range,
     daily_loss_breaker,
+    degraded_mode,
 )
 
 

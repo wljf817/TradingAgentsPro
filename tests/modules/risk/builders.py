@@ -116,13 +116,14 @@ def baseline_config(**changes: Any) -> RiskConfig:
 
 
 def baseline_request(**changes: Any) -> RiskRequest:
-    """基准数据加基准方案：没有预留，熔断没有触发，基准配置，纽交所样例日历。"""
+    """基准数据加基准方案：没有预留，熔断没有触发，不处于降级模式，基准配置，纽交所样例日历。"""
     fields: dict[str, Any] = {
         "plan": baseline_plan(),
         "account": baseline_account(),
         "opening_reservations": (),
         "sell_reservations": (),
         "daily_loss_breaker_tripped": False,
+        "degraded": False,
         "now": BASELINE_NOW,
         "calendar": NYSE,
         "config": baseline_config(),

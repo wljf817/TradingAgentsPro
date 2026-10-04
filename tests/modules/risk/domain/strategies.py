@@ -129,6 +129,7 @@ def risk_requests(draw: st.DrawFn) -> RiskRequest:
         opening_reservations=tuple(opening_reservations),
         sell_reservations=tuple(sell_reservations),
         daily_loss_breaker_tripped=draw(st.booleans()),
+        degraded=draw(st.booleans()),
         now=now,
         calendar=NYSE,
         config=config,

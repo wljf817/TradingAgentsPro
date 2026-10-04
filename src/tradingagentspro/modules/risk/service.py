@@ -44,17 +44,28 @@ class RiskService:
         self._config = config
 
     def check(
-        self, plan: TradePlan, account: AccountSnapshot, daily_loss_breaker_tripped: bool
+        self,
+        plan: TradePlan,
+        account: AccountSnapshot,
+        *,
+        daily_loss_breaker_tripped: bool,
+        degraded: bool,
     ) -> RiskDecision:
         """按全部有效预留之外的剩余额度检查方案；通过或调整时，按最终股数预留。
 
-        账户数据和熔断状态由调用方传入。已经有预留的方案直接返回第一次的结果：
+        账户数据、熔断状态和是否处于降级模式由调用方传入。已经有预留的方案直接返回第一次的结果：
         重试时如果重新判定，方案会被自己的预留挡住，而这份预留再也没有人释放。
         """
         existing = self._store.get(plan.plan_id)
         if existing is not None:
             return existing.decision
-        request = self._request(plan, account, daily_loss_breaker_tripped, self._clock.now())
+        request = self._request(
+            plan,
+            account,
+            self._clock.now(),
+            daily_loss_breaker_tripped=daily_loss_breaker_tripped,
+            degraded=degraded,
+        )
         decision = evaluate_plan(request)
         if decision.quantity is not None:
             self._store.save(Reservation(plan=plan, decision=decision))
@@ -65,12 +76,15 @@ class RiskService:
         plan_id: UUID,
         account: AccountSnapshot,
         last_price: Decimal,
+        *,
         daily_loss_breaker_tripped: bool,
+        degraded: bool,
     ) -> RiskDecision:
         """提交订单前用实时数据再校验方案；通过或调整时预留改为最终股数，拒绝时方案作废并释放。
 
-        只能在常规交易时段内调用，否则抛 OutsideSessionError。账户数据、实时最新价和熔断状态
-        由调用方从券商读取。没有有效预留的方案给出"方案已结束"，不改变任何预留。
+        只能在常规交易时段内调用，否则抛 OutsideSessionError。账户数据和实时最新价由调用方
+        从券商读取，熔断状态和是否处于降级模式也由调用方传入。没有有效预留的方案给出
+        "方案已结束"，不改变任何预留。
         """
         now = self._clock.now()
         if self._calendar.session_at(now) is None:
@@ -78,7 +92,13 @@ class RiskService:
         reservation = self._store.get(plan_id)
         if reservation is None or not reservation.is_active:
             return plan_ended()
-        request = self._request(reservation.plan, account, daily_loss_breaker_tripped, now)
+        request = self._request(
+            reservation.plan,
+            account,
+            now,
+            daily_loss_breaker_tripped=daily_loss_breaker_tripped,
+            degraded=degraded,
+        )
         decision = recheck_plan(request, reservation, last_price)
         if decision.quantity is None:
             self._store.save(reservation.release())
@@ -102,8 +122,10 @@ class RiskService:
         self,
         plan: TradePlan,
         account: AccountSnapshot,
-        daily_loss_breaker_tripped: bool,
         now: datetime,
+        *,
+        daily_loss_breaker_tripped: bool,
+        degraded: bool,
     ) -> RiskRequest:
         """检查这个方案的输入：其他方案的预留是除它自己以外的全部有效预留。"""
         others = [r for r in self._store.active() if r.plan.plan_id != plan.plan_id]
@@ -119,6 +141,7 @@ class RiskService:
                 sell_reservation(r) for r in others if not r.plan.action.is_opening
             ),
             daily_loss_breaker_tripped=daily_loss_breaker_tripped,
+            degraded=degraded,
             now=now,
             calendar=self._calendar,
             config=self._config,
