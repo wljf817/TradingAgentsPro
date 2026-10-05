@@ -32,6 +32,16 @@ modules/<模块>/
   config.py       阈值和默认值
 ```
 
+## 数据库
+
+状态库的表都是只追加的版本表，写法在 `modules/statestore/`，表和它的数据库实现放在拥有这张表的模块的 `repo.py` 里。表由 `bootstrap/migrations/` 里的 Alembic 迁移建立和修改，`bootstrap.database.migrate` 把数据库升级到最新版本。
+
+加一个迁移：
+
+1. 在 `bootstrap/migrations/versions/` 里新建一个文件，文件名以字母开头，比如 `v0002_create_trade_records.py`
+2. `revision` 是上一个的编号加 1（比如 `"0002"`），`down_revision` 写上一个的编号
+3. `upgrade` 里写明每一列，不 import 业务代码；`downgrade` 直接抛错，迁移只升级
+
 ## 常用命令
 
 ```bash
@@ -42,6 +52,8 @@ uv run mypy                  # 类型检查（strict）
 uv run lint-imports          # 依赖方向检查
 uv run pytest                # 测试
 ```
+
+连数据库的测试会用 testcontainers 启动一个临时的 PostgreSQL 18 容器，用完即删，所以跑完整的测试要开着 Docker（比如 OrbStack 或 Docker Desktop）。第一次运行会先下载镜像。不连数据库的测试不需要 Docker。
 
 克隆后启用提交前检查（和 CI 跑同一套，任何一项失败就拒绝提交）：
 

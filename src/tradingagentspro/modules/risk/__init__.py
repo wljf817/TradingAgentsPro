@@ -2,7 +2,7 @@
 提交订单前用实时数据再校验。
 
 规则见 openspec 的 risk-rules spec，预留见 risk-reservations spec，再校验见 pre-order-recheck spec。
-模块之外的代码只能 import 这里导出的名字。
+预留存在状态库里，见 state-store spec。模块之外的代码只能 import 这里导出的名字。
 """
 
 from tradingagentspro.modules.risk.config import RiskConfig
@@ -14,10 +14,12 @@ from tradingagentspro.modules.risk.domain.request import (
 )
 from tradingagentspro.modules.risk.domain.reservation import Reservation
 from tradingagentspro.modules.risk.ports import ReservationStore
+from tradingagentspro.modules.risk.repo import PostgresReservationStore
 from tradingagentspro.modules.risk.service import RiskService
 
 __all__ = [
     "OpeningReservation",
+    "PostgresReservationStore",
     "Reservation",
     "ReservationStore",
     "RiskConfig",

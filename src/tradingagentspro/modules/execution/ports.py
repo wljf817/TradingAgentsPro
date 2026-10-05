@@ -55,7 +55,8 @@ class Broker(Protocol):
 class OrderStore(Protocol):
     """订单的存储：按方案 ID 保存每笔订单的最新状态。
 
-    数据库实现只追加不覆盖：每次保存写入一个新版本，读取时取每笔订单的最新版本。
+    数据库实现只追加不覆盖：内容有变化时写入一个新版本，读取时取每笔订单的最新版本，
+    见 state-store spec。
     """
 
     def get(self, plan_id: UUID) -> Order | None:
@@ -109,7 +110,8 @@ class StopBroker(Protocol):
 class ProtectionStore(Protocol):
     """止损保护的存储：按股票保存最新的记录。
 
-    数据库实现只追加不覆盖：每次保存写入一个新版本，读取时取每只股票的最新版本。
+    数据库实现只追加不覆盖：内容有变化时写入一个新版本，读取时取每只股票的最新版本，
+    见 state-store spec。
     """
 
     def get(self, symbol: str) -> Protection | None:
@@ -117,7 +119,7 @@ class ProtectionStore(Protocol):
         ...
 
     def active(self) -> tuple[Protection, ...]:
-        """需要对齐的记录：当前止损单还没结束（还没挂出去、挂着、状态未知），或者是无保护仓位。"""
+        """需要对齐的记录：Protection.is_active 为真的那些。"""
         ...
 
     def save(self, protection: Protection) -> None:

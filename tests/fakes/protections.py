@@ -1,6 +1,6 @@
 """测试用的止损保护存储：存在内存里，按股票保存最新的记录。"""
 
-from tradingagentspro.modules.execution import Protection, StopStatus
+from tradingagentspro.modules.execution import Protection
 
 
 class InMemoryProtectionStore:
@@ -13,12 +13,7 @@ class InMemoryProtectionStore:
         return self._protections.get(symbol)
 
     def active(self) -> tuple[Protection, ...]:
-        return tuple(
-            p
-            for p in self._protections.values()
-            if (p.stop is not None and p.stop.status is not StopStatus.ENDED)
-            or p.unprotected_since is not None
-        )
+        return tuple(p for p in self._protections.values() if p.is_active)
 
     def save(self, protection: Protection) -> None:
         self._protections[protection.symbol] = protection

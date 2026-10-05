@@ -279,6 +279,34 @@ def test_marking_unprotected_keeps_the_first_time() -> None:
     assert unprotected.mark_protected().unprotected_since is None
 
 
+# 需要对齐（state-store spec「读取最新版本」止损保护表那一行）
+
+
+@pytest.mark.parametrize(
+    "stop",
+    [
+        _stop(status=StopStatus.PENDING, broker_order_id=None),
+        _stop(),
+        _stop(status=StopStatus.UNKNOWN, unknown_since=_at(15)),
+    ],
+    ids=["pending", "working", "unknown"],
+)
+def test_needs_alignment_while_the_stop_has_not_ended(stop: StopOrder) -> None:
+    assert Protection("BBB", used=1, stop=stop).is_active
+
+
+@pytest.mark.parametrize("stop", [None, _stop(status=StopStatus.ENDED)], ids=["none", "ended"])
+def test_no_alignment_needed_without_a_live_stop(stop: StopOrder | None) -> None:
+    """state-store spec「止损单结束后不再需要对齐」。"""
+    assert not Protection("BBB", used=1, stop=stop).is_active
+
+
+@pytest.mark.parametrize("stop", [None, _stop(status=StopStatus.ENDED)], ids=["none", "ended"])
+def test_unprotected_position_needs_alignment(stop: StopOrder | None) -> None:
+    """state-store spec「无保护仓位需要对齐」：不论有没有止损单。"""
+    assert Protection("BBB", used=1, stop=stop, unprotected_since=_at(15)).is_active
+
+
 # 对齐时的处理（spec「对齐止损单」第二张表）
 
 TARGET = StopTarget(100, Decimal(45))

@@ -148,6 +148,12 @@ class Protection:
     stop: StopOrder | None = None
     unprotected_since: datetime | None = None
 
+    @property
+    def is_active(self) -> bool:
+        """需要对齐：当前止损单还没结束（还没挂出去、挂着、状态未知），或者是无保护仓位。"""
+        live = self.stop is not None and self.stop.status is not StopStatus.ENDED
+        return live or self.unprotected_since is not None
+
     def new_stop(self, target: StopTarget) -> Self:
         """新建一张序号加 1、还没挂出去的止损单，按目标的股数和止损价。"""
         assert target.stop_price is not None  # 没有止损价时不挂

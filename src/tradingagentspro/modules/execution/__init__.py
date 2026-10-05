@@ -1,7 +1,7 @@
 """执行模块：按通过下单前再校验的方案提交订单，把订单跟踪到终态。
 
 下单权限只在这个模块里。订单的状态和处理见 openspec 的 order-lifecycle spec。
-模块之外的代码只能 import 这里导出的名字。
+订单和止损保护存在状态库里，见 state-store spec。模块之外的代码只能 import 这里导出的名字。
 """
 
 from tradingagentspro.modules.execution.config import ExecutionConfig
@@ -46,6 +46,7 @@ from tradingagentspro.modules.execution.ports import (
     ProtectionStore,
     StopBroker,
 )
+from tradingagentspro.modules.execution.repo import PostgresOrderStore, PostgresProtectionStore
 from tradingagentspro.modules.execution.service import ExecutionService
 
 __all__ = [
@@ -63,6 +64,8 @@ __all__ = [
     "OrderSide",
     "OrderStatus",
     "OrderStore",
+    "PostgresOrderStore",
+    "PostgresProtectionStore",
     "Protection",
     "ProtectionStore",
     "ReconcileMismatchError",
