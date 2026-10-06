@@ -53,7 +53,7 @@
   - 只在开盘时（`GET /v2/clock` 的 `is_open`，否则跳过）：市价买 1 股并等到成交；挂远低于市价的止损单；再提交买单，确认被拒受理（防自成交）；改止损价，确认查询跟着替换找到新单、全部挂着的止损单只有一张；撤止损单；市价卖出这 1 股
 
   README 的「常用命令」加一行运行方法。验证：没有 key 时 `uv run pytest -m alpaca_paper` 全部跳过，`uv run pytest` 不收集这些测试
-- [ ] 6.2 人在环境变量里给出 Alpaca 模拟盘的 key 以后，开盘时运行 `uv run pytest -m alpaca_paper`。验证：全部通过；和 spec 不符的地方先改 spec 和 design，再改代码和 2 到 5 组的测试。没有 key 时这一项留着，在「启动与装配」之前补上
+- [x] 6.2 人在环境变量里给出 Alpaca 模拟盘的 key 以后，开盘时运行 `uv run pytest -m alpaca_paper`。验证：全部通过；和 spec 不符的地方先改 spec 和 design，再改代码和 2 到 5 组的测试。没有 key 时这一项留着，在「启动与装配」之前补上
 
 ## 7. 收尾
 
