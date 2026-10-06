@@ -57,6 +57,5 @@
 
 ## 7. 收尾
 
-- [ ] 7.1 人同意 proposal「需要人决定」第 1 条以后，按推荐修改完整版 Proposal「技术栈与部署」券商一行，和 `docs/实现路线.md` M7 的完成标志。验证：只改了这两处，和 spec「Alpaca 的防自成交保护」一致
-- [ ] 7.2 对照 spec，确认每个场景都有对应的测试，测试名或说明里写明场景。验证：逐条列出场景和测试的对应关系，没有遗漏
-- [ ] 7.3 运行全部检查：`uv run pytest`、`uv run ruff check`、`uv run ruff format --check`、`uv run mypy`、`uv run lint-imports`、`openspec validate --all --strict`，全部通过
+- [ ] 7.1 对照 spec，确认每个场景都有对应的测试，测试名或说明里写明场景。验证：逐条列出场景和测试的对应关系，没有遗漏
+- [ ] 7.2 运行全部检查：`uv run pytest`、`uv run ruff check`、`uv run ruff format --check`、`uv run mypy`、`uv run lint-imports`、`openspec validate --all --strict`，全部通过
