@@ -316,7 +316,13 @@ def test_our_stop_accepted_before_its_result_was_saved() -> None:
     env.report(p1, WORKING, 30)
     env.store.save(replace(env.order(p1), status=OrderStatus.PARTIALLY_FILLED, filled=30))
     env.broker.positions["BBB"] = 30
-    pending = StopOrder(symbol="BBB", client_order_id=STOP_1, quantity=30, stop_price=Decimal(45))
+    pending = StopOrder(
+        symbol="BBB",
+        client_order_id=STOP_1,
+        quantity=30,
+        stop_price=Decimal(45),
+        created_at=BASELINE_NOW,
+    )
     env.protections.save(Protection("BBB", used=1, stop=pending))
     env.stops.accept(pending)
     env.restart()

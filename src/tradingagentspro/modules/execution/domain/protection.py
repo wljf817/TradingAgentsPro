@@ -15,6 +15,7 @@ from tradingagentspro.modules.execution.domain.order import (
     BrokerOrderStatus,
     Order,
     OrderSide,
+    opening_order,
 )
 
 
@@ -33,12 +34,19 @@ class StopStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class StopReport:
-    """券商那边这张止损单的情况。quantity 是未成交股数。"""
+    """券商那边这张止损单的情况。
+
+    quantity 是未成交股数；filled、average_price、fees 是这张止损单累计的成交股数、成交均价和费用，
+    包括改单之前的成交。
+    """
 
     broker_order_id: str
     status: BrokerOrderStatus
     quantity: int
     stop_price: Decimal
+    filled: int = 0
+    average_price: Decimal | None = None
+    fees: Decimal = Decimal(0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,10 +65,13 @@ class StopTarget:
 class StopOrder:
     """一张券商端止损单：长期有效的止损市价卖单，只在常规交易时段触发。
 
-    - quantity、stop_price：挂着时是券商回报的未成交股数和止损价；还没挂出去时是要挂的
+    - quantity、stop_price：挂着和结束时是券商回报的未成交股数和止损价；还没挂出去时是要挂的
+    - created_at：新建这张止损单的时刻
     - broker_order_id：券商订单号；券商受理过才有
     - unknown_since：变为状态未知的时刻；不是状态未知时为 None
     - requested：最近一次改单请求的股数，券商回报的股数等于它时清掉；没有请求在路上时为 None
+    - filled、average_price、fees：券商回报的累计成交股数、成交均价和累计费用
+    - filled_at：最近一次发现累计成交增加的时刻；还没有成交时为 None。交易记录按它算成交日
 
     状态变化的方法都返回新的止损单。
     """
@@ -69,10 +80,15 @@ class StopOrder:
     client_order_id: str
     quantity: int
     stop_price: Decimal
+    created_at: datetime
     status: StopStatus = StopStatus.PENDING
     broker_order_id: str | None = None
     unknown_since: datetime | None = None
     requested: int | None = None
+    filled: int = 0
+    average_price: Decimal | None = None
+    fees: Decimal = Decimal(0)
+    filled_at: datetime | None = None
 
     def lookup_due(self, now: datetime, delay: timedelta) -> bool:
         """可以调用券商了：不是状态未知，或者变为状态未知已经满 delay。"""
@@ -82,11 +98,14 @@ class StopOrder:
         return now >= self.unknown_since + delay
 
     def apply(self, report: StopReport, now: datetime) -> Self:
-        """按券商回报更新，见 stop-protection spec「对齐止损单」第一张表。"""
+        """按券商回报更新，见 stop-protection spec「对齐止损单」第一张表。
+
+        挂着和结束时记下累计成交、成交均价和费用；结果未知时这些都不变。
+        """
         match report.status:
             case BrokerOrderStatus.WORKING:
                 return replace(
-                    self,
+                    self._with_fills(report, now),
                     status=StopStatus.WORKING,
                     broker_order_id=report.broker_order_id,
                     quantity=report.quantity,
@@ -103,12 +122,23 @@ class StopOrder:
                 )
             case _:  # 全部成交、撤销或失效、拒绝
                 return replace(
-                    self,
+                    self._with_fills(report, now),
                     status=StopStatus.ENDED,
                     broker_order_id=report.broker_order_id,
+                    quantity=report.quantity,
                     unknown_since=None,
                     requested=None,
                 )
+
+    def _with_fills(self, report: StopReport, now: datetime) -> Self:
+        """记下回报的累计成交、成交均价和费用；累计成交比记下的多时，记下这次发现的时刻。"""
+        return replace(
+            self,
+            filled=report.filled,
+            average_price=report.average_price,
+            fees=report.fees,
+            filled_at=now if report.filled > self.filled else self.filled_at,
+        )
 
     def not_found(self, now: datetime) -> Self:
         """按客户端订单 ID 查不到：受理过的记为状态未知；没受理过的记回还没挂出去。"""
@@ -154,8 +184,8 @@ class Protection:
         live = self.stop is not None and self.stop.status is not StopStatus.ENDED
         return live or self.unprotected_since is not None
 
-    def new_stop(self, target: StopTarget) -> Self:
-        """新建一张序号加 1、还没挂出去的止损单，按目标的股数和止损价。"""
+    def new_stop(self, target: StopTarget, now: datetime) -> Self:
+        """在 now 新建一张序号加 1、还没挂出去的止损单，按目标的股数和止损价。"""
         assert target.stop_price is not None  # 没有止损价时不挂
         sequence = self.used + 1
         stop = StopOrder(
@@ -163,6 +193,7 @@ class Protection:
             client_order_id=f"{self.symbol}-STOP-{sequence}",
             quantity=target.quantity,
             stop_price=target.stop_price,
+            created_at=now,
         )
         return replace(self, used=sequence, stop=stop)
 
@@ -184,10 +215,8 @@ def stop_price_of(orders: Iterable[Order]) -> Decimal | None:
 
     见 stop-protection spec「止损价」。
     """
-    filled = [o for o in orders if o.side is OrderSide.BUY and o.filled > 0]
-    if not filled:
-        return None
-    return max(filled, key=lambda o: o.created_at).stop_price
+    opening = opening_order(orders)
+    return None if opening is None else opening.stop_price
 
 
 def stop_target(position: int, orders: Iterable[Order]) -> StopTarget:

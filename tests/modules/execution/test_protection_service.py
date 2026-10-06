@@ -261,16 +261,41 @@ def test_the_modify_result_comes_from_the_next_lookup() -> None:
 
 
 def test_no_new_stop_after_the_stop_fills() -> None:
-    """spec「止损单成交后不再挂新的」。"""
+    """spec「止损单成交后不再挂新的」：记下成交和发现成交的时刻。"""
     env = _env()
     env.hold_100()
-    env.stops.update(STOP_1, FILLED, quantity=0)
+    env.stops.update(STOP_1, FILLED, quantity=0, filled=100, average_price="44.80", fees="2")
     env.broker.positions["BBB"] = 0
 
-    env.protect()
+    env.protect(at=_at(15, 30))
 
     assert len(env.stops.placed) == 1
-    assert env.stop().status is StopStatus.ENDED
+    stop = env.stop()
+    assert (stop.status, stop.quantity, stop.filled) == (StopStatus.ENDED, 0, 100)
+    assert (stop.average_price, stop.fees) == (Decimal("44.80"), Decimal(2))
+    assert stop.filled_at == _at(15, 30)
+    assert env.stops.working("BBB") == {}
+
+
+def test_a_partial_stop_fill_is_recorded_without_a_modify() -> None:
+    """spec「止损单部分成交后记下成交，不改单」。"""
+    env = _env()
+    env.hold_100()
+    env.stops.update(STOP_1, WORKING, quantity=60, filled=40, average_price="44.90", fees="2")
+    env.broker.positions["BBB"] = 60
+
+    env.protect(at=_at(15, 30))
+
+    stop = env.stop()
+    assert (stop.status, stop.quantity, stop.filled) == (StopStatus.WORKING, 60, 40)
+    assert (stop.average_price, stop.fees) == (Decimal("44.90"), Decimal(2))
+    assert stop.filled_at == _at(15, 30)
+    assert env.stops.modify_requests == []
+
+    env.protect(at=_at(15, 40))
+
+    assert env.stop().filled_at == _at(15, 30)
+    assert env.stops.modify_requests == []
 
 
 def test_the_stop_returns_to_the_holding_after_a_partial_sell_expires() -> None:
@@ -310,12 +335,19 @@ def test_a_new_stop_when_a_close_does_not_finish() -> None:
         30,
         Decimal(45),
     )
+    assert (env.stop().client_order_id, env.stop().created_at) == (STOP_2, AFTER_CLOSE)
 
 
 def test_a_stop_that_never_went_out_is_dropped_when_the_target_is_zero() -> None:
     """spec「还没挂出去的止损单在目标为 0 时放弃」。"""
     env = _env()
-    pending = StopOrder(symbol="BBB", client_order_id=STOP_1, quantity=30, stop_price=Decimal(45))
+    pending = StopOrder(
+        symbol="BBB",
+        client_order_id=STOP_1,
+        quantity=30,
+        stop_price=Decimal(45),
+        created_at=BASELINE_NOW,
+    )
     env.protections.save(Protection("BBB", used=1, stop=pending))
 
     env.protect()
@@ -748,7 +780,13 @@ def test_process_exited_after_placing_before_saving() -> None:
     bought = new_order(p1, decision(), BASELINE_SESSION, BASELINE_NOW)
     env.store.save(replace(bought, status=OrderStatus.PARTIALLY_FILLED, filled=30))
     env.broker.positions["BBB"] = 30
-    pending = StopOrder(symbol="BBB", client_order_id=STOP_1, quantity=30, stop_price=Decimal(45))
+    pending = StopOrder(
+        symbol="BBB",
+        client_order_id=STOP_1,
+        quantity=30,
+        stop_price=Decimal(45),
+        created_at=BASELINE_NOW,
+    )
     env.protections.save(Protection("BBB", used=1, stop=pending))
     env.stops.accept(pending)
     env.restart()

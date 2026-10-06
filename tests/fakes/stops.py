@@ -122,14 +122,25 @@ class FakeStopBroker:
         status: BrokerOrderStatus,
         quantity: int | None = None,
         stop_price: str | None = None,
+        *,
+        filled: int | None = None,
+        average_price: str | None = None,
+        fees: str | None = None,
     ) -> None:
-        """券商回报变为……：之后查询时给出这个状态；没给的股数和止损价不变。"""
+        """券商回报变为……：之后查询时给出这个状态；没给的股数、止损价、累计成交、成交均价和
+        累计费用不变。
+        """
         current = self._stops[client_order_id]
         self._stops[client_order_id] = replace(
             current,
             status=status,
             quantity=current.quantity if quantity is None else quantity,
             stop_price=current.stop_price if stop_price is None else Decimal(stop_price),
+            filled=current.filled if filled is None else filled,
+            average_price=(
+                current.average_price if average_price is None else Decimal(average_price)
+            ),
+            fees=current.fees if fees is None else Decimal(fees),
         )
 
     def settle(self) -> None:

@@ -71,15 +71,23 @@ def _stop(**changes: Any) -> StopOrder:
         client_order_id="BBB-STOP-1",
         quantity=100,
         stop_price=Decimal(45),
+        created_at=BASELINE_NOW,
         status=StopStatus.WORKING,
         broker_order_id="S1",
     )
     return replace(stop, **changes)
 
 
-def _report(status: BrokerOrderStatus, quantity: int = 100, stop_price: str = "45") -> StopReport:
+def _report(
+    status: BrokerOrderStatus, quantity: int = 100, stop_price: str = "45", **fills: Any
+) -> StopReport:
+    """券商回报；fills 是累计成交、成交均价和累计费用，没给时用回报的默认值。"""
     return StopReport(
-        broker_order_id="S1", status=status, quantity=quantity, stop_price=Decimal(stop_price)
+        broker_order_id="S1",
+        status=status,
+        quantity=quantity,
+        stop_price=Decimal(stop_price),
+        **fills,
     )
 
 
@@ -204,6 +212,70 @@ def test_filled_cancelled_or_rejected_report_ends_the_stop(status: BrokerOrderSt
     assert _stop().apply(_report(status, 0), BASELINE_NOW).status is StopStatus.ENDED
 
 
+def test_working_report_records_fills_fees_and_when_they_were_seen() -> None:
+    """spec「止损单部分成交后记下成交，不改单」：股数是未成交股数。"""
+    report = _report(
+        BrokerOrderStatus.WORKING,
+        60,
+        filled=40,
+        average_price=Decimal("44.90"),
+        fees=Decimal(2),
+    )
+
+    working = _stop().apply(report, _at(15, 30))
+
+    assert (working.status, working.quantity) == (StopStatus.WORKING, 60)
+    assert (working.filled, working.average_price, working.fees) == (
+        40,
+        Decimal("44.90"),
+        Decimal(2),
+    )
+    assert working.filled_at == _at(15, 30)
+
+
+@pytest.mark.parametrize(
+    ("status", "unfilled", "filled"),
+    [
+        (BrokerOrderStatus.FILLED, 0, 100),
+        (BrokerOrderStatus.CANCELLED, 100, 0),
+        (BrokerOrderStatus.CANCELLED, 60, 40),
+        (BrokerOrderStatus.REJECTED, 100, 0),
+    ],
+    ids=["filled", "cancelled", "cancelled-after-fills", "rejected"],
+)
+def test_ended_report_records_the_final_quantity_and_fills(
+    status: BrokerOrderStatus, unfilled: int, filled: int
+) -> None:
+    """spec「止损单成交后不再挂新的」：结束时也记下未成交股数、累计成交、成交均价和费用。"""
+    price = Decimal("44.80") if filled else None
+    report = _report(status, unfilled, filled=filled, average_price=price, fees=Decimal(filled > 0))
+
+    ended = _stop().apply(report, _at(15, 30))
+
+    assert (ended.status, ended.quantity, ended.filled) == (StopStatus.ENDED, unfilled, filled)
+    assert (ended.average_price, ended.fees) == (price, Decimal(filled > 0))
+    assert ended.filled_at == (_at(15, 30) if filled else None)
+
+
+def test_the_time_fills_were_seen_changes_only_when_they_grow() -> None:
+    seen = _stop(quantity=60, filled=40, filled_at=_at(15, 30))
+
+    same = seen.apply(_report(BrokerOrderStatus.WORKING, 60, filled=40), _at(15, 40))
+    more = same.apply(_report(BrokerOrderStatus.WORKING, 50, filled=50), _at(15, 50))
+
+    assert same.filled_at == _at(15, 30)
+    assert more.filled_at == _at(15, 50)
+
+
+def test_unknown_report_keeps_the_recorded_fills() -> None:
+    seen = _stop(quantity=60, filled=40, average_price=Decimal("44.90"), filled_at=_at(15, 30))
+
+    unknown = seen.apply(_report(BrokerOrderStatus.UNKNOWN), _at(15, 40))
+
+    assert (unknown.quantity, unknown.filled, unknown.average_price) == (60, 40, Decimal("44.90"))
+    assert unknown.filled_at == _at(15, 30)
+
+
 def test_unknown_report_records_the_time() -> None:
     unknown = _stop().apply(_report(BrokerOrderStatus.UNKNOWN), _at(15, 10))
 
@@ -259,16 +331,29 @@ def test_lookup_waits_for_the_delay_after_unknown() -> None:
 
 def test_each_new_stop_uses_the_next_sequence() -> None:
     """spec「止损单」：客户端订单 ID 是股票、STOP 和序号。"""
-    first = Protection("BBB").new_stop(StopTarget(30, Decimal(45)))
-    second = replace(first, stop=None).new_stop(StopTarget(100, Decimal(48)))
+    first = Protection("BBB").new_stop(StopTarget(30, Decimal(45)), BASELINE_NOW)
+    second = replace(first, stop=None).new_stop(StopTarget(100, Decimal(48)), BASELINE_NOW)
 
     assert first.used == 1
     assert first.stop == StopOrder(
-        symbol="BBB", client_order_id="BBB-STOP-1", quantity=30, stop_price=Decimal(45)
+        symbol="BBB",
+        client_order_id="BBB-STOP-1",
+        quantity=30,
+        stop_price=Decimal(45),
+        created_at=BASELINE_NOW,
     )
     assert second.used == 2
     assert second.stop is not None
     assert second.stop.client_order_id == "BBB-STOP-2"
+
+
+def test_a_new_stop_records_when_it_was_created() -> None:
+    """spec「对齐止损单」：新建止损单时记下创建时刻。"""
+    protection = Protection("BBB").new_stop(StopTarget(30, Decimal(45)), _at(15, 10))
+
+    assert protection.stop is not None
+    assert protection.stop.created_at == _at(15, 10)
+    assert (protection.stop.filled, protection.stop.filled_at) == (0, None)
 
 
 def test_marking_unprotected_keeps_the_first_time() -> None:

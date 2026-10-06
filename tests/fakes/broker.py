@@ -5,8 +5,10 @@ from decimal import Decimal
 from itertools import count
 
 from tradingagentspro.modules.execution import (
+    BrokerAccount,
     BrokerOrder,
     BrokerOrderStatus,
+    BrokerPosition,
     BrokerUnavailableError,
     Order,
     OrderRejectedError,
@@ -21,6 +23,9 @@ class FakeBroker:
       查询持仓记为（position, 股票），读取全部挂单、全部持仓记为（working_orders, "*"）、
       （all_positions, "*"）。失败的调用也记录
     - positions：券商那边每只股票的持仓股数，由测试设定；没有设定的是 0
+    - average_costs：每只持仓的均价，由测试设定；没有设定的是 0
+    - equity、cash、previous_close_equity：券商账户的权益、现金和前一交易日收盘时的权益，
+      由测试设定，默认都是 0。读取账户记为（account, "*"）
     - failures：安排的失败真正发生时，按顺序记录（操作, 是否生效后才失败）
     - placed：券商收到并受理的提交，按顺序记录提交时的订单
     - cancel_requests：被接受的撤单请求，按顺序记录客户端订单 ID。撤单只记下请求，不改变订单，
@@ -39,6 +44,8 @@ class FakeBroker:
         self._listed_while_lost: set[str] = set()
         self._extra: list[WorkingOrder] = []
         self.positions: dict[str, int] = {}
+        self.average_costs: dict[str, Decimal] = {}
+        self.equity = self.cash = self.previous_close_equity = Decimal(0)
         self._failures: dict[str, list[bool]] = {
             "find": [],
             "place": [],
@@ -46,6 +53,7 @@ class FakeBroker:
             "position": [],
             "working_orders": [],
             "all_positions": [],
+            "account": [],
         }
         self._reject_next_place = False
         self._broker_ids = count(1)
@@ -97,6 +105,20 @@ class FakeBroker:
             raise BrokerUnavailableError("读取全部持仓超时")
         return {symbol: shares for symbol, shares in self.positions.items() if shares > 0}
 
+    def account(self) -> BrokerAccount:
+        if self._record("account", "*"):
+            raise BrokerUnavailableError("读取账户超时")
+        return BrokerAccount(
+            equity=self.equity,
+            cash=self.cash,
+            previous_close_equity=self.previous_close_equity,
+            positions=tuple(
+                BrokerPosition(symbol, shares, self.average_costs.get(symbol, Decimal(0)))
+                for symbol, shares in self.positions.items()
+                if shares > 0
+            ),
+        )
+
     # 测试安排券商那边的情况
 
     def accept(self, order: Order) -> BrokerOrder:
@@ -131,19 +153,21 @@ class FakeBroker:
         status: BrokerOrderStatus,
         filled: int,
         average_price: str | None = None,
+        fees: str = "0",
     ) -> None:
-        """券商回报变为……：之后查询时给出这个状态、累计成交和成交均价。"""
+        """券商回报变为……：之后查询时给出这个状态、累计成交、成交均价和累计费用。"""
         self._orders[client_order_id] = replace(
             self._orders[client_order_id],
             status=status,
             filled=filled,
             average_price=None if average_price is None else Decimal(average_price),
+            fees=Decimal(fees),
         )
 
     def fail_next(self, operation: str, *, after_effect: bool = False) -> None:
         """下一次 operation 调用抛 BrokerUnavailableError。
 
-        operation 是 find、place、cancel、position、working_orders 或 all_positions。
+        operation 是 find、place、cancel、position、working_orders、all_positions 或 account。
 
         after_effect 为真时，调用先生效再抛异常。同一种调用安排多次时按顺序排队，每次调用用掉一个。
         """

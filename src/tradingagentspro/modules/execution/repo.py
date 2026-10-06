@@ -1,7 +1,7 @@
-"""执行模块的表：订单的版本表 execution_orders、止损保护的版本表 execution_protections，
-以及 OrderStore、ProtectionStore 的数据库实现。
+"""执行模块的表：订单的版本表 execution_orders、止损保护的版本表 execution_protections、
+交易记录的版本表 execution_trades，以及 OrderStore、ProtectionStore、TradeStore 的数据库实现。
 
-见 state-store spec 和 add-state-store 的 design D1。
+见 state-store spec、add-state-store 的 design D1 和 add-trade-records 的 design D1。
 """
 
 from uuid import UUID
@@ -10,6 +10,7 @@ from sqlalchemy import Boolean, Column, Engine, String, Uuid
 
 from tradingagentspro.modules.execution.domain.order import Order
 from tradingagentspro.modules.execution.domain.protection import Protection
+from tradingagentspro.modules.execution.domain.trade import Trade
 from tradingagentspro.modules.statestore import VersionedStore, versioned_table
 from tradingagentspro.shared.clock import Clock
 
@@ -24,6 +25,12 @@ PROTECTIONS = versioned_table(
     "execution_protections",
     Column("symbol", String, nullable=False),
     Column("active", Boolean, nullable=False),
+)
+
+TRADES = versioned_table(
+    "execution_trades",
+    Column("client_order_id", String, nullable=False),
+    Column("traded", Boolean, nullable=False),
 )
 
 
@@ -65,3 +72,19 @@ class PostgresProtectionStore:
 
     def save(self, protection: Protection) -> None:
         self._versions.save(protection.symbol, protection, active=protection.is_active)
+
+
+class PostgresTradeStore:
+    """满足 TradeStore：交易记录存在 execution_trades 表里，累计成交大于 0 的 traded 为真。"""
+
+    def __init__(self, engine: Engine, clock: Clock) -> None:
+        self._versions = VersionedStore(engine, clock, TRADES, Trade)
+
+    def get(self, client_order_id: str) -> Trade | None:
+        return self._versions.get(client_order_id)
+
+    def traded(self) -> tuple[Trade, ...]:
+        return self._versions.latest(traded=True)
+
+    def save(self, trade: Trade) -> None:
+        self._versions.save(trade.client_order_id, trade, traded=trade.filled > 0)

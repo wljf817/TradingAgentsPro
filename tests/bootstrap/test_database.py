@@ -46,7 +46,9 @@ def _version_columns(key: str, key_type: str) -> dict[str, tuple[str, bool]]:
 
 
 def test_upgrading_an_empty_database_creates_the_tables(engine: Engine) -> None:
-    """spec「空数据库升级到最新版本」：三张表的列和主键见 design D1。"""
+    """spec「空数据库升级到最新版本」：表的列和主键见 add-state-store 和 add-trade-records 的
+    design D1。
+    """
     migrate(engine)
 
     assert _tables(engine) == {
@@ -54,6 +56,7 @@ def test_upgrading_an_empty_database_creates_the_tables(engine: Engine) -> None:
         "risk_reservations",
         "execution_orders",
         "execution_protections",
+        "execution_trades",
     }
     assert _columns(engine, "risk_reservations") == _version_columns("plan_id", "UUID") | {
         "active": ("BOOLEAN", False)
@@ -65,14 +68,18 @@ def test_upgrading_an_empty_database_creates_the_tables(engine: Engine) -> None:
     assert _columns(engine, "execution_protections") == _version_columns("symbol", "VARCHAR") | {
         "active": ("BOOLEAN", False)
     }
+    assert _columns(engine, "execution_trades") == _version_columns(
+        "client_order_id", "VARCHAR"
+    ) | {"traded": ("BOOLEAN", False)}
     keys = {
         table: inspect(engine).get_pk_constraint(table)["constrained_columns"]
-        for table in ("risk_reservations", "execution_orders", "execution_protections")
+        for table in _tables(engine) - {"alembic_version"}
     }
     assert keys == {
         "risk_reservations": ["plan_id", "version"],
         "execution_orders": ["plan_id", "version"],
         "execution_protections": ["symbol", "version"],
+        "execution_trades": ["client_order_id", "version"],
     }
     with engine.connect() as connection:
         timestamp: str = connection.execute(
@@ -130,4 +137,5 @@ def test_table_names_start_with_their_module(engine: Engine) -> None:
         "risk_reservations": ["risk"],
         "execution_orders": ["execution"],
         "execution_protections": ["execution"],
+        "execution_trades": ["execution"],
     }

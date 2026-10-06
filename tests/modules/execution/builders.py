@@ -13,6 +13,7 @@ from tests.fakes.broker import FakeBroker
 from tests.fakes.calendar import sample_nyse_calendar
 from tests.fakes.protections import InMemoryProtectionStore
 from tests.fakes.stops import FakeStopBroker
+from tests.fakes.trades import InMemoryTradeStore
 from tradingagentspro.contracts.risk import RiskDecision, RiskOutcome
 from tradingagentspro.contracts.trade_plan import OrderType, TradeAction, TradePlan
 from tradingagentspro.modules.execution import (
@@ -20,6 +21,7 @@ from tradingagentspro.modules.execution import (
     ExecutionService,
     OrderStore,
     ProtectionStore,
+    TradeStore,
 )
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.trading_calendar import TradingSession
@@ -130,12 +132,20 @@ def close_bbb() -> TradePlan:
     )
 
 
-def decision(quantity: int = 100, expires_at: datetime = BASELINE_CLOSE) -> RiskDecision:
-    """再校验通过的结果，最终股数和生效的有效期。默认值就是基准结果：100 股、当天收盘。"""
+def decision(
+    quantity: int = 100,
+    expires_at: datetime = BASELINE_CLOSE,
+    emergency_threshold: Decimal | None = Decimal("0.08"),
+) -> RiskDecision:
+    """再校验通过的结果：最终股数、生效的有效期和生效的紧急阈值。
+
+    默认值就是基准结果：100 股、当天收盘、紧急阈值 0.08。卖单的订单不记紧急阈值，
+    所以卖出方案也可以用默认值。
+    """
     return RiskDecision(
         outcome=RiskOutcome.PASSED,
         quantity=quantity,
-        emergency_threshold=None,
+        emergency_threshold=emergency_threshold,
         expires_at=expires_at,
         violations=(),
     )
@@ -148,10 +158,12 @@ def execution_service(
     config: ExecutionConfig | None = None,
     stops: FakeStopBroker | None = None,
     protections: ProtectionStore | None = None,
+    trades: TradeStore | None = None,
     *,
     reconciled: bool = True,
 ) -> ExecutionService:
-    """执行用例：纽交所样例日历；没有指定的配置用默认配置，止损单接口和止损保护存储用新的替身。
+    """执行用例：纽交所样例日历；没有指定的配置用默认配置，止损单接口、止损保护存储和交易记录存储
+    用新的替身。
 
     reconciled 为真时，新建以后先对账一次，再去掉这次对账留在替身里的调用记录，相当于各个 spec
     基准数据里的"执行模块已经完成一次没有不一致的对账"。重启的场景传 False。
@@ -162,6 +174,7 @@ def execution_service(
         stops=stops,
         store=store,
         protections=protections or InMemoryProtectionStore(),
+        trades=trades or InMemoryTradeStore(),
         clock=clock,
         calendar=NYSE,
         config=config or ExecutionConfig(),

@@ -1,13 +1,15 @@
-"""执行模块需要的外部接口：券商、券商的止损单、订单存储和止损保护存储。"""
+"""执行模块需要的外部接口：券商、券商的止损单、订单存储、止损保护存储和交易记录存储。"""
 
 from collections.abc import Mapping
 from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
 
+from tradingagentspro.modules.execution.domain.account import BrokerAccount
 from tradingagentspro.modules.execution.domain.order import BrokerOrder, Order
 from tradingagentspro.modules.execution.domain.protection import Protection, StopOrder, StopReport
 from tradingagentspro.modules.execution.domain.reconciliation import WorkingOrder
+from tradingagentspro.modules.execution.domain.trade import Trade
 
 
 class BrokerUnavailableError(RuntimeError):
@@ -20,6 +22,9 @@ class OrderRejectedError(RuntimeError):
 
 class Broker(Protocol):
     """券商的下单接口。订单都是当日有效单；客户端订单 ID 随订单交给券商，之后可以按它查到这笔订单。
+
+    回报里的费用是这笔订单累计的佣金和其他费用。模拟盘不收费，由适配器按每笔佣金的配置估算，
+    见 add-trade-records 的 design D5。
 
     每个操作超时或断线时都抛 BrokerUnavailableError。
     """
@@ -51,6 +56,13 @@ class Broker(Protocol):
         """券商那边的全部持仓：股票到股数，只含股数大于 0 的。"""
         ...
 
+    def account(self) -> BrokerAccount:
+        """券商账户：权益、现金、前一交易日收盘时的权益，以及股数大于 0 的全部持仓的股数和均价。
+
+        现金包含还没结算的卖出款。
+        """
+        ...
+
 
 class OrderStore(Protocol):
     """订单的存储：按方案 ID 保存每笔订单的最新状态。
@@ -78,6 +90,9 @@ class OrderStore(Protocol):
 
 class StopBroker(Protocol):
     """券商的止损单接口：长期有效的止损市价卖单，只在常规交易时段触发。
+
+    回报里的累计成交、成交均价和费用包括改单之前的成交：改单生成新订单的券商（Alpaca），
+    要把替换之前的成交加进来。
 
     超时或断线时抛 BrokerUnavailableError；挂单、改单被券商拒绝受理时抛 OrderRejectedError。
     """
@@ -124,4 +139,24 @@ class ProtectionStore(Protocol):
 
     def save(self, protection: Protection) -> None:
         """保存这只股票的最新记录。"""
+        ...
+
+
+class TradeStore(Protocol):
+    """交易记录的存储：按客户端订单 ID 保存每条交易记录的最新状态。
+
+    数据库实现只追加不覆盖：内容有变化时写入一个新版本，读取时取每条的最新版本，
+    见 state-store spec 和 trade-records spec「保存交易记录」。
+    """
+
+    def get(self, client_order_id: str) -> Trade | None:
+        """这条交易记录；没有时为 None。"""
+        ...
+
+    def traded(self) -> tuple[Trade, ...]:
+        """累计成交大于 0 的全部交易记录。"""
+        ...
+
+    def save(self, trade: Trade) -> None:
+        """保存这条交易记录的最新状态。"""
         ...

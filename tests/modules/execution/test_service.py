@@ -98,8 +98,9 @@ class _Env:
         status: BrokerOrderStatus,
         filled: int,
         average_price: str | None = None,
+        fees: str = "0",
     ) -> None:
-        self.broker.update(str(plan.plan_id), status, filled, average_price)
+        self.broker.update(str(plan.plan_id), status, filled, average_price, fees)
 
 
 def _env(now: datetime = BASELINE_NOW, config: ExecutionConfig | None = None) -> _Env:
@@ -137,6 +138,8 @@ def test_buy_plan_submits_a_limit_buy_order() -> None:
     assert order.filled == 0
     assert order.broker_order_id == env.broker.order(str(plan.plan_id)).broker_order_id
     assert order.stop_price == Decimal(45)
+    assert (order.sector, order.emergency_threshold) == ("医疗", Decimal("0.08"))
+    assert order.fees == 0
 
 
 def test_reduce_plan_submits_a_market_sell_order() -> None:
@@ -148,7 +151,8 @@ def test_reduce_plan_submits_a_market_sell_order() -> None:
     assert placed.client_order_id == str(plan.plan_id)
     assert (placed.side, placed.symbol, placed.quantity) == (OrderSide.SELL, "AAA", 60)
     assert (placed.order_type, placed.limit_price) == (OrderType.MARKET, None)
-    assert order.stop_price is None
+    assert order.sector == "科技"
+    assert (order.stop_price, order.emergency_threshold) == (None, None)
 
 
 def test_orders_use_the_final_quantity_of_the_recheck() -> None:
@@ -217,18 +221,20 @@ def test_partial_fill_then_full_fill() -> None:
 
     env.update(plan, WORKING, 30, "49.90")
     partly = env.track(plan, _at(15, 1))
-    env.update(plan, FILLED, 100, "49.95")
+    env.update(plan, FILLED, 100, "49.95", fees="2.15")
     filled = env.track(plan, _at(15, 2))
 
-    assert (partly.status, partly.filled, str(partly.average_price)) == (
+    assert (partly.status, partly.filled, str(partly.average_price), str(partly.fees)) == (
         OrderStatus.PARTIALLY_FILLED,
         30,
         "49.90",
+        "0",
     )
-    assert (filled.status, filled.filled, str(filled.average_price)) == (
+    assert (filled.status, filled.filled, str(filled.average_price), str(filled.fees)) == (
         OrderStatus.FILLED,
         100,
         "49.95",
+        "2.15",
     )
 
 

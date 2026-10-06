@@ -30,6 +30,7 @@ from tradingagentspro.modules.execution import (
     OrderSide,
     OrderStatus,
     new_order,
+    opening_order,
 )
 
 TERMINAL = (
@@ -54,12 +55,14 @@ def _report(
     filled: int = 0,
     average_price: str | None = None,
     broker_order_id: str = "B1",
+    fees: str = "0",
 ) -> BrokerOrder:
     return BrokerOrder(
         broker_order_id=broker_order_id,
         status=status,
         filled=filled,
         average_price=None if average_price is None else Decimal(average_price),
+        fees=Decimal(fees),
     )
 
 
@@ -74,6 +77,7 @@ def test_buy_plan_becomes_a_pending_limit_buy_order() -> None:
     assert order == Order(
         plan_id=plan.plan_id,
         symbol="BBB",
+        sector="医疗",
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         limit_price=Decimal(50),
@@ -81,11 +85,13 @@ def test_buy_plan_becomes_a_pending_limit_buy_order() -> None:
         deadline=BASELINE_CLOSE,
         created_at=BASELINE_NOW,
         stop_price=Decimal(45),
+        emergency_threshold=Decimal("0.08"),
     )
     assert order.status is OrderStatus.PENDING
     assert order.broker_order_id is None
     assert order.filled == 0
     assert order.average_price is None
+    assert order.fees == 0
     assert order.unknown_since is None
     assert not order.cancel_requested
 
@@ -127,6 +133,25 @@ def test_opening_orders_record_the_plan_stop_price(
 ) -> None:
     """order-lifecycle spec「提交订单」：买入、加仓取方案的止损价，减仓、清仓没有。"""
     assert new_order(plan, decision(), BASELINE_SESSION, BASELINE_NOW).stop_price == stop_price
+
+
+@pytest.mark.parametrize(
+    ("plan", "sector", "threshold"),
+    [
+        (baseline_plan(), "医疗", Decimal("0.08")),
+        (add_aaa(), "科技", Decimal("0.08")),
+        (reduce_aaa(), "科技", None),
+        (close_aaa(), "科技", None),
+    ],
+    ids=["buy", "add", "reduce", "close"],
+)
+def test_orders_record_the_sector_and_buy_orders_the_emergency_threshold(
+    plan: TradePlan, sector: str, threshold: Decimal | None
+) -> None:
+    """order-lifecycle spec「提交订单」：板块取方案的；紧急阈值只有买入、加仓有，取再校验结果的。"""
+    order = new_order(plan, decision(), BASELINE_SESSION, BASELINE_NOW)
+
+    assert (order.sector, order.emergency_threshold) == (sector, threshold)
 
 
 def test_quantity_is_the_final_quantity_of_the_recheck() -> None:
@@ -221,6 +246,16 @@ def test_report_records_broker_order_id_fills_and_average_price() -> None:
     assert order.broker_order_id == "B1"
     assert order.filled == 30
     assert order.average_price == Decimal("49.90")
+
+
+def test_report_records_the_fees() -> None:
+    """order-lifecycle spec「部分成交后全部成交」：按回报记下累计费用。"""
+    partly = _order().apply(_report(BrokerOrderStatus.WORKING, 30, "49.90"), BASELINE_NOW)
+    report = _report(BrokerOrderStatus.FILLED, 100, "49.95", fees="2.15")
+    filled = partly.apply(report, BASELINE_NOW)
+
+    assert partly.fees == 0
+    assert str(filled.fees) == "2.15"
 
 
 def test_cancelled_and_rejected_orders_keep_their_fills() -> None:
@@ -459,3 +494,30 @@ def test_only_pending_and_unknown_orders_block_new_orders(status: OrderStatus) -
 @pytest.mark.parametrize("status", list(OrderStatus))
 def test_terminal_statuses(status: OrderStatus) -> None:
     assert status.is_terminal is (status in TERMINAL)
+
+
+# 开仓订单
+
+
+def _filled(plan: TradePlan, created_at: datetime, filled: int) -> Order:
+    order = new_order(plan, decision(), session(created_at.date()), created_at)
+    return replace(order, filled=filled)
+
+
+def test_opening_order_is_the_latest_buy_order_with_fills() -> None:
+    """stop-protection spec「止损价」和 trade-records spec「账户数据」取的同一笔订单。"""
+    first = _filled(baseline_plan(), BASELINE_NOW, 100)
+    added = _filled(add_aaa(), BASELINE_NOW + timedelta(minutes=5), 20)
+    unfilled_add = _filled(add_aaa(), BASELINE_NOW + timedelta(minutes=10), 0)
+    sell = _filled(reduce_aaa(), BASELINE_NOW + timedelta(minutes=15), 60)
+
+    assert opening_order([first, added, unfilled_add, sell]) == added
+    assert opening_order([added, first]) == added
+
+
+def test_no_opening_order_without_filled_buy_orders() -> None:
+    unfilled = _filled(baseline_plan(), BASELINE_NOW, 0)
+    sell = _filled(reduce_aaa(), BASELINE_NOW, 60)
+
+    assert opening_order([unfilled, sell]) is None
+    assert opening_order([]) is None

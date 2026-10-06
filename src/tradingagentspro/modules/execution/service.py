@@ -1,6 +1,6 @@
-"""执行模块的用例：提交订单，跟进订单到终态，提前撤单，对齐止损单，和券商对账。
+"""执行模块的用例：提交订单，跟进订单到终态，提前撤单，对齐止损单，和券商对账，记交易记录。
 
-见 order-lifecycle spec、stop-protection spec 和 reconciliation spec。
+见 order-lifecycle spec、stop-protection spec、reconciliation spec 和 trade-records spec。
 """
 
 from collections.abc import Iterable
@@ -11,11 +11,13 @@ from uuid import UUID
 from tradingagentspro.contracts.risk import RiskDecision
 from tradingagentspro.contracts.trade_plan import TradePlan
 from tradingagentspro.modules.execution.config import ExecutionConfig
+from tradingagentspro.modules.execution.domain.account import Account, account_of
 from tradingagentspro.modules.execution.domain.order import (
     Order,
     OrderPausedError,
     OrderSide,
     new_order,
+    opening_order,
 )
 from tradingagentspro.modules.execution.domain.protection import (
     Protection,
@@ -41,6 +43,7 @@ from tradingagentspro.modules.execution.domain.reconciliation import (
     position_explained,
     stray_orders,
 )
+from tradingagentspro.modules.execution.domain.trade import trade_of_order, trade_of_stop
 from tradingagentspro.modules.execution.ports import (
     Broker,
     BrokerUnavailableError,
@@ -48,6 +51,7 @@ from tradingagentspro.modules.execution.ports import (
     OrderStore,
     ProtectionStore,
     StopBroker,
+    TradeStore,
 )
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.trading_calendar import OutsideSessionError, TradingCalendar
@@ -66,6 +70,7 @@ class ExecutionService:
         stops: StopBroker,
         store: OrderStore,
         protections: ProtectionStore,
+        trades: TradeStore,
         clock: Clock,
         calendar: TradingCalendar,
         config: ExecutionConfig,
@@ -74,6 +79,7 @@ class ExecutionService:
         self._stops = stops
         self._store = store
         self._protections = protections
+        self._trades = trades
         self._clock = clock
         self._calendar = calendar
         self._config = config
@@ -106,7 +112,7 @@ class ExecutionService:
             protection = self._protections.get(plan.symbol)
             if plan.action.is_opening and protection and protection.unprotected_since:
                 raise UnprotectedPositionError(f"{plan.symbol} 是无保护仓位，补挂成功之前不能买入")
-            self._store.save(new_order(plan, decision, session, now))
+            self._save_order(new_order(plan, decision, session, now))
         return self.track(plan.plan_id)
 
     def track(self, plan_id: UUID) -> Order:
@@ -136,7 +142,7 @@ class ExecutionService:
             may_place = target is not None and stop_yields(protection, target)
         updated = self._advance(order, now, may_place, listing)
         if updated != order:
-            self._store.save(updated)
+            self._save_order(updated)
         if not aligned or updated != order:
             self._align(updated.symbol, now, listing)
         return updated
@@ -160,7 +166,7 @@ class ExecutionService:
         targets = tuple(orders)
         for order in targets:
             if not order.cancel_wanted:
-                self._store.save(order.want_cancel())
+                self._save_order(order.want_cancel())
         return tuple(self.track(o.plan_id) for o in targets)
 
     def protect(self, symbol: str) -> Protection | None:
@@ -205,6 +211,16 @@ class ExecutionService:
         )
         self._last = Reconciliation(stray, extra, unexplained)
         return self._last
+
+    def account(self) -> Account:
+        """账户数据：券商账户加上本系统的记录，见 trade-records spec「账户数据」和 design D7。
+
+        先读券商账户，超时或断线时抛 BrokerUnavailableError；再读这些持仓的订单和全部有成交的
+        交易记录。可以在任何时刻调用，不要求已经完成对账。
+        """
+        broker = self._broker.account()
+        orders = {p.symbol: self._store.of_symbol(p.symbol) for p in broker.positions}
+        return account_of(broker, orders, self._trades.traded(), self._clock.now(), self._calendar)
 
     def backup_stop_due(self, symbol: str, last_price: Decimal) -> bool:
         """这只股票的本地备用止损现在该不该触发：无保护仓位、盘中、最新价不高于止损价。
@@ -324,8 +340,8 @@ class ExecutionService:
         """按目标挂单。新建的止损单先记为还没挂出去并保存，再挂单。"""
         stop = protection.stop
         if stop is None or stop.status is StopStatus.ENDED:
-            protection = protection.new_stop(target)
-            self._protections.save(protection)
+            protection = protection.new_stop(target, now)
+            self._save_protection(protection)
         else:
             protection = protection.with_stop(stop.aim(target))
         stop = protection.stop
@@ -367,5 +383,21 @@ class ExecutionService:
         if original is None and protection == Protection(protection.symbol):
             return None
         if protection != original:
-            self._protections.save(protection)
+            self._save_protection(protection)
         return protection
+
+    def _save_order(self, order: Order) -> None:
+        """先写交易记录，再保存订单，见 add-trade-records 的 design D2。"""
+        self._trades.save(trade_of_order(order, self._calendar))
+        self._store.save(order)
+
+    def _save_protection(self, protection: Protection) -> None:
+        """有止损单时先写它的交易记录，再保存止损保护，见 add-trade-records 的 design D2。
+
+        来源方案是这只股票止损价来自的开仓订单的方案。
+        """
+        if protection.stop is not None:
+            source = opening_order(self._store.of_symbol(protection.symbol))
+            plan_id = None if source is None else source.plan_id
+            self._trades.save(trade_of_stop(protection.stop, plan_id, self._calendar))
+        self._protections.save(protection)
