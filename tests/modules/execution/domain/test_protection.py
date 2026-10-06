@@ -1,7 +1,7 @@
 """止损保护纯逻辑的测试，直接构造订单、止损单和券商回报。
 
 场景见 openspec 的 stop-protection spec「止损价」「止损目标」「对齐止损单」「卖单先让出股数」
-「本地备用止损的触发」「止损单的券商调用失败」。
+「买单和止损单错开」「本地备用止损的触发」「止损单的券商调用失败」。
 """
 
 from dataclasses import replace
@@ -36,6 +36,7 @@ from tradingagentspro.modules.execution import (
     next_action,
     stop_price_of,
     stop_target,
+    stop_withdrawn,
     stop_yields,
 )
 
@@ -177,6 +178,72 @@ def test_buy_orders_do_not_count_as_sells() -> None:
 
 def test_no_stop_price_in_the_target_without_opening_orders() -> None:
     assert stop_target(100, []) == StopTarget(100, None)
+
+
+# 买单和止损单错开时的止损目标（spec「止损目标」「买单和止损单错开」）
+
+
+@pytest.mark.parametrize(
+    "status", [OrderStatus.PENDING, OrderStatus.SUBMITTED, OrderStatus.UNKNOWN]
+)
+def test_staggered_target_is_zero_while_a_buy_is_unfinished(status: OrderStatus) -> None:
+    """spec「错开时有买单没结束，目标为 0」：止损价照常，这只股票错开中。"""
+    adding = _order(add_bbb(), status, at=_at(15, 10))
+
+    assert stop_target(100, [BOUGHT, adding], stagger=True) == StopTarget(
+        0, Decimal(45), staggered=True
+    )
+
+
+def test_target_counts_unfinished_buys_only_when_staggering() -> None:
+    """spec「错开时有买单没结束，目标为 0」：开关关闭时目标是 100 股。"""
+    adding = _order(add_bbb(), OrderStatus.SUBMITTED, at=_at(15, 10))
+
+    assert stop_target(100, [BOUGHT, adding]) == StopTarget(100, Decimal(45))
+    assert stop_target(100, [BOUGHT, adding], stagger=False) == StopTarget(100, Decimal(45))
+
+
+def test_staggered_target_takes_the_add_price_once_it_fills() -> None:
+    """spec「加仓部分成交时不挂止损单」：止损目标是 0 股，止损价 48。"""
+    adding = _order(add_bbb(), OrderStatus.PARTIALLY_FILLED, 20, at=_at(15, 10))
+
+    assert stop_target(120, [BOUGHT, adding], stagger=True) == StopTarget(
+        0, Decimal(48), staggered=True
+    )
+
+
+@pytest.mark.parametrize(
+    "status", [OrderStatus.CANCELLED, OrderStatus.EXPIRED, OrderStatus.REJECTED]
+)
+def test_staggered_target_returns_once_the_buys_end(status: OrderStatus) -> None:
+    """spec「错开时买单都结束了，目标恢复」。"""
+    added = _order(add_bbb(), status, at=_at(15, 10))
+
+    assert stop_target(100, [BOUGHT, added], stagger=True) == StopTarget(100, Decimal(45))
+
+
+def test_a_new_buy_is_staggered_only_once_it_has_shares() -> None:
+    """spec「新买入部分成交时不挂止损单，买单结束后再挂」：持仓为 0 时不是错开中。"""
+    unfilled = _order(baseline_plan(), OrderStatus.SUBMITTED)
+    filling = _order(baseline_plan(), OrderStatus.PARTIALLY_FILLED, 30)
+
+    assert stop_target(0, [unfilled], stagger=True) == StopTarget(0, None)
+    assert stop_target(30, [filling], stagger=True) == StopTarget(0, Decimal(45), staggered=True)
+
+
+def test_staggered_target_keeps_the_sell_rules() -> None:
+    """卖单照常让出股数：卖单让出全部股数时不错开目标也是 0，不算错开中；未覆盖的股数照常。"""
+    adding = _order(add_bbb(), OrderStatus.SUBMITTED, at=_at(15, 10))
+    reducing = _order(reduce_bbb(), OrderStatus.PENDING)
+    closing = _order(close_bbb(), OrderStatus.PENDING)
+
+    assert stop_target(100, [BOUGHT, adding, reducing], stagger=True) == StopTarget(
+        0, Decimal(45), staggered=True
+    )
+    assert stop_target(100, [BOUGHT, adding, closing], stagger=True) == StopTarget(0, Decimal(45))
+    assert stop_target(70, [BOUGHT, adding, closing], stagger=True) == StopTarget(
+        0, Decimal(45), uncovered=30
+    )
 
 
 # 按券商回报更新止损单（spec「对齐止损单」第一张表）
@@ -364,6 +431,17 @@ def test_marking_unprotected_keeps_the_first_time() -> None:
     assert unprotected.mark_protected().unprotected_since is None
 
 
+def test_a_protection_is_not_staggered_by_default() -> None:
+    assert Protection("BBB").staggered is False
+
+
+def test_with_staggered_changes_only_that_flag() -> None:
+    protection = Protection("BBB", used=1, stop=_stop(), unprotected_since=_at(15))
+
+    assert protection.with_staggered(True) == replace(protection, staggered=True)
+    assert protection.with_staggered(True).with_staggered(False) == protection
+
+
 # 需要对齐（state-store spec「读取最新版本」止损保护表那一行）
 
 
@@ -507,6 +585,33 @@ def test_unknown_stop_does_not_yield() -> None:
     assert not stop_yields(_with(unknown), YIELDED)
 
 
+# 买单和止损单错开：止损单是否已经撤掉
+
+
+@pytest.mark.parametrize(
+    "protection",
+    [
+        None,
+        _with(None),
+        _with(_stop(status=StopStatus.ENDED)),
+        _with(_stop(status=StopStatus.PENDING, broker_order_id=None)),
+    ],
+    ids=["no-record", "no-stop", "ended", "pending"],
+)
+def test_withdrawn_without_a_working_stop(protection: Protection | None) -> None:
+    assert stop_withdrawn(protection)
+
+
+@pytest.mark.parametrize(
+    "stop",
+    [_stop(), _stop(status=StopStatus.UNKNOWN, unknown_since=_at(15))],
+    ids=["working", "unknown"],
+)
+def test_not_withdrawn_while_the_stop_is_working_or_unknown(stop: StopOrder) -> None:
+    """spec「止损单状态未知时不提交买单」；挂着的止损单撤单请求还没生效时也一样。"""
+    assert not stop_withdrawn(_with(stop))
+
+
 # 本地备用止损的触发
 
 UNPROTECTED = Protection("BBB", used=1, unprotected_since=_at(15))
@@ -536,3 +641,18 @@ def test_no_backup_stop_while_protected(protection: Protection | None) -> None:
 
 def test_no_backup_stop_without_a_stop_price() -> None:
     assert not backup_stop_due(UNPROTECTED, None, Decimal(40), in_session=True)
+
+
+STAGGERED = Protection("BBB", used=1, stop=_stop(status=StopStatus.ENDED), staggered=True)
+
+
+@pytest.mark.parametrize("last_price", ["45", "44"])
+def test_backup_stop_fires_while_staggered(last_price: str) -> None:
+    """spec「错开中、价格跌到止损价时触发」。"""
+    assert backup_stop_due(STAGGERED, Decimal(45), Decimal(last_price), in_session=True)
+
+
+def test_staggered_backup_stop_keeps_the_other_conditions() -> None:
+    assert not backup_stop_due(STAGGERED, Decimal(45), Decimal("45.01"), in_session=True)
+    assert not backup_stop_due(STAGGERED, Decimal(45), Decimal(40), in_session=False)
+    assert not backup_stop_due(STAGGERED, None, Decimal(40), in_session=True)

@@ -29,6 +29,7 @@ from tradingagentspro.modules.execution.domain.protection import (
     next_action,
     stop_price_of,
     stop_target,
+    stop_withdrawn,
     stop_yields,
 )
 from tradingagentspro.modules.execution.domain.protection import (
@@ -119,8 +120,10 @@ class ExecutionService:
         """跟进一次这个方案的订单：查询券商并更新状态，需要时提交或撤单，返回最新的订单。
 
         终态的订单，以及状态未知还没满等待时长的订单，直接返回，不调用券商。订单有变化时才保存。
-        还没提交出去的卖单，先对齐止损单，止损单让出股数之后才提交，见 design D5；
-        有撤单要求的不提交，也就不用先对齐，见 update-order-emergency-cancel 的 design D2。
+        还没提交出去的卖单，先对齐止损单，止损单让出股数之后才提交，见 design D5；买单和止损单
+        错开时，还没提交出去的买单也先对齐，止损单撤掉之后才提交，见 update-stagger-buys-and-stops
+        的 design D3。有撤单要求的不提交，也就不用先对齐，见 update-order-emergency-cancel 的
+        design D2。
         跟进之后对齐这只股票的止损单；已经对齐过、订单又没变化时不再对齐。
         """
         return self._track(plan_id, None)
@@ -136,16 +139,23 @@ class ExecutionService:
         if order.status.is_terminal or not order.lookup_due(now, self._config.unknown_lookup_delay):
             return order
         aligned, may_place = False, True
-        if order.side is OrderSide.SELL and order.unsent and not order.cancel_wanted:
+        if order.unsent and not order.cancel_wanted and self._waits_for_stop(order.side):
             protection, target = self._align(order.symbol, now, listing)
             aligned = True
-            may_place = target is not None and stop_yields(protection, target)
+            if order.side is OrderSide.SELL:
+                may_place = target is not None and stop_yields(protection, target)
+            else:
+                may_place = target is not None and stop_withdrawn(protection)
         updated = self._advance(order, now, may_place, listing)
         if updated != order:
             self._save_order(updated)
         if not aligned or updated != order:
             self._align(updated.symbol, now, listing)
         return updated
+
+    def _waits_for_stop(self, side: OrderSide) -> bool:
+        """提交之前要先对齐止损单：卖单总是；买单在买单和止损单错开时。"""
+        return side is OrderSide.SELL or self._config.stagger_buys_and_stops
 
     def cancel_orders(self, symbol: str) -> tuple[Order, ...]:
         """撤掉这只股票全部没结束的订单（买单和卖单），返回跟进一次之后的这些订单。
@@ -276,7 +286,8 @@ class ExecutionService:
     ) -> tuple[Protection | None, StopTarget | None]:
         """对齐这只股票的止损单，见 add-stop-protection 的 design D4。
 
-        先查询当前这张止损单并按回报更新，再查询持仓、计算止损目标，按 next_action 处理。
+        先查询当前这张止损单并按回报更新，再查询持仓、计算止损目标，按 next_action 处理，
+        并按目标记下是否错开中（update-stagger-buys-and-stops 的 design D4）。
         返回最新的止损保护和这次的止损目标。止损单状态未知、还没满等待时长时不调用券商；
         查询后仍是状态未知，或者查询持仓失败时，不再做别的处理。这些情况目标为 None。
         止损单的券商调用超时或断线，止损单记为状态未知，见 add-stop-protection 的 design D9。
@@ -307,8 +318,10 @@ class ExecutionService:
             position = self._broker.position(symbol)
         except BrokerUnavailableError:
             return self._save(original, protection), None
-        target = stop_target(position, self._store.of_symbol(symbol))
-        protection = self._act(protection, target, now)
+        target = stop_target(
+            position, self._store.of_symbol(symbol), stagger=self._config.stagger_buys_and_stops
+        )
+        protection = self._act(protection, target, now).with_staggered(target.staggered)
         if is_aligned(protection.stop, target) or target.quantity == 0:
             protection = protection.mark_protected()
         return self._save(original, protection), target

@@ -251,6 +251,26 @@ def test_protection_reads_back_unchanged(database: Engine) -> None:
     assert str(read.stop.stop_price) == "45.10"
 
 
+def test_staggered_protection_reads_back_unchanged(database: Engine) -> None:
+    """stop-protection spec「保存止损保护」：记录是否错开中。"""
+    protection = Protection("BBB", used=1, stop=_stop("BBB", 1, StopStatus.ENDED), staggered=True)
+    store = PostgresProtectionStore(database, FakeClock(BASELINE_NOW))
+    store.save(protection)
+
+    assert store.get("BBB") == protection
+
+
+def test_an_old_protection_record_is_not_staggered(database: Engine) -> None:
+    """update-stagger-buys-and-stops 的 design D4：之前写入的记录没有 staggered，读成不是错开中。"""
+    protection = Protection("BBB", used=1, stop=_stop("BBB", 1, StopStatus.WORKING))
+    store = PostgresProtectionStore(database, FakeClock(BASELINE_NOW))
+    store.save(protection)
+    with database.begin() as connection:
+        connection.execute(text("update execution_protections set data = data - 'staggered'"))
+
+    assert store.get("BBB") == protection
+
+
 def test_a_new_order_store_continues_after_a_restart(database: Engine) -> None:
     """spec「重启后继续」：用同一个数据库新建 Engine 和订单存储，读到之前的订单，再往后写。"""
     clock = FakeClock(BASELINE_NOW)

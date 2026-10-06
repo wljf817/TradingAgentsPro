@@ -38,6 +38,7 @@ from tradingagentspro.modules.execution.domain.protection import (
     next_action,
     stop_price_of,
     stop_target,
+    stop_withdrawn,
     stop_yields,
 )
 from tradingagentspro.modules.execution.domain.reconciliation import (
@@ -120,6 +121,7 @@ __all__ = [
     "position_explained",
     "stop_price_of",
     "stop_target",
+    "stop_withdrawn",
     "stop_yields",
     "stray_orders",
     "trade_of_order",

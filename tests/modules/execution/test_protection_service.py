@@ -990,7 +990,11 @@ class StopProtectionMachine(RuleBasedStateMachine):
         self.env.stops.settle()
         self.env.protect()
         assert self.env.service.reconcile().clean
-        target = stop_target(self.position, self.env.store.of_symbol("BBB"))
+        target = stop_target(
+            self.position,
+            self.env.store.of_symbol("BBB"),
+            stagger=self.env.config.stagger_buys_and_stops,
+        )
         working = list(self.env.stops.working("BBB").values())
         if target.quantity == 0:
             assert working == []
@@ -1002,3 +1006,69 @@ class StopProtectionMachine(RuleBasedStateMachine):
 
 
 TestStopProtectionMachine = StopProtectionMachine.TestCase
+
+
+class StaggeredStopMachine(StopProtectionMachine):
+    """打开买单和止损单错开的止损保护状态机（update-stagger-buys-and-stops 的 design D7）。
+
+    在原来的步骤上增加持有时提交加仓、加仓订单成交，检查券商那边 BBB 不会同时挂着买单和止损单；
+    最终止损单按错开的止损目标对齐，错开中和"有买单没结束、持仓大于 0"一致。
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.env = _env(config=ExecutionConfig(stagger_buys_and_stops=True))
+
+    def _buys(self) -> list[TradePlan]:
+        return [p for p in self.plans if p.action.is_opening]
+
+    def _open(self, plans: list[TradePlan]) -> list[TradePlan]:
+        return [
+            p for p in plans if (o := self.env.store.get(p.plan_id)) and not o.status.is_terminal
+        ]
+
+    @rule(quantity=st.integers(1, 60))
+    def submit_add(self, quantity: int) -> None:
+        """持仓大于 0、没有未结束的买单时，提交加仓。"""
+        if self.position == 0 or self._open(self._buys()):
+            return
+        plan = add_bbb(quantity)
+        try:
+            self.env.submit(plan, decision(quantity))
+        except (OrderPausedError, NotReconciledError, UnprotectedPositionError):
+            return
+        self.plans.append(plan)
+
+    @rule(shares=st.integers(1, 60))
+    def add_fills(self, shares: int) -> None:
+        for plan in self._buys()[1:]:
+            if self._working_at_broker(plan):
+                self._move(self._fill(plan, shares))
+
+    @rule(seconds=st.integers(0, 60))
+    def track_everything(self, seconds: int) -> None:
+        """跟进和对齐一轮，统计加仓提交出去、错开以后挂回止损单。"""
+        adds = self._buys()[1:]
+        unsent = [p for p in adds if (o := self.env.store.get(p.plan_id)) and o.unsent]
+        protection = self.env.protections.get("BBB")
+        staggered = protection is not None and protection.staggered
+        super().track_everything(seconds)
+        if any(self._working_at_broker(p) for p in unsent):
+            event("加仓提交给券商")
+        protection = self.env.protections.get("BBB")
+        if staggered and protection and not protection.staggered and self.env.stops.working("BBB"):
+            event("错开以后挂回止损单")
+
+    @invariant()
+    def never_a_working_buy_and_a_working_stop(self) -> None:
+        buying = any(self._working_at_broker(p) for p in self._buys())
+        assert not (buying and self.env.stops.working("BBB"))
+
+    def teardown(self) -> None:
+        super().teardown()
+        protection = self.env.protections.get("BBB")
+        target = stop_target(self.position, self.env.store.of_symbol("BBB"), stagger=True)
+        assert (protection is not None and protection.staggered) == target.staggered
+
+
+TestStaggeredStopMachine = StaggeredStopMachine.TestCase

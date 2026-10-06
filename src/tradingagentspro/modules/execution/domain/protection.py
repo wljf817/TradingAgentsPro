@@ -54,11 +54,13 @@ class StopTarget:
     """止损单应该是的样子：股数和止损价；不知道止损价时 stop_price 为 None，不挂止损单。
 
     uncovered 是未结束卖单超出持仓的股数，比如等待让出时止损单已经触发；有这样的股数时卖单不提交。
+    staggered 为真：买单和止损单错开，股数因为有买单没结束改为 0，不错开时会大于 0。
     """
 
     quantity: int
     stop_price: Decimal | None
     uncovered: int = 0
+    staggered: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,12 +173,14 @@ class Protection:
     - used：已经用过的止损单序号，下一张是 used + 1；记录一直保留，所以序号不会重复
     - stop：当前这张止损单；还没有时为 None
     - unprotected_since：无保护仓位开始的时刻；不是无保护仓位时为 None
+    - staggered：错开中，见 spec「买单和止损单错开」；不是无保护仓位，但本地备用止损照样盯着
     """
 
     symbol: str
     used: int = 0
     stop: StopOrder | None = None
     unprotected_since: datetime | None = None
+    staggered: bool = False
 
     @property
     def is_active(self) -> bool:
@@ -209,6 +213,9 @@ class Protection:
     def mark_protected(self) -> Self:
         return replace(self, unprotected_since=None)
 
+    def with_staggered(self, staggered: bool) -> Self:
+        return replace(self, staggered=staggered)
+
 
 def stop_price_of(orders: Iterable[Order]) -> Decimal | None:
     """最近创建的、累计成交大于 0 的开仓订单的止损价；没有时为 None。
@@ -219,9 +226,10 @@ def stop_price_of(orders: Iterable[Order]) -> Decimal | None:
     return None if opening is None else opening.stop_price
 
 
-def stop_target(position: int, orders: Iterable[Order]) -> StopTarget:
+def stop_target(position: int, orders: Iterable[Order], *, stagger: bool = False) -> StopTarget:
     """止损目标：股数是持仓减去未结束卖单的未成交股数，小于 0 时为 0，超出的股数记为未覆盖。
 
+    stagger 为真（买单和止损单错开）并且有没结束的买单时，股数为 0。
     orders 是这只股票的全部订单。见 stop-protection spec「止损目标」。
     """
     orders = tuple(orders)
@@ -230,10 +238,13 @@ def stop_target(position: int, orders: Iterable[Order]) -> StopTarget:
         for o in orders
         if o.side is OrderSide.SELL and not o.status.is_terminal
     )
+    covered = max(0, position - selling)
+    buying = stagger and any(o.side is OrderSide.BUY and not o.status.is_terminal for o in orders)
     return StopTarget(
-        quantity=max(0, position - selling),
+        quantity=0 if buying else covered,
         stop_price=stop_price_of(orders),
         uncovered=max(0, selling - position),
+        staggered=buying and covered > 0,
     )
 
 
@@ -290,16 +301,25 @@ def stop_yields(protection: Protection | None, target: StopTarget) -> bool:
     )
 
 
+def stop_withdrawn(protection: Protection | None) -> bool:
+    """止损单已经撤掉：没有止损单，或者当前止损单已经结束、还没挂出去。
+
+    买单和止损单错开时，买单等到这样才提交，见 stop-protection spec「买单和止损单错开」。
+    """
+    stop = protection.stop if protection else None
+    return stop is None or stop.status in (StopStatus.ENDED, StopStatus.PENDING)
+
+
 def backup_stop_due(
     protection: Protection | None,
     stop_price: Decimal | None,
     last_price: Decimal,
     in_session: bool,
 ) -> bool:
-    """本地备用止损该触发了：无保护仓位、在常规交易时段内、最新价不高于止损价。"""
+    """本地备用止损该触发了：无保护仓位或者错开中、在常规交易时段内、最新价不高于止损价。"""
     return (
         protection is not None
-        and protection.unprotected_since is not None
+        and (protection.unprotected_since is not None or protection.staggered)
         and in_session
         and stop_price is not None
         and last_price <= stop_price
