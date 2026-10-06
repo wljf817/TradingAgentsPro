@@ -53,5 +53,6 @@ jobs:
         with:
           node-version: lts/*
 
+      # 版本和本地提交前检查用的 openspec 一致；升级本地 CLI 时一起改这里
       - name: Validate specs and changes
-        run: npx --yes @fission-ai/openspec@1 validate --all --strict --no-interactive
+        run: npx --yes @fission-ai/openspec@1.13.2 validate --all --strict --no-interactive
