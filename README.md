@@ -51,6 +51,7 @@ uv run ruff format --check   # 格式检查
 uv run mypy                  # 类型检查（strict）
 uv run lint-imports          # 依赖方向检查
 uv run pytest                # 测试
+uv run pytest -m alpaca_paper  # 连 Alpaca 模拟盘的冒烟测试，需要 APCA_API_KEY_ID、APCA_API_SECRET_KEY
 ```
 
 连数据库的测试会用 testcontainers 启动一个临时的 PostgreSQL 18 容器，用完即删，所以跑完整的测试要开着 Docker（比如 OrbStack 或 Docker Desktop）。第一次运行会先下载镜像。不连数据库的测试不需要 Docker。
