@@ -182,6 +182,34 @@ def test_exit_plans_skip_the_commission_ratio() -> None:
     assert (decision.outcome, decision.quantity) == (RiskOutcome.PASSED, 1)
 
 
+# 小资金账户：risk-rules spec「风控阈值配置」的场景，全部用默认阈值（每笔佣金 2）
+
+SMALL_ACCOUNT = AccountSnapshot(equity=Decimal(2000), settled_cash=Decimal(2000))
+
+
+def _check_small_account(quantity: int) -> RiskDecision:
+    """在权益 2,000、没有持仓的账户上，用默认阈值检查买入 BBB，限价 50，止损价 47。"""
+    plan = baseline_plan(quantity=quantity, stop_price=Decimal(47))
+    return evaluate_plan(baseline_request(plan=plan, account=SMALL_ACCOUNT, config=RiskConfig()))
+
+
+def test_small_account_opens_with_the_default_limits() -> None:
+    """spec「小资金账户按默认阈值开仓」。"""
+    # 市值 1,400 恰好等于权益的 70%，计划风险 95 不超过 100
+    passed = _check_small_account(28)
+    # 30 股时市值 1,500，计划风险 101.5
+    adjusted = _check_small_account(30)
+    # 成交额 350，往返佣金 4 超过 3.5
+    rejected = _check_small_account(7)
+
+    assert (passed.outcome, passed.quantity) == (RiskOutcome.PASSED, 28)
+    assert passed.violations == ()
+    assert (adjusted.outcome, adjusted.quantity) == (RiskOutcome.ADJUSTED, 28)
+    assert _names(adjusted.violations) == ["单只仓位上限", "单笔计划风险"]
+    assert (rejected.outcome, rejected.quantity) == (RiskOutcome.REJECTED, None)
+    assert _names(rejected.violations) == ["佣金占比"]
+
+
 @given(st.lists(st.integers(0, 300), max_size=5), st.integers(1, 300))
 def test_decision_matches_the_tightest_limit(limits: list[int], requested: int) -> None:
     decision = decide(REQUEST, [_at_most(limit) for limit in limits], requested)

@@ -11,4 +11,4 @@ class EmergencyConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     # 单日亏损达到前一交易日收盘时的权益乘以这个比例时熔断
-    daily_loss_breaker_ratio: Decimal = Field(default=Decimal("0.03"), gt=0, lt=1)
+    daily_loss_breaker_ratio: Decimal = Field(default=Decimal("0.07"), gt=0, lt=1)

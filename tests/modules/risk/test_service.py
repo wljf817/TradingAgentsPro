@@ -15,6 +15,7 @@ from tests.fakes.clock import FakeClock
 from tests.fakes.reservations import InMemoryReservationStore
 from tests.modules.risk.builders import (
     BASELINE_NOW,
+    BASELINE_RATIOS,
     baseline_account,
     baseline_config,
     baseline_plan,
@@ -768,16 +769,17 @@ def test_recheck_and_check_together(recheck_first: bool) -> None:
     assert reserved <= TIGHT.settled_cash
 
 
-# 合计不超限：后续方案按剩余额度检查（design D9）。用默认配置，佣金也计入（本变更 design D5）
+# 合计不超限：后续方案按剩余额度检查（design D9）。用基准数据的比例和默认的每笔佣金，
+# 佣金也计入（本变更 design D5）
 
-DEFAULT_CONFIG = RiskConfig()
+LIMITS_CONFIG = RiskConfig(**BASELINE_RATIOS)
 
 
 def _assert_within_limits(store: InMemoryReservationStore, account: AccountSnapshot) -> None:
     """持仓加全部有效预留，满足已结算资金、组合合计风险、板块集中度、最多持仓数，
     并且每只股票的卖出预留之和不超过持仓股数。
     """
-    config = DEFAULT_CONFIG
+    config = LIMITS_CONFIG
     active = store.active()
     opening = [opening_reservation(r, account, config) for r in active if r.plan.action.is_opening]
     selling = [r for r in active if not r.plan.action.is_opening]
@@ -824,7 +826,7 @@ def test_holdings_plus_reservations_never_exceed_the_limits(
     和检查时相同。每一步之后都不超限；除清仓外，再校验的股数不超过再校验前的预留股数。
     """
     store = InMemoryReservationStore()
-    service = risk_service(store, config=DEFAULT_CONFIG)
+    service = risk_service(store, config=LIMITS_CONFIG)
     checked: list[TradePlan] = []
 
     for step in steps:

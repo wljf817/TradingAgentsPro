@@ -10,7 +10,7 @@ from tradingagentspro.modules.emergency import EmergencyConfig
 
 def test_default_config() -> None:
     """spec「默认配置」。"""
-    assert EmergencyConfig().daily_loss_breaker_ratio == Decimal("0.03")
+    assert EmergencyConfig().daily_loss_breaker_ratio == Decimal("0.07")
 
 
 @pytest.mark.parametrize("ratio", [Decimal(0), Decimal(1)])

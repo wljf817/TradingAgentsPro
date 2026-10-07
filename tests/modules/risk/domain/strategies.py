@@ -2,11 +2,12 @@
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from functools import partial
 
 from hypothesis import strategies as st
 
 from tests.fakes.calendar import SAMPLE_FIRST_DAY, SAMPLE_LAST_DAY
-from tests.modules.risk.builders import NYSE
+from tests.modules.risk.builders import BASELINE_RATIOS, NYSE
 from tradingagentspro.contracts.account import AccountSnapshot, Position
 from tradingagentspro.contracts.trade_plan import OrderType, TradeAction, TradePlan
 from tradingagentspro.modules.risk import (
@@ -33,11 +34,11 @@ _moments = st.datetimes(
 )
 
 
-# 每笔佣金和往返佣金占比上限
+# 每笔佣金和往返佣金占比上限；四个比例用基准数据的
 _commissions = st.integers(0, 10).map(Decimal)
 _commission_ratios = st.sampled_from([Decimal("0.005"), Decimal("0.01"), Decimal("0.05")])
 commission_configs = st.builds(
-    RiskConfig,
+    partial(RiskConfig, **BASELINE_RATIOS),
     commission_per_order=_commissions,
     max_round_trip_commission_ratio=_commission_ratios,
 )
@@ -118,6 +119,7 @@ def risk_requests(draw: st.DrawFn) -> RiskRequest:
     )
     now = draw(_moments)
     config = RiskConfig(
+        **BASELINE_RATIOS,
         max_positions=draw(st.integers(1, 8)),
         min_trade_interval_sessions=draw(st.integers(1, 3)),
         commission_per_order=draw(_commissions),
@@ -138,13 +140,13 @@ def risk_requests(draw: st.DrawFn) -> RiskRequest:
 
 @st.composite
 def accounts_within_limits(draw: st.DrawFn) -> AccountSnapshot:
-    """持仓一开始就满足默认配置（计入每笔佣金）下的组合合计风险和板块集中度的账户。
+    """持仓一开始就满足基准数据的比例（计入默认的每笔佣金）下的组合合计风险和板块集中度的账户。
 
     先生成持仓，再按持仓算出满足这两项上限所需的最低权益，权益比它至少多 50,000，
     免得开仓方案大多 1 股都通不过。最多 4 只持仓，不会超过默认的最多持仓数。
     没有最近成交日，免得开仓方案多半被交易间隔挡住。
     """
-    config = RiskConfig()
+    config = RiskConfig(**BASELINE_RATIOS)
     positions = draw(_positions())
     total_risk = sum((holding_risk(p, config) for p in positions), ZERO)
     sector_values = (

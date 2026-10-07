@@ -15,6 +15,7 @@ NEXT_DAY = date(2026, 10, 15)
 
 PREVIOUS_CLOSE_EQUITY = Decimal(100_000)
 EQUITY = Decimal(99_000)
+BREAKER_RATIO = Decimal("0.03")  # 基准数据的熔断比例，不是默认值，所以熔断线是 3,000
 
 # 今天都没有开仓成交
 AAA = Holding(
@@ -34,8 +35,10 @@ BBB = Holding(
 
 
 def emergency_service(clock: FakeClock | None = None, **config: Any) -> EmergencyService:
-    """紧急退出用例：测试时钟（没有传入时停在基准时刻）、纽交所样例日历、默认配置。
+    """紧急退出用例：测试时钟（没有传入时停在基准时刻）、纽交所样例日历、基准数据的熔断比例，
+    其余用默认配置。
 
     config 覆盖其中的配置项。
     """
-    return EmergencyService(clock or FakeClock(BASELINE_NOW), NYSE, EmergencyConfig(**config))
+    settings = {"daily_loss_breaker_ratio": BREAKER_RATIO} | config
+    return EmergencyService(clock or FakeClock(BASELINE_NOW), NYSE, EmergencyConfig(**settings))

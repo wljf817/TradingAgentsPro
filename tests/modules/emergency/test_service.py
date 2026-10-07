@@ -16,11 +16,13 @@ from tests.modules.emergency.builders import (
     BASELINE_NOW,
     BBB,
     EQUITY,
+    NYSE,
     PREVIOUS_CLOSE_EQUITY,
     emergency_service,
 )
 from tradingagentspro.contracts.trade_plan import OrderType, TradeAction
 from tradingagentspro.modules.emergency import (
+    EmergencyConfig,
     EmergencyExit,
     EmergencyService,
     ExitReason,
@@ -305,3 +307,12 @@ def test_changed_breaker_ratio() -> None:
     assert _check(service, equity=97_000) == ()
     assert not service.breaker_tripped()
     assert _summary(_check(service, equity=95_000)) == [("AAA", BREAKER), ("BBB", BREAKER)]
+
+
+def test_default_breaker_ratio() -> None:
+    """spec「按默认熔断比例判定」：熔断线 7,000。"""
+    service = EmergencyService(FakeClock(BASELINE_NOW), NYSE, EmergencyConfig())
+
+    assert _check(service, equity="93000.01") == ()
+    assert not service.breaker_tripped()
+    assert _summary(_check(service, equity=93_000)) == [("AAA", BREAKER), ("BBB", BREAKER)]

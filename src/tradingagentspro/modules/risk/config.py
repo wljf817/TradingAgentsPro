@@ -11,13 +11,13 @@ class RiskConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     # 一只股票（加仓按合并后）的计划风险不超过权益乘以这个比例
-    max_trade_risk_ratio: Decimal = Field(default=Decimal("0.01"), gt=0)
+    max_trade_risk_ratio: Decimal = Field(default=Decimal("0.05"), gt=0)
     # 组合合计风险不超过权益乘以这个比例
-    max_total_risk_ratio: Decimal = Field(default=Decimal("0.05"), gt=0)
+    max_total_risk_ratio: Decimal = Field(default=Decimal("0.10"), gt=0)
     # 一只股票的市值不超过权益乘以这个比例
-    max_position_ratio: Decimal = Field(default=Decimal("0.20"), gt=0)
+    max_position_ratio: Decimal = Field(default=Decimal("0.70"), gt=0)
     # 一个板块的市值不超过权益乘以这个比例
-    max_sector_ratio: Decimal = Field(default=Decimal("0.40"), gt=0)
+    max_sector_ratio: Decimal = Field(default=Decimal("1.00"), gt=0)
     # 持仓和有开仓预留的股票合计不超过这么多只
     max_positions: int = Field(default=8, gt=0)
     # 滑点等按成交额计算的缓冲 = 成交额乘以这个比例；不含佣金

@@ -15,6 +15,15 @@ from tradingagentspro.modules.risk import ReservationStore, RiskConfig, RiskRequ
 NYSE = sample_nyse_calendar()
 BASELINE_NOW = datetime(2026, 10, 14, 15, tzinfo=UTC)  # 周三，盘中
 
+# 基准数据的四个比例，不是默认值：spec 的场景按这几个数算。默认值按 2,000 左右的小资金账户设定，
+# 在权益 100,000 的基准数据下很少触及上限
+BASELINE_RATIOS: dict[str, Any] = {
+    "max_trade_risk_ratio": Decimal("0.01"),
+    "max_total_risk_ratio": Decimal("0.05"),
+    "max_position_ratio": Decimal("0.20"),
+    "max_sector_ratio": Decimal("0.40"),
+}
+
 _plan_ids = count(1)
 
 
@@ -111,8 +120,11 @@ def close_plan(symbol: str, sector: str, plan_id: UUID | None = None) -> TradePl
 
 
 def baseline_config(**changes: Any) -> RiskConfig:
-    """基准配置：默认阈值，只有每笔佣金为 0。spec 的基准数据不计佣金，佣金的场景另外写明。"""
-    return RiskConfig(**({"commission_per_order": Decimal(0)} | changes))
+    """基准配置：基准数据的四个比例，每笔佣金为 0，其余用默认值。
+
+    spec 的基准数据不计佣金，佣金的场景另外写明。
+    """
+    return RiskConfig(**(BASELINE_RATIOS | {"commission_per_order": Decimal(0)} | changes))
 
 
 def baseline_request(**changes: Any) -> RiskRequest:
