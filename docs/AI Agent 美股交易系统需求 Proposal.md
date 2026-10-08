@@ -610,7 +610,7 @@ PM 和 Critic 通过 Agent 网关使用两个只读工具：
 | 数据源 | moomoo：行情和实盘交易；SEC EDGAR：公告和财报原文；新闻和一致预期：待定（比如 Finnhub、FMP） |
 | 券商 | 实盘用 moomoo OpenAPI（Python SDK）+ OpenD 网关，订阅实时推送和到价提醒推送作为行情事件源；模拟盘用 Alpaca Trading API。两者实现同一套券商接口，只在启动时切换；Alpaca 不允许同一只股票的买单和止损卖单同时挂着，模拟盘上把两者错开，见「订单生命周期」 |
 | 模型 | 子 agent 用 DeepSeek、GLM 等 flash 模型；Critic 必须和 PM 不同厂商，审核开仓方案建议用较强的模型；PM 建议用较强的模型（可选 Claude）；复盘用 Claude。每个 agent 可配 1 个或多个备用模型 |
-| 通知与人工确认 | Discord 机器人（discord.py）：推送建议、告警和每日摘要，用按钮确认或拒绝；只接受指定用户的操作 |
+| 通知与人工确认 | Discord 机器人（discord.py）：推送建议、告警和每日摘要，用按钮确认或拒绝；只接受指定用户的操作。Discord 发不出去时只写程序日志，不另设备用通道，也不算健康异常；确认请求发不出去的方案按确认超时处理 |
 | 开发工具 | uv 管理依赖和环境；Ruff 检查和格式化；mypy（strict）类型检查；pytest 测试；GitHub Actions CI：每次 push 到 main 和每个 PR 都跑 Ruff、mypy 和 pytest |
 | 部署 | 一台常开机器，用 Docker 运行 PostgreSQL，另外运行 OpenD 和主程序 |
 

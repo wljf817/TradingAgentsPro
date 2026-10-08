@@ -2,7 +2,7 @@
 
 ## 1. Proposal 和依赖
 
-- [ ] 1.1 按人对 proposal「需要人决定」第 1 条的决定处理：同意推荐做法时，在完整版「技术栈与部署」通知与人工确认一行后补上"Discord 发不出去时只写程序日志，不另设备用通道，也不算健康异常；确认请求发不出去的方案按确认超时处理"；不同意前两点时，先改 spec「告警」「结束确认」和 design D3，再做后面的任务。验证：`grep -n "备用通道" "docs/AI Agent 美股交易系统需求 Proposal.md"` 的结果和人的决定一致；简版不改
+- [x] 1.1 按人对 proposal「需要人决定」第 1 条的决定处理：同意推荐做法时，在完整版「技术栈与部署」通知与人工确认一行后补上"Discord 发不出去时只写程序日志，不另设备用通道，也不算健康异常；确认请求发不出去的方案按确认超时处理"；不同意前两点时，先改 spec「告警」「结束确认」和 design D3，再做后面的任务。验证：`grep -n "备用通道" "docs/AI Agent 美股交易系统需求 Proposal.md"` 的结果和人的决定一致；简版不改
 - [x] 1.2 `uv add "discord.py>=2.7.1"`；`pyproject.toml` 的 pytest 配置登记标记 `discord_bot`（连真实 Discord 的冒烟测试），`addopts` 改为 `-m "not alpaca_paper and not moomoo_opend and not discord_bot"`（design D9）。验证：`uv sync --locked` 成功，`uv run pytest -q` 全部通过，`uv run pytest --markers` 列出 `discord_bot`，`uv run mypy` 通过
 
 ## 2. 通知模块
