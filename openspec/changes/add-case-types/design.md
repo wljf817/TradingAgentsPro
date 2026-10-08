@@ -19,7 +19,7 @@ contracts（Pydantic 模型和枚举，跨模块传递）
   event.py       EventCategory                  <- 事件检测（M4）
   case.py        CaseType                       -> 案件记录（M4）、按类型评估（M6）、任务派发
   thesis.py      + InvestmentThesis             -> 复查日与催化剂、M4 存论点
-  trade_plan.py  + PlanFields、check_plan_fields（TradePlan 的行为不变）
+  trade_plan.py  + PlanFields、check_plan_fields、check_price_tick（TradePlan 的行为不变）
   conclusion.py  Decision、AfterClose、PlanDraft、FollowUpReason、FollowUpRequest、
                  PoolAddition、PoolRemoval、HoldingConclusion、WatchConclusion、
                  CandidateConclusion、ExplorationConclusion、Conclusion
@@ -202,7 +202,7 @@ class ExplorationConclusion(_ConclusionBase):
     removals: tuple[PoolRemoval, ...] = ()
 
 
-Conclusion = HoldingConclusion | WatchConclusion | CandidateConclusion | ExplorationConclusion
+type Conclusion = HoldingConclusion | WatchConclusion | CandidateConclusion | ExplorationConclusion
 ```
 
 （每个模型都是 `frozen=True, extra="forbid"`，带文字字段的加 `str_strip_whitespace=True`，上面只写了一处。）
@@ -265,7 +265,7 @@ def check_plan_fields(action: TradeAction, plan: PlanFields) -> None:
     """按动作检查字段，不符合时抛 ValueError；规则见 risk-rules spec「交易方案的格式」。"""
 ```
 
-`TradePlan._check_fields_for_action` 改为调用 `check_plan_fields(self.action, self)`，错误信息不变。M2 的 add-manual-plan-entry 已经给 `TradePlan` 的限价和止损价加了最小变动单位（`_check_tick` 字段校验器，risk-rules spec「交易方案的格式」）；`PlanDraft` 的这两个字段用同一个校验，抽成 `contracts/trade_plan.py` 里的一个函数两边共用，PM 提交时就报格式错误，不会等到变成 `TradePlan` 才失败。结论的 validator 用决定对应的动作调用它，买入和加仓另外要求 `emergency_threshold`（proposal「需要人决定」第 9 条）。
+`TradePlan._check_fields_for_action` 改为调用 `check_plan_fields(self.action, self)`，错误信息不变。M2 的 add-manual-plan-entry 已经给 `TradePlan` 的限价和止损价加了最小变动单位（`_check_tick` 字段校验器，risk-rules spec「交易方案的格式」）；`PlanDraft` 的这两个字段用同一个校验，抽成 `contracts/trade_plan.py` 里的 `check_price_tick(field_name, price)`，两边的字段校验器都调用它，PM 提交时就报格式错误，不会等到变成 `TradePlan` 才失败。结论的 validator 用决定对应的动作调用它，买入和加仓另外要求 `emergency_threshold`（proposal「需要人决定」第 9 条）。
 
 补上方案 ID、股票和板块，变成交易方案，持仓和关注的结论各有一个同样的方法：
 
@@ -350,7 +350,7 @@ class SellTrigger:
     symbol: str
 
 
-Trigger = EventTrigger | HeartbeatTrigger | FollowUpTrigger | SellTrigger
+type Trigger = EventTrigger | HeartbeatTrigger | FollowUpTrigger | SellTrigger
 
 
 @dataclass(frozen=True, slots=True)

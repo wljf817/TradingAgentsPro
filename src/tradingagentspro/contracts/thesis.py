@@ -1,7 +1,8 @@
-"""关注论点：PM 把股票升级为关注时写的论点，以及其中的催化剂和代码能检测的条件。
+"""论点：PM 把股票升级为关注时写的关注论点、新建仓时写的投资论点，以及其中的催化剂和代码能
+检测的条件。
 
-论点来自模型输出，所以在这里校验格式，见 stock-pool spec「关注论点的格式」。复查日和催化剂
-截止日期取什么值，由「复查日与催化剂」校验。投资论点以后共用催化剂和条件。
+论点来自模型输出，所以在这里校验格式，见 stock-pool spec「关注论点的格式」和 case-types spec
+「投资论点的格式」。复查日和催化剂截止日期取什么值，由「复查日与催化剂」校验。
 """
 
 from datetime import date
@@ -78,4 +79,21 @@ class WatchThesis(BaseModel):
     entry_conditions: tuple[Condition, ...] = Field(min_length=1)
     catalyst: Catalyst
     invalidation: str = Field(min_length=1)  # 证伪条件
+    review_day: date  # 复查日
+
+
+class InvestmentThesis(BaseModel):
+    """投资论点：新建仓时附上；持仓的论点更新也是一份完整的投资论点，整份代替原来的。
+
+    目标价单独一个字段，不写成条件：它同时是收益目标，M4 设到价提醒时由代码换成条件。
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", str_strip_whitespace=True)
+
+    rationale: str = Field(min_length=1)  # 买入理由
+    catalyst: Catalyst
+    target_price: Decimal = Field(gt=0)
+    invalidation: str = Field(min_length=1)  # 证伪条件
+    # 证伪条件中代码能检测的部分，任一满足就算触发；很多证伪条件不是价格类，可以没有
+    invalidation_conditions: tuple[Condition, ...] = ()
     review_day: date  # 复查日

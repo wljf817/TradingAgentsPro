@@ -1,8 +1,11 @@
-"""交易方案：结论里可以执行的部分，交给风控和执行模块。"""
+"""交易方案：结论里可以执行的部分，交给风控和执行模块。
+
+按动作检查字段的规则和最小变动单位抽成函数，PM 在结论里写的方案（contracts/conclusion.py）共用。
+"""
 
 from decimal import Decimal
 from enum import StrEnum
-from typing import Self
+from typing import Protocol, Self
 from uuid import UUID
 
 from pydantic import (
@@ -41,6 +44,65 @@ class OrderType(StrEnum):
     MARKET = "market"
 
 
+class PlanFields(Protocol):
+    """按动作检查的字段。属性只读，TradePlan 和 PM 写的方案都满足。"""
+
+    @property
+    def quantity(self) -> int | None: ...
+
+    @property
+    def order_type(self) -> OrderType: ...
+
+    @property
+    def limit_price(self) -> Decimal | None: ...
+
+    @property
+    def stop_price(self) -> Decimal | None: ...
+
+    @property
+    def emergency_threshold(self) -> Decimal | None: ...
+
+    @property
+    def max_price_deviation(self) -> Decimal | None: ...
+
+
+def check_price_tick(field_name: str, price: Decimal | None) -> None:
+    """限价或止损价不符合最小变动单位时抛 ValueError；field_name 是 limit_price 或 stop_price。
+
+    按数值判断，末尾多写的 0 不算：180.500 符合，180.505 不符合。
+    """
+    if price is None:
+        return
+    tick = _CENT if price >= _ONE_DOLLAR else _SUB_DOLLAR_TICK
+    if price % tick != 0:
+        raise ValueError(
+            f"{_PRICE_NAMES[field_name]} {price} 不符合最小变动单位：1 美元及以上最多 2 位小数，"
+            "1 美元以下最多 4 位小数"
+        )
+
+
+def check_plan_fields(action: TradeAction, plan: PlanFields) -> None:
+    """按动作检查字段，不符合时抛 ValueError；规则见 risk-rules spec「交易方案的格式」。"""
+    if (plan.order_type is OrderType.LIMIT) != (plan.limit_price is not None):
+        raise ValueError("限价单必须写限价，市价单不能写限价")
+    if action is TradeAction.CLOSE:
+        if plan.quantity is not None:
+            raise ValueError("清仓不写股数，卖出全部可卖数量")
+    elif plan.quantity is None:
+        raise ValueError("买入、加仓和减仓必须写股数")
+    if action.is_opening:
+        if plan.order_type is not OrderType.LIMIT:
+            raise ValueError("买入和加仓只能用限价单")
+        if plan.stop_price is None:
+            raise ValueError("买入和加仓必须写止损价")
+    elif (
+        plan.stop_price is not None
+        or plan.emergency_threshold is not None
+        or plan.max_price_deviation is not None
+    ):
+        raise ValueError("减仓和清仓不能写止损价、紧急阈值和允许价格偏离")
+
+
 class TradePlan(BaseModel):
     """一个交易方案。
 
@@ -72,36 +134,10 @@ class TradePlan(BaseModel):
     @field_validator("limit_price", "stop_price")
     @classmethod
     def _check_tick(cls, price: Decimal | None, info: ValidationInfo) -> Decimal | None:
-        """按数值判断，末尾多写的 0 不算：180.500 符合，180.505 不符合。"""
-        if price is None:
-            return price
-        tick = _CENT if price >= _ONE_DOLLAR else _SUB_DOLLAR_TICK
-        if price % tick != 0:
-            name = _PRICE_NAMES[info.field_name or ""]
-            raise ValueError(
-                f"{name} {price} 不符合最小变动单位：1 美元及以上最多 2 位小数，"
-                "1 美元以下最多 4 位小数"
-            )
+        check_price_tick(info.field_name or "", price)
         return price
 
     @model_validator(mode="after")
     def _check_fields_for_action(self) -> Self:
-        if (self.order_type is OrderType.LIMIT) != (self.limit_price is not None):
-            raise ValueError("限价单必须写限价，市价单不能写限价")
-        if self.action is TradeAction.CLOSE:
-            if self.quantity is not None:
-                raise ValueError("清仓不写股数，卖出全部可卖数量")
-        elif self.quantity is None:
-            raise ValueError("买入、加仓和减仓必须写股数")
-        if self.action.is_opening:
-            if self.order_type is not OrderType.LIMIT:
-                raise ValueError("买入和加仓只能用限价单")
-            if self.stop_price is None:
-                raise ValueError("买入和加仓必须写止损价")
-        elif (
-            self.stop_price is not None
-            or self.emergency_threshold is not None
-            or self.max_price_deviation is not None
-        ):
-            raise ValueError("减仓和清仓不能写止损价、紧急阈值和允许价格偏离")
+        check_plan_fields(self.action, self)
         return self
