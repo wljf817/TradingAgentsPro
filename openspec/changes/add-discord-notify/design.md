@@ -312,7 +312,7 @@ class ButtonPress(Protocol):
         ...
 
 
-type PressHandler = Callable[[ButtonPress], Awaitable[None]]
+type PressHandler = Callable[[ButtonPress], Coroutine[Any, Any, None]]
 
 
 class Gateway(Protocol):
@@ -394,7 +394,7 @@ alert() ──run_coroutine_threadsafe──▶ gateway.send ──▶ Discord
 - `edit`：`get_partial_message(message_id).edit(embed=embed, view=None)`；`discord.NotFound` 时什么也不做
 - 错误转换：`discord.HTTPException`（包括限流重试用完、服务器错误、没有权限）、`aiohttp.ClientError`、`OSError` 转成 `NotificationUnavailableError`，信息是状态码和 Discord 给的原因，不含 token
 - `InteractionPress`：`defer` 是 `response.defer()`；`reply` 在还没应答时用 `response.send_message(text, ephemeral=True)`，已应答时用 `followup.send(text, ephemeral=True)`；`show` 在还没应答时用 `response.edit_message(embed=..., view=None)`，已应答时用 `edit_original_response(embed=..., view=None)`
-- `on_interaction` 只把按钮交互交给 `on_press`；`on_press` 里的异常由 discord.py 记日志，不会中断连接
+- `on_interaction` 只把带消息的按钮交互交给 `on_press`；`DiscordNotifier` 的 `on_press` 自己捕获并记录处理中的异常（比如应答时 Discord 报错），不会中断连接
 
 ### D9 新增依赖和配置
 
@@ -413,6 +413,7 @@ alert() ──run_coroutine_threadsafe──▶ gateway.send ──▶ Discord
 - `tests/integrations/discord/test_notifier.py`：「启动和关闭」「重复请求同一个方案」「按钮的处理」「结束确认」「同步调用和失败」的全部场景；回调记下自己运行的线程，检查不是事件循环所在的线程；用 `threading.Event` 让回调停住，检查这期间告警和别的按钮照常处理；「重启以后」用一个新的 `DiscordNotifier` 处理旧 custom_id 的按下；发送超时配成 0.2 秒，让超时的测试跑得快
 - `tests/integrations/discord/test_gateway.py`：错误转换（`discord.NotFound` 在改消息时被忽略；`HTTPException`、`aiohttp.ClientError` 转成通知不可用，信息里有状态码）
 - 每个 spec 场景一个测试，名字或说明里写明场景；`notifier: Notifier = DiscordNotifier(...)` 让 mypy 检查适配器满足端口
+- 项目第一次用 `logging`：架构测试 `test_import_contracts.py` 调用的 import-linter 用 `logging.config.dictConfig` 配置自己的日志，会停用已经存在的全部 logger，之后的测试就收不到日志。那个测试跑完一个契约以后把原来启用的 logger 恢复
 - 冒烟测试 `tests/integrations/discord/test_bot_smoke.py`，加 `discord_bot` 标记，4 个环境变量缺一个就跳过：
   - 无效 token：启动失败，原因是登录失败
   - 频道不对：把频道 ID 换成用户 ID 启动，启动失败，错误信息里有这个 ID
