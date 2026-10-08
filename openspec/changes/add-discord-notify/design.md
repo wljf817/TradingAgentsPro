@@ -33,7 +33,7 @@ modules/notification/            (新，对应架构图「风控与执行」里�
   service.py    NotificationService
 
 integrations/discord/            (新)
-  __init__.py   导出 DiscordConfig、DiscordGateway、DiscordNotifier
+  __init__.py   导出 DiscordConfig、DiscordGateway、DiscordNotifier（add-bootstrap-wiring 加上 Gateway：装配要用它）
   config.py     DiscordConfig（含 from_env）
   messages.py   消息内容、按钮、结果的嵌入、按钮 custom_id 的编码和解析（不做 I/O）
   notifier.py   Gateway、ButtonPress（适配器内部的协议）、DiscordNotifier
