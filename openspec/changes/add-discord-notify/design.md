@@ -38,6 +38,7 @@ integrations/discord/            (新)
   messages.py   消息内容、按钮、结果的嵌入、按钮 custom_id 的编码和解析（不做 I/O）
   notifier.py   Gateway、ButtonPress（适配器内部的协议）、DiscordNotifier
   gateway.py    DiscordGateway（discord.py 的 Client）、InteractionPress、错误的转换
+                （add-manual-plan-entry 在这里加上 /plan 的定义和注册，见它的 design D8）
 ```
 
 - 通知模块只依赖 contracts（`TradePlan`、`RiskDecision`）和 shared（`Clock`），不依赖别的模块
@@ -395,6 +396,7 @@ alert() ──run_coroutine_threadsafe──▶ gateway.send ──▶ Discord
 - 错误转换：`discord.HTTPException`（包括限流重试用完、服务器错误、没有权限）、`aiohttp.ClientError`、`OSError` 转成 `NotificationUnavailableError`，信息是状态码和 Discord 给的原因，不含 token
 - `InteractionPress`：`defer` 是 `response.defer()`；`reply` 在还没应答时用 `response.send_message(text, ephemeral=True)`，已应答时用 `followup.send(text, ephemeral=True)`；`show` 在还没应答时用 `response.edit_message(embed=..., view=None)`，已应答时用 `edit_original_response(embed=..., view=None)`
 - `on_interaction` 只把带消息的按钮交互交给 `on_press`；`DiscordNotifier` 的 `on_press` 自己捕获并记录处理中的异常（比如应答时 Discord 报错），不会中断连接
+- add-manual-plan-entry 以后：构造改为 `DiscordGateway(config, plans)`，`run` 在 `login` 之后、`connect` 之前在配置的服务器注册 `/plan`，注册失败时 `run` 抛 `NotificationUnavailableError`；`/plan` 的交互由 discord.py 的命令树交给 `PlanCommand`，`on_interaction` 不变。见 add-manual-plan-entry 的 design D8
 
 ### D9 新增依赖和配置
 
