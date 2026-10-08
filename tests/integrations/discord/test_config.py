@@ -81,12 +81,15 @@ def test_token_is_not_exposed() -> None:
         {"connect_timeout": timedelta(0)},
         {"send_timeout": timedelta(0)},
         {"send_timeout": timedelta(seconds=-1)},
+        {"submit_timeout": timedelta(0)},
+        {"submit_timeout": timedelta(seconds=-1)},
+        {"submit_timeout": timedelta(minutes=15)},
         {"token": SecretStr("")},
         {"user_id": 0},
     ],
 )
 def test_invalid_config_is_an_error(changes: dict[str, Any]) -> None:
-    """spec「超时不是正数」，以及直接构造时 token 为空、ID 不是正数。"""
+    """spec「超时不是正数」，manual-plans spec「提交超时不合法」，以及 token 为空、ID 不是正数。"""
     fields: dict[str, Any] = {
         "token": SecretStr(TOKEN),
         "guild_id": 3003,
@@ -95,3 +98,18 @@ def test_invalid_config_is_an_error(changes: dict[str, Any]) -> None:
     }
     with pytest.raises(ValidationError):
         DiscordConfig(**{**fields, **changes})
+
+
+def test_submit_timeout_defaults_to_60_seconds_and_must_be_under_15_minutes() -> None:
+    """manual-plans spec「提交接口」的配置表和「提交超时不合法」里 14 分钟可以构造。"""
+    config = DiscordConfig.from_env(FULL_ENV)
+
+    assert config.submit_timeout == timedelta(seconds=60)
+    fourteen = DiscordConfig(
+        token=SecretStr(TOKEN),
+        guild_id=3003,
+        channel_id=2002,
+        user_id=1001,
+        submit_timeout=timedelta(minutes=14),
+    )
+    assert fourteen.submit_timeout == timedelta(minutes=14)

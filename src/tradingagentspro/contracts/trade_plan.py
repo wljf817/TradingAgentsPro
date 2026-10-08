@@ -5,7 +5,22 @@ from enum import StrEnum
 from typing import Self
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
+
+# 美股报价的最小变动单位（Reg NMS Rule 612）：1 美元及以上到 0.01，低于 1 美元到 0.0001。
+# 是市场规则，不是可以配置的阈值；券商会拒绝不符合的订单和止损单。
+_ONE_DOLLAR = Decimal(1)
+_CENT = Decimal("0.01")
+_SUB_DOLLAR_TICK = Decimal("0.0001")
+_PRICE_NAMES = {"limit_price": "限价", "stop_price": "止损价"}
 
 
 class TradeAction(StrEnum):
@@ -36,6 +51,8 @@ class TradePlan(BaseModel):
 
     expires_at 和 max_price_deviation 在下单前再校验时使用，见 pre-order-recheck spec；
     没填时由风控给出默认值。
+
+    限价和止损价要符合最小变动单位：1 美元及以上最多 2 位小数，低于 1 美元最多 4 位小数。
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -51,6 +68,21 @@ class TradePlan(BaseModel):
     emergency_threshold: Decimal | None = Field(default=None, gt=0, lt=1)
     expires_at: AwareDatetime | None = None
     max_price_deviation: Decimal | None = Field(default=None, gt=0, lt=1)
+
+    @field_validator("limit_price", "stop_price")
+    @classmethod
+    def _check_tick(cls, price: Decimal | None, info: ValidationInfo) -> Decimal | None:
+        """按数值判断，末尾多写的 0 不算：180.500 符合，180.505 不符合。"""
+        if price is None:
+            return price
+        tick = _CENT if price >= _ONE_DOLLAR else _SUB_DOLLAR_TICK
+        if price % tick != 0:
+            name = _PRICE_NAMES[info.field_name or ""]
+            raise ValueError(
+                f"{name} {price} 不符合最小变动单位：1 美元及以上最多 2 位小数，"
+                "1 美元以下最多 4 位小数"
+            )
+        return price
 
     @model_validator(mode="after")
     def _check_fields_for_action(self) -> Self:

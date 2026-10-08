@@ -168,3 +168,88 @@ def test_symbol_and_sector_must_not_be_empty() -> None:
 
 def test_fields_outside_the_table_are_rejected() -> None:
     _assert_format_error(_plan(BUY, note="理由"))
+
+
+def _format_errors(fields: dict[str, Any]) -> list[str]:
+    """构造方案报的全部格式错误的说明。"""
+    with pytest.raises(ValidationError) as raised:
+        TradePlan.model_validate(fields)
+    return [str(error["msg"]) for error in raised.value.errors()]
+
+
+@pytest.mark.parametrize("limit", ["180.50", "180.500", "1.00", "1"])
+def test_prices_from_one_dollar_up_to_the_cent(limit: str) -> None:
+    """spec「1 美元及以上的价格只能到分」：合规的价格。"""
+    plan = TradePlan.model_validate(
+        _plan(BUY, limit_price=Decimal(limit), stop_price=Decimal("0.50"))
+    )
+
+    assert plan.limit_price == Decimal(limit)
+
+
+@pytest.mark.parametrize(
+    ("field", "price", "name"),
+    [
+        ("limit_price", "180.505", "限价"),
+        ("limit_price", "1.005", "限价"),
+        ("stop_price", "171.001", "止损价"),
+    ],
+)
+def test_prices_from_one_dollar_below_the_cent(field: str, price: str, name: str) -> None:
+    """spec「1 美元及以上的价格只能到分」：报格式错误，写明是哪个价格和填的价格。"""
+    fields = _plan(BUY, limit_price=Decimal(180), stop_price=Decimal(170))
+    fields[field] = Decimal(price)
+
+    [message] = _format_errors(fields)
+
+    assert name in message
+    assert price in message
+    assert "最小变动单位" in message
+
+
+@pytest.mark.parametrize("stop", ["0.5", "0.0001", "0.1235"])
+def test_prices_below_one_dollar_up_to_four_places(stop: str) -> None:
+    """spec「低于 1 美元的价格最多 4 位小数」：合规的价格。"""
+    plan = TradePlan.model_validate(
+        _plan(BUY, limit_price=Decimal("0.9999"), stop_price=Decimal(stop))
+    )
+
+    assert plan.stop_price == Decimal(stop)
+
+
+@pytest.mark.parametrize(
+    ("limit", "stop"), [("0.99995", "0.5"), ("0.9999", "0.00005")], ids=["限价", "止损价"]
+)
+def test_prices_below_one_dollar_beyond_four_places(limit: str, stop: str) -> None:
+    """spec「低于 1 美元的价格最多 4 位小数」：报格式错误。"""
+    _assert_format_error(_plan(BUY, limit_price=Decimal(limit), stop_price=Decimal(stop)))
+
+
+def test_exactly_one_dollar_counts_as_two_places() -> None:
+    """spec「正好 1 美元按 2 位小数算」。"""
+    _assert_format_error(_plan(BUY, limit_price=Decimal("1.0001"), stop_price=Decimal("0.50")))
+    plan = TradePlan.model_validate(
+        _plan(BUY, limit_price=Decimal("0.9999"), stop_price=Decimal("0.50"))
+    )
+
+    assert plan.limit_price == Decimal("0.9999")
+
+
+def test_exit_plan_limit_prices_are_checked_too() -> None:
+    """spec「退出方案的限价也检查」：市价单没有价格要检查。"""
+    _assert_format_error(_plan(CLOSE, order_type=OrderType.LIMIT, limit_price=Decimal("120.001")))
+    _assert_format_error(_plan(REDUCE, order_type=OrderType.LIMIT, limit_price=Decimal("0.12345")))
+    plan = TradePlan.model_validate(_plan(REDUCE))
+
+    assert plan.order_type is OrderType.MARKET
+
+
+def test_both_prices_off_the_tick_are_both_reported() -> None:
+    """限价和止损价都不符合时两条都报，适配器一次列全（design D7）。"""
+    messages = _format_errors(
+        _plan(BUY, limit_price=Decimal("180.505"), stop_price=Decimal("171.001"))
+    )
+
+    assert len(messages) == 2
+    assert any("限价" in m for m in messages)
+    assert any("止损价" in m for m in messages)

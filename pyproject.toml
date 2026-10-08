@@ -58,6 +58,8 @@ allowed-confusables = ["，", "；", "：", "？", "！", "‘", "’", "（", "
 "tests/conftest.py" = ["TID251"]
 # 系统时钟是全项目唯一可以读取系统时间的地方。
 "src/tradingagentspro/integrations/system_clock.py" = ["TID251"]
+# 随机 ID 是全项目唯一可以调用 uuid4 的地方。
+"src/tradingagentspro/integrations/random_ids.py" = ["TID251"]
 
 [tool.importlinter]
 root_package = "tradingagentspro"
