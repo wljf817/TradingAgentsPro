@@ -1,0 +1,21 @@
+# moomoo OpenD（Linux 命令行版）。第一次要先在终端里交互登录并记住密码，见 deploy/README.md。
+# 只在 127.0.0.1 上监听；远程命令端口 22222 在 OpenD 自带的 OpenD.xml 里设。复制到 /etc/systemd/system/。
+[Unit]
+Description=moomoo OpenD（行情网关）
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+User=tradingagentspro
+Group=tradingagentspro
+WorkingDirectory=/opt/tradingagentspro/opend
+EnvironmentFile=/etc/tradingagentspro/opend.env
+ExecStart=/opt/tradingagentspro/opend/OpenD -login_account=${MOOMOO_LOGIN_ACCOUNT} -login_by_remember=1 -api_ip=127.0.0.1 -api_port=11111 -auto_hold_quote_right=1 -no_monitor=1
+# OpenD 各种退出的退出码没有文档：不管怎样退出都重启
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

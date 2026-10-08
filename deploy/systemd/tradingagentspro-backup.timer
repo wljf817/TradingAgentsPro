@@ -1,0 +1,11 @@
+# 每天 06:00 UTC 备份状态库（美股常规时段和盘后都已结束）；那时关着机就在开机后补做。
+# 复制到 /etc/systemd/system/，见 deploy/README.md。
+[Unit]
+Description=每天备份 TradingAgentsPro 状态库
+
+[Timer]
+OnCalendar=*-*-* 06:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

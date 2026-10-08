@@ -52,10 +52,15 @@ uv run mypy                  # 类型检查（strict）
 uv run lint-imports          # 依赖方向检查
 uv run pytest                # 测试
 uv run pytest -m alpaca_paper  # 连 Alpaca 模拟盘的冒烟测试，需要 APCA_API_KEY_ID、APCA_API_SECRET_KEY
-uv run pytest -m moomoo_opend  # 连本机 OpenD 的行情冒烟测试，需要先开着 OpenD 并登录
+uv run pytest -m moomoo_opend  # 连本机 127.0.0.1:11111 上 OpenD 的行情冒烟测试，OpenD 要开着并已登录
 uv run pytest -m discord_bot   # 连真实 Discord 的冒烟测试，需要 DISCORD_BOT_TOKEN、DISCORD_GUILD_ID、DISCORD_CHANNEL_ID、DISCORD_USER_ID；运行中要在 3 分钟内按消息上的按钮，并在 5 分钟内按告警的提示运行四条 /plan
 uv run pytest -m discord_bot tests/integrations/discord/test_plan_smoke.py  # 只跑 /plan 的冒烟测试
 ```
+
+部署机器运行以后，冒烟测试要注意两点（见 [deploy/README.md](deploy/README.md)「Mac 上开发」）：
+
+- 本机不再开 OpenD，先开 SSH 隧道 `ssh -N -L 11111:127.0.0.1:11111 <用户@部署机器>`，`moomoo_opend` 的测试经隧道连部署机器上的 OpenD
+- 连 Alpaca 或 Discord 的冒烟测试（包括下面的 `tradingagentspro run`）之前，先停掉部署机器上的主程序（`sudo systemctl stop tradingagentspro`），测完再启动
 
 启动交易侧程序（模拟盘），Ctrl-C 停止：
 
@@ -64,6 +69,8 @@ uv run tradingagentspro run
 ```
 
 要先在终端里设好 7 个环境变量（只设在终端或部署机器的环境里，不写进仓库）：`TRADINGAGENTSPRO_DATABASE_URL`（`postgresql://用户:密码@主机:端口/数据库`）、`APCA_API_KEY_ID`、`APCA_API_SECRET_KEY`、`DISCORD_BOT_TOKEN`、`DISCORD_GUILD_ID`、`DISCORD_CHANNEL_ID`、`DISCORD_USER_ID`，并开着 PostgreSQL。启动时自动升级数据库；OpenD 没开时照常启动，盘中进入降级模式。日志写到 stderr。启动失败退出码 1，正常停止退出码 0。
+
+部署到常开的 Debian 机器（PostgreSQL、OpenD、主程序、每天的备份）的文件和步骤在 [deploy/](deploy/)，从 [deploy/README.md](deploy/README.md) 开始。
 
 连数据库的测试会用 testcontainers 启动一个临时的 PostgreSQL 18 容器，用完即删，所以跑完整的测试要开着 Docker（比如 OrbStack 或 Docker Desktop）。第一次运行会先下载镜像。不连数据库的测试不需要 Docker。
 
