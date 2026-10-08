@@ -1,10 +1,13 @@
-"""调度器测试的数据：case-types spec「触发」里的基准数据。"""
+"""调度器测试的数据：case-types spec「触发」和 case-queue spec「队列的输入和决定」里的基准数据。"""
 
+from collections.abc import Iterable, Mapping
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
+from uuid import UUID, uuid5
 
 from tradingagentspro.contracts.agent import SubAgent
+from tradingagentspro.contracts.case import CaseType
 from tradingagentspro.contracts.conclusion import (
     CandidateConclusion,
     Decision,
@@ -15,6 +18,8 @@ from tradingagentspro.contracts.conclusion import (
     PlanDraft,
     WatchConclusion,
 )
+from tradingagentspro.contracts.event import EventCategory
+from tradingagentspro.contracts.stock_pool import StockStatus
 from tradingagentspro.contracts.thesis import (
     Catalyst,
     CatalystReference,
@@ -25,7 +30,19 @@ from tradingagentspro.contracts.thesis import (
     ReferenceKind,
     WatchThesis,
 )
-from tradingagentspro.contracts.trade_plan import OrderType
+from tradingagentspro.contracts.trade_plan import OrderType, TradeAction
+from tradingagentspro.modules.scheduler import (
+    EventTrigger,
+    FollowUpTrigger,
+    HeartbeatTrigger,
+    PendingPlan,
+    PlanStage,
+    QueuedCase,
+    QueueSnapshot,
+    RunningCase,
+    SellTrigger,
+    Trigger,
+)
 
 INVESTMENT_THESIS = InvestmentThesis(
     rationale="新品周期带动收入加速",
@@ -97,3 +114,124 @@ def exploration(**changes: Any) -> ExplorationConclusion:
     """寻股的结论：公共部分（没有评分），changes 覆盖或补充其中的字段。"""
     common = {key: value for key, value in _COMMON.items() if key != "score"}
     return ExplorationConclusion.model_validate(common | changes)
+
+
+# 队列的基准数据（case-queue spec「队列的输入和决定」）
+
+STATUSES: Mapping[str, StockStatus] = {
+    "AAA": StockStatus.CANDIDATE,
+    "DDD": StockStatus.CANDIDATE,
+    "BBB": StockStatus.WATCH,
+    "CCC": StockStatus.HOLDING,
+    "EEE": StockStatus.HOLDING,
+}
+_NAMESPACE = UUID(int=0)
+
+
+def at(hour: int, minute: int = 0) -> datetime:
+    """触发时刻：2026-10-14（周三）的这个 UTC 时刻。"""
+    return datetime(2026, 10, 14, hour, minute, tzinfo=UTC)
+
+
+def case_id(name: str) -> UUID:
+    """按名字取固定的案件 ID，比如 case_id("CCC 的新闻事件")。"""
+    return uuid5(_NAMESPACE, f"case/{name}")
+
+
+# 触发：spec 场景里用到的几种
+
+
+def news(symbol: str) -> EventTrigger:
+    """新闻事件。"""
+    return EventTrigger(symbol, EventCategory.NEWS, holding_risk=False)
+
+
+def price_volume(symbol: str, holding_risk: bool = False) -> EventTrigger:
+    """价格和成交量异动事件；holding_risk 是标注为持仓风险级别。"""
+    return EventTrigger(symbol, EventCategory.PRICE_VOLUME, holding_risk=holding_risk)
+
+
+def holding_review_due(symbol: str) -> HeartbeatTrigger:
+    """持仓复查日到期。"""
+    return HeartbeatTrigger(CaseType.HOLDING_REVIEW, symbol)
+
+
+def watch_review_due(symbol: str) -> HeartbeatTrigger:
+    """关注复查日到期。"""
+    return HeartbeatTrigger(CaseType.WATCH_REVIEW, symbol)
+
+
+def new_candidate(symbol: str) -> HeartbeatTrigger:
+    """有新候选。"""
+    return HeartbeatTrigger(CaseType.CANDIDATE_EVALUATION, symbol)
+
+
+def follow_up(symbol: str) -> FollowUpTrigger:
+    """获批的跟进到了触发时间。"""
+    return FollowUpTrigger(symbol, "申请时写下的问题")
+
+
+def sell_fill(symbol: str) -> SellTrigger:
+    """卖出成交。"""
+    return SellTrigger(symbol)
+
+
+POOL_SHORT = HeartbeatTrigger(CaseType.EXPLORATION)  # 股票池候选不足
+WEEKLY = HeartbeatTrigger(CaseType.WEEKLY_RETROSPECTIVE)  # 每周固定时间
+
+
+def queued(name: str, trigger: Trigger, triggered_at: datetime) -> QueuedCase:
+    """排队的案件，案件 ID 按名字取。"""
+    return QueuedCase(case_id(name), trigger, triggered_at)
+
+
+def running(
+    name: str, case_type: CaseType, symbol: str | None, calling_models: bool = True
+) -> RunningCase:
+    """运行中的案件，案件 ID 按名字取；calling_models 为 False 表示已经过了调用模型的阶段。"""
+    return RunningCase(case_id(name), case_type, symbol, calling_models)
+
+
+# 方案：P-1 是 BBB 的买入方案，P-2 是 CCC 的加仓方案，P-3 是 CCC 的减仓方案
+P_1, P_2, P_3 = (uuid5(_NAMESPACE, f"plan/{name}") for name in ("P-1", "P-2", "P-3"))
+_PLANS: Mapping[UUID, tuple[str, TradeAction]] = {
+    P_1: ("BBB", TradeAction.BUY),
+    P_2: ("CCC", TradeAction.ADD),
+    P_3: ("CCC", TradeAction.REDUCE),
+}
+
+
+def plan(plan_id: UUID, stage: PlanStage) -> PendingPlan:
+    """基准方案 P-1 到 P-3 之一，处于 stage 阶段。"""
+    symbol, action = _PLANS[plan_id]
+    return PendingPlan(plan_id, symbol, action, stage)
+
+
+def statuses(**changes: StockStatus | None) -> Mapping[str, StockStatus]:
+    """基准的股票状态，changes 改变其中的股票；None 表示不在股票池也不是持仓。"""
+    merged = {**STATUSES, **changes}
+    return {symbol: status for symbol, status in merged.items() if status is not None}
+
+
+def snapshot(
+    queued: Iterable[QueuedCase] = (),
+    running: Iterable[RunningCase] = (),
+    plans: Iterable[PendingPlan] = (),
+    statuses: Mapping[str, StockStatus] = STATUSES,
+    exiting: Iterable[str] = (),
+    *,
+    degraded: bool = False,
+    general_budget_exhausted: bool = False,
+    exploration_budget_exhausted: bool = False,
+) -> QueueSnapshot:
+    """快照：默认是基准数据，没有排队和运行中的案件、没有方案、不降级、预算没用完。"""
+    return QueueSnapshot(
+        queued=tuple(queued),
+        running=tuple(running),
+        plans=tuple(plans),
+        statuses=statuses,
+        exiting=frozenset(exiting),
+        degraded=degraded,
+        general_budget_exhausted=general_budget_exhausted,
+        exploration_budget_exhausted=exploration_budget_exhausted,
+    )
