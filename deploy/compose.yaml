@@ -1,0 +1,34 @@
+# 状态库：Docker 里的 PostgreSQL 18，只在 127.0.0.1 上发布端口。
+# 由 tradingagentspro-db.service 在开机时启动（docker compose up --wait），见 deploy/README.md。
+# 密码在部署机器的 /etc/tradingagentspro/postgres.env 里（模板 deploy/postgres.env.example）。
+name: tradingagentspro
+
+services:
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    env_file: /etc/tradingagentspro/postgres.env
+    environment:
+      POSTGRES_USER: tradingagentspro
+      POSTGRES_DB: tradingagentspro
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      # 18 起数据目录是 /var/lib/postgresql/18/docker，卷挂在它的上一级
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      # 用 TCP 检查：第一次初始化时的临时服务器只听 Unix socket，初始化完成前不算就绪
+      test:
+        - CMD
+        - pg_isready
+        - --host=127.0.0.1
+        - --username=tradingagentspro
+        - --dbname=tradingagentspro
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    logging:
+      driver: journald
+
+volumes:
+  pgdata:

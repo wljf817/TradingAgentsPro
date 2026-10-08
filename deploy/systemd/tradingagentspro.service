@@ -1,0 +1,25 @@
+# 交易侧主程序（模拟盘）。复制到 /etc/systemd/system/，见 deploy/README.md。
+# 退出码 1（启动失败）或崩溃时 30 秒后重启；收到 SIGTERM 正常停止（退出码 0）时不重启。
+[Unit]
+Description=TradingAgentsPro 交易侧程序（模拟盘）
+Wants=network-online.target tradingagentspro-db.service
+After=network-online.target tradingagentspro-db.service
+# 启动失败时一直重试，不因次数多而放弃
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+User=tradingagentspro
+Group=tradingagentspro
+WorkingDirectory=/opt/tradingagentspro/app
+EnvironmentFile=/etc/tradingagentspro/tradingagentspro.env
+# moomoo SDK 往 stdout 写日志：不按块缓冲，journald 里的先后才对
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/tradingagentspro/app/.venv/bin/tradingagentspro run
+Restart=on-failure
+# 不短于 30 秒：每次启动都会向 Discord 重新注册 /plan
+RestartSec=30
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

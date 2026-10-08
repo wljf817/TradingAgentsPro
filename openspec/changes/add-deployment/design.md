@@ -172,11 +172,11 @@ volumes:
 - 项目名固定为 `tradingagentspro`：数据卷的名字（`tradingagentspro_pgdata`）不随目录名变
 - 端口只发布到 127.0.0.1：主程序和备份都在本机；Docker 发布的端口会绕过主机的防火墙规则，所以必须在这里限定地址
 - 数据卷挂在 `/var/lib/postgresql`：18 的镜像改了数据目录的位置，挂在旧路径上数据不在卷里
-- 用户：直接用镜像建的 `tradingagentspro`（超级用户）。它能建表、建 `dbos` schema，也能连 `postgres` 库（DBOS 的检查要用）。再建一个普通用户要多写初始化脚本和授权，数据库只在本机可达，省掉
+- 用户：直接用镜像建的 `tradingagentspro`（超级用户）。镜像的 `pg_hba.conf` 对容器里的 Unix socket 是 trust，经发布的端口从宿主机连接要密码（scram-sha-256，本机验证过）。它能建表、建 `dbos` schema，也能连 `postgres` 库（DBOS 的检查要用）。再建一个普通用户要多写初始化脚本和授权，数据库只在本机可达，省掉
 - 密码只放在 `/etc/tradingagentspro/postgres.env`，compose 文件里没有。用 `openssl rand -hex 24` 生成：只有 0-9a-f，写进数据库地址不用转义。它只在第一次初始化数据卷时生效
 - 健康检查用 TCP（`--host=127.0.0.1`）：第一次初始化时镜像先起一个只听 Unix socket 的临时服务器，用 socket 检查会在初始化完成之前就报健康
 - `restart: unless-stopped`：容器崩溃由 Docker 立即重启；人用 `systemctl stop` 停下的不重启
-- 日志用 journald 驱动：和其他服务的日志在一处，大小由 journald 限制；`docker compose logs` 照样能看
+- 日志用 journald 驱动：和其他服务的日志在一处，大小由 journald 限制；`docker compose logs` 照样能看。本机的 Docker（OrbStack）没有 journald，用这个驱动的容器起不来，所以本机验证 compose 时换成 json-file；部署机器上由 tasks 8.6 验证
 - `postgres:18` 跟随 18 的小版本；只有人运行 `docker compose pull` 时才会更新
 
 `deploy/systemd/tradingagentspro-db.service`：
@@ -332,7 +332,7 @@ done
 - 保留按文件名排序，不按修改时间：同一秒里建的文件（测试）也排得出先后
 - 备份目录作为参数传入：单元传 `/var/backups/tradingagentspro`，测试传临时目录
 
-`tradingagentspro-backup.service` 是 `Type=oneshot`，`ExecStart=/opt/tradingagentspro/app/deploy/backup.sh /var/backups/tradingagentspro`，不设 `User`（root）。`tradingagentspro-backup.timer`：
+`tradingagentspro-backup.service` 是 `Type=oneshot`，`ExecStart=/opt/tradingagentspro/app/deploy/backup.sh /var/backups/tradingagentspro`，不设 `User`（root），没有 `[Install]`：只由定时器启动。`tradingagentspro-backup.timer`：
 
 ```ini
 [Timer]
@@ -355,7 +355,7 @@ Persistent=true
 4. 以服务用户：`cd ~/app && uv sync --locked --no-dev`
 5. `deploy/` 没变：`sudo systemctl restart tradingagentspro`
 6. `deploy/` 变了：停主程序 → 重新复制单元、`daemon-reload` → `sudo systemctl restart tradingagentspro-db` → 启动主程序
-7. `journalctl -u tradingagentspro` 看到新的版本号和「启动完成」
+7. `git log -1` 和 GitHub 上 main 的最新提交一样，`journalctl -u tradingagentspro` 里有这次启动的「启动完成」（日志里的版本号是 `pyproject.toml` 的版本，不随提交变，不能用来判断）
 
 回滚：`git -C ~/app checkout <上一个提交>`、`uv sync --locked --no-dev`、重启；这次更新带有新的迁移时，旧代码不认识新的迁移版本、启动会失败，要先用第 1 步的备份恢复（D10）。回滚以后人修好 main 再更新回 main 分支（`git checkout main`）。
 
@@ -392,16 +392,20 @@ docker compose exec -T postgres createdb --username=tradingagentspro tradingagen
 
 1. 部署机器的前提：x86_64 的 Debian 12 或 13；时间同步（`timedatectl` 显示已同步）；按 Docker 官方文档装 Docker Engine 和 compose 插件；`git`、`telnet`；uv 装到 `/usr/local/bin`；journald 持久保存（Debian 12 要建 `/var/log/journal`）
 2. 服务用户和 Deploy key、克隆、`uv sync`
-3. 环境变量文件：建 `/etc/tradingagentspro`，复制三个模板，生成数据库密码，填值，设权限
-4. 安装单元（复制、`daemon-reload`、`systemd-analyze verify`）
-5. 状态库：`docker compose config --quiet`、`docker compose pull`、启用并启动 `tradingagentspro-db`，确认健康、只在 127.0.0.1 监听
-6. OpenD：下载 Linux 版命令行 OpenD（和 `uv.lock` 的 moomoo-api 同一版本），解压到 `~/opend`，在 `OpenD.xml` 设 `telnet_port`，第一次交互登录（记住密码、验证码），启用服务，确认登录成功、只在 127.0.0.1 的 11111 和 22222 监听
-7. Alpaca 模拟盘：重置为 2,000 美元、生成新 key（并说明为什么必须和状态库一起重置）
-8. Discord 机器人：确认 scope、机器人在频道里的权限、不需要特权 intent，以及本人在频道里有「使用应用命令」权限（默认就有）
-9. 启动主程序：启用并启动，日志里看到「启动完成」；在 Discord 里运行 `/plan close symbol:XYZ`，回复没有这只股票的持仓
+3. Alpaca 模拟盘重置为 2,000 美元、生成新 key（并说明为什么必须和状态库一起重置）；Discord 机器人：确认 scope、机器人在频道里的权限、不需要特权 intent，以及本人在频道里有「使用应用命令」权限（默认就有）。放在环境变量文件之前：新 key 要填进去
+4. 环境变量文件：建 `/etc/tradingagentspro`，复制三个模板，生成数据库密码，填值，设权限
+5. OpenD：下载 Linux 版命令行 OpenD（和 `uv.lock` 的 moomoo-api 同一版本），放到 `~/opend`，在 `OpenD.xml` 设 `telnet_port`，第一次交互登录（记住密码、验证码）。放在安装单元之前：`systemd-analyze verify` 要求 OpenD 的可执行文件已经在
+6. 安装单元（复制、`daemon-reload`、`systemd-analyze verify`）
+7. 状态库：`docker compose config --quiet`、`docker compose pull`、启用并启动 `tradingagentspro-db`，确认健康、只在 127.0.0.1 监听
+8. 启动 OpenD 的服务，逐项检查 Risks 里没有验证过的行为，确认登录成功、只在 127.0.0.1 的 11111 和 22222 监听；然后退出 Mac 上的 OpenD
+9. 启动主程序：日志里看到「启动完成」；在 Discord 里运行 `/plan close symbol:XYZ`，回复没有这只股票的持仓
 10. 备份：启用定时器，手动跑一次，做一次恢复演练
 11. 重启机器，确认全部自己起来
-12. 日常检查、更新、停止（本机冒烟测试前）、恢复备份、全部重置、OpenD 重新登录、运行中输入验证码、要回行情权限、升级 OpenD、更新 PostgreSQL 小版本
+12. Mac 上经隧道运行一次 OpenD 的冒烟测试
+
+之后是日常检查和查看日志、更新和回滚、停止主程序（本机冒烟测试前）、恢复备份、全部重置、OpenD（重新登录、运行中输入验证码、要回行情权限、升级）、更新 PostgreSQL 小版本、Mac 上开发。
+
+部署机器上看日志用 `sudo journalctl`：管理员不一定在能读系统日志的组里。
 
 部署说明里的命令写成「在哪台机器、以谁的身份」开头的代码块，避免在 Mac 上照着运行。
 
@@ -437,7 +441,7 @@ def read_env_template(name: str) -> list[tuple[str, str]]:
 
 - 单元文件不写续行（`\`），一行一个设置，解析就这么简单
 - `test_env_templates.py`：主程序模板的变量名等于 `VARIABLES`（顺序也一样）；三个模板的值都为空；单元里每个 `EnvironmentFile` 和 compose 的 `env_file` 都在 `/etc/tradingagentspro/` 下，并且 `deploy/<文件名>.example` 存在；OpenD 单元引用的 `${MOOMOO_LOGIN_ACCOUNT}` 在 OpenD 的模板里
-- `test_units.py`：主程序单元的重启设置（`Restart=on-failure`、`RestartSec` 不短于 30 秒、没有改变退出码含义的三个设置、`StartLimitIntervalSec=0`、`TimeoutStopSec=90`）、`ExecStart` 是 `.venv/bin/tradingagentspro run`、运行身份、`Wants`/`After` 有状态库单元而没有 OpenD 单元；状态库单元的 `up --wait` 和 300 秒；OpenD 单元的 `Restart=always`、30 秒、`-login_by_remember=1`、`-no_monitor=1`、`-auto_hold_quote_right=1`，`-api_ip`、`-api_port` 等于 `MoomooConfig()` 的默认值；定时器是每天 06:00 UTC、`Persistent=true`；备份单元以 root 运行、参数是 `/var/backups/tradingagentspro`；每个单元都有 `[Install]`
+- `test_units.py`：主程序单元的重启设置（`Restart=on-failure`、`RestartSec` 不短于 30 秒、没有改变退出码含义的三个设置、`StartLimitIntervalSec=0`、`TimeoutStopSec=90`）、`ExecStart` 是 `.venv/bin/tradingagentspro run`、运行身份、`Wants`/`After` 有状态库单元而没有 OpenD 单元；状态库单元的 `up --wait` 和 300 秒；OpenD 单元的 `Restart=always`、30 秒、`-login_by_remember=1`、`-no_monitor=1`、`-auto_hold_quote_right=1`，`-api_ip`、`-api_port` 等于 `MoomooConfig()` 的默认值；定时器是每天 06:00 UTC、`Persistent=true`；备份单元以 root 运行、参数是 `/var/backups/tradingagentspro`；主程序、状态库、OpenD 的单元挂在 `multi-user.target`，定时器挂在 `timers.target`，备份服务没有 `[Install]`（只由定时器启动，免得被单独启用成开机就备份）
 - `test_compose.py`：只有 `postgres` 一个服务；镜像是 `postgres:18`；每个端口都以 `127.0.0.1:` 开头；数据卷挂在 `/var/lib/postgresql`；`environment` 里没有 `POSTGRES_PASSWORD`；健康检查用 `pg_isready` 和 `--host=127.0.0.1`；`restart: unless-stopped`
 - `test_backup.py`：在临时目录里放一个假的 `docker`（sh 脚本：把参数记到文件里，按环境变量决定输出 `DUMP` 还是以 1 退出），放到 `PATH` 最前面，运行 `deploy/backup.sh <临时目录>`：
   - 成功：多一个文件名形如 `20261008T060000Z.dump`、内容是 `DUMP` 的文件；没有 `incomplete`；`docker` 收到的参数里有 `pg_dump` 和 `--format=custom`，没有 `--schema`、`-n`
@@ -446,7 +450,7 @@ def read_env_template(name: str) -> list[tuple[str, str]]:
   - `docker` 失败：脚本退出码不是 0；15 个旧备份都在；没有新的 `.dump`
   - 脚本要有可执行权限（单元直接运行它），直接运行就顺带检查了
 - compose 文件用 PyYAML 解析：它已经随 dbos 装着，测试直接 import 它，所以加进开发依赖写明；mypy strict 要类型标注，加 `types-pyyaml`
-- CI 不运行 `systemd-analyze verify` 和 `docker compose config`：前者要求单元里的路径和用户在 CI 机器上存在，后者要求 `/etc/tradingagentspro/postgres.env` 存在，都要为 CI 造一套假的环境；这两条命令放进部署说明，在部署机器上运行
+- CI 不运行 `systemd-analyze verify` 和 `docker compose config`：前者要求单元里的路径和用户在 CI 机器上存在，后者要求 `/etc/tradingagentspro/postgres.env` 存在，都要为 CI 造一套假的环境；这两条命令放进部署说明，在部署机器上运行。实现时在本机的临时 Debian 13 容器里用占位文件跑过一次 `systemd-analyze verify`（systemd 257），没有报错
 - 进程的测试时区是 UTC+14：备份脚本用 `date -u`，不受影响
 
 ## Risks / Trade-offs

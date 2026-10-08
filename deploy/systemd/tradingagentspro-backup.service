@@ -1,0 +1,9 @@
+# 备份状态库：由 tradingagentspro-backup.timer 每天启动一次，也可以手动 systemctl start。
+# 不单独启用（没有 [Install]），只由定时器启动。
+# 要用 docker，以 root 运行。复制到 /etc/systemd/system/，见 deploy/README.md。
+[Unit]
+Description=TradingAgentsPro 状态库备份
+
+[Service]
+Type=oneshot
+ExecStart=/opt/tradingagentspro/app/deploy/backup.sh /var/backups/tradingagentspro

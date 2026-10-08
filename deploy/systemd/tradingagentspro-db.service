@@ -1,0 +1,18 @@
+# 状态库：启动 deploy/compose.yaml 里的 PostgreSQL，等到健康检查通过才算启动完成。
+# 主程序排在它后面。容器崩溃由 Docker 的重启策略处理。复制到 /etc/systemd/system/，见 deploy/README.md。
+[Unit]
+Description=TradingAgentsPro 状态库（Docker 里的 PostgreSQL 18）
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/tradingagentspro/app/deploy
+ExecStart=/usr/bin/docker compose up --wait
+ExecStop=/usr/bin/docker compose stop
+# 等状态库就绪的上限
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
