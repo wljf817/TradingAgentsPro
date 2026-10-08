@@ -15,14 +15,14 @@
 
 - [ ] 2.1 先写测试 `tests/contracts/test_thesis.py`，增加 spec「投资论点的格式」的四个场景，基准投资论点和 spec 一致，格式错误断言抛出 `ValidationError`。验证：运行这个测试文件，确认新测试因为 `InvestmentThesis` 不存在而失败，原有的关注论点测试不受影响
 - [ ] 2.2 新增 `contracts/agent.py`（`SubAgent`）、`contracts/event.py`（`EventCategory`）、`contracts/case.py`（`CaseType`），在 `contracts/thesis.py` 增加 `InvestmentThesis`，写法见 design D1、D2。验证：2.1 的测试通过；`uv run mypy`、`uv run lint-imports`、`uv run pytest tests/architecture` 通过
-- [ ] 2.3 在 `contracts/trade_plan.py` 把 `TradePlan` 按动作检查字段的规则抽成 `PlanFields` 和 `check_plan_fields`（design D4），`TradePlan` 的 validator 改为调用它，错误信息不变。验证：`tests/contracts/test_trade_plan.py` 不改、全部通过；`uv run pytest tests/modules/risk tests/modules/emergency tests/modules/execution` 通过；`uv run mypy` 通过
+- [ ] 2.3 在 `contracts/trade_plan.py` 把 `TradePlan` 按动作检查字段的规则抽成 `PlanFields` 和 `check_plan_fields`，把限价和止损价的最小变动单位检查也抽成函数（design D4），`TradePlan` 的 validator 改为调用它们，错误信息不变。验证：`tests/contracts/test_trade_plan.py` 不改、全部通过；`uv run pytest tests/modules/risk tests/modules/emergency tests/modules/execution` 通过；`uv run mypy` 通过
 
 ## 3. contracts：结论
 
 - [ ] 3.1 先写测试 `tests/contracts/test_conclusion.py`，每个场景一个测试，基准数据和 spec 一致：
   - 「结论的公共部分」三个场景
   - 「持仓的结论」八个场景，「关注的结论」四个场景，「候选的结论」三个场景，「寻股的结论」四个场景
-  - 「PM 写的交易方案」五个场景，其中「变成交易方案」断言得到的 `TradePlan` 和逐字段构造的相等
+  - 「PM 写的交易方案」五个场景（「按动作检查字段」包括最小变动单位），其中「变成交易方案」断言得到的 `TradePlan` 和逐字段构造的相等
   - 「跟进申请的格式」四个场景
   - 每种结论的 JSON schema 里，决定只列出这个状态允许的值
 
