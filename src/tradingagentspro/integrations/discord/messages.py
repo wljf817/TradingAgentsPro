@@ -18,7 +18,8 @@ from tradingagentspro.modules.notification import ConfirmationOutcome, Confirmat
 # Discord 一条消息最多 2000 字
 MAX_CONTENT = 2000
 
-_ACTIONS = {
+# 动作的中文名，确认消息和 /plan 的回复共用
+ACTION_NAMES = {
     TradeAction.BUY: "买入",
     TradeAction.ADD: "加仓",
     TradeAction.REDUCE: "减仓",
@@ -67,7 +68,7 @@ def confirmation_content(request: ConfirmationRequest, user_id: int) -> str:
     """确认消息的正文，见 spec「确认消息」的表。"""
     plan, decision = request.plan, request.decision
     quantity = decision.quantity
-    lines = [f"<@{user_id}> 请确认：{_ACTIONS[plan.action]} {plan.symbol} {quantity} 股"]
+    lines = [f"<@{user_id}> 请确认：{ACTION_NAMES[plan.action]} {plan.symbol} {quantity} 股"]
 
     terms: list[str] = []
     if plan.order_type is OrderType.LIMIT and plan.limit_price is not None:

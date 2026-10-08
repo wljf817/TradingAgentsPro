@@ -21,9 +21,17 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
+from tests.fakes.plan_intake import FakePlanIntake
 from tradingagentspro.contracts.risk import RiskDecision, RiskOutcome
 from tradingagentspro.contracts.trade_plan import OrderType, TradeAction, TradePlan
-from tradingagentspro.integrations.discord import DiscordConfig, DiscordGateway, DiscordNotifier
+from tradingagentspro.integrations.discord import (
+    DiscordConfig,
+    DiscordGateway,
+    DiscordNotifier,
+    PlanCommand,
+)
+from tradingagentspro.integrations.nyse_calendar import load_nyse_calendar
+from tradingagentspro.integrations.random_ids import RandomIdGenerator
 from tradingagentspro.integrations.system_clock import SystemClock
 from tradingagentspro.modules.notification import (
     ConfirmationOutcome,
@@ -49,6 +57,14 @@ pytestmark = [
     pytest.mark.discord_bot,
     pytest.mark.skipif(CONFIG is None, reason="没有 Discord 机器人的 4 个环境变量"),
 ]
+
+
+def _gateway(config: DiscordConfig) -> DiscordGateway:
+    """真实的 Gateway；/plan 交给替身提交接口，这组测试不运行 /plan。"""
+    today = CLOCK.now().date()
+    calendar = load_nyse_calendar(today - timedelta(days=7), today + timedelta(days=60))
+    plans = PlanCommand(FakePlanIntake(), RandomIdGenerator(), calendar, config)
+    return DiscordGateway(config, plans)
 
 
 class Decisions:
@@ -91,7 +107,7 @@ def logs() -> Iterator[_Collector]:
 def bot(logs: _Collector) -> Iterator[tuple[DiscordNotifier, Decisions]]:
     assert CONFIG is not None
     decisions = Decisions()
-    notifier = DiscordNotifier(DiscordGateway(CONFIG), CONFIG, CLOCK, decisions)
+    notifier = DiscordNotifier(_gateway(CONFIG), CONFIG, CLOCK, decisions)
     notifier.start()
     yield notifier, decisions
     notifier.close()
@@ -159,7 +175,7 @@ def test_invalid_token(logs: _Collector) -> None:
     """spec「token 无效」：启动失败，原因是登录失败。"""
     assert CONFIG is not None
     config = CONFIG.model_copy(update={"token": SecretStr("invalid-token")})
-    notifier = DiscordNotifier(DiscordGateway(config), config, CLOCK, Decisions())
+    notifier = DiscordNotifier(_gateway(config), config, CLOCK, Decisions())
 
     with pytest.raises(NotificationUnavailableError, match="登录失败"):
         notifier.start()
@@ -170,7 +186,7 @@ def test_wrong_channel(logs: _Collector) -> None:
     """spec「频道不对」：把频道 ID 换成用户 ID，启动失败，错误信息里有这个 ID。"""
     assert CONFIG is not None
     config = CONFIG.model_copy(update={"channel_id": CONFIG.user_id})
-    notifier = DiscordNotifier(DiscordGateway(config), config, CLOCK, Decisions())
+    notifier = DiscordNotifier(_gateway(config), config, CLOCK, Decisions())
 
     with pytest.raises(NotificationUnavailableError, match=str(CONFIG.user_id)):
         notifier.start()

@@ -1,9 +1,11 @@
-"""通知模块需要的外部接口：通知通道，以及人按下按钮以后的回调。"""
+"""通知模块需要的外部接口：通知通道，人按下按钮以后的回调，以及人手工录入的方案交给谁。"""
 
 from collections.abc import Callable
 from typing import Protocol
 from uuid import UUID
 
+from tradingagentspro.contracts.risk import RiskDecision
+from tradingagentspro.contracts.trade_plan import TradePlan
 from tradingagentspro.modules.notification.domain.confirmation import (
     ConfirmationOutcome,
     ConfirmationRequest,
@@ -36,4 +38,23 @@ class Notifier(Protocol):
 
     def finish_confirmation(self, message_id: str, outcome: ConfirmationOutcome) -> None:
         """把确认消息改为这个结果、去掉按钮；消息已被删掉时什么也不做。"""
+        ...
+
+
+class PlanIntake(Protocol):
+    """人手工录入的方案交给谁：由 bootstrap 实现，通知通道调用。见 manual-plans spec「提交接口」。
+
+    两个方法都在通知通道的工作线程里调用，可以阻塞。
+    """
+
+    def held_sector(self, symbol: str) -> str | None:
+        """这只股票持仓的板块；没有持仓时为 None。减仓和清仓的方案用它填板块。"""
+        ...
+
+    def submit(self, plan: TradePlan) -> RiskDecision:
+        """提交方案，风控得出结果就返回，不等人工确认。
+
+        通过或调整的方案由实现方请求人工确认。抛错表示没有拿到风控结果：方案可能已经
+        提交，也可能没有。
+        """
         ...

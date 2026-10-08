@@ -60,7 +60,7 @@ add-alpaca-paper-broker 还留下一条：方案的限价或止损价不符合�
   - `contracts/trade_plan.py`：限价和止损价的最小变动单位
   - `modules/notification/ports.py`、`__init__.py`：新增并导出 `PlanIntake`
   - `integrations/discord/`：新增 `plans.py`（解析和回复的文字，不做 I/O）、`commands.py`（`PlanCommand`）；`config.py` 加提交超时；`gateway.py` 注册 `/plan` 并转交给 `PlanCommand`，`DiscordGateway` 多一个参数；`__init__.py` 导出 `PlanCommand`。`DiscordNotifier` 和按钮的处理不变
-- **测试**：`tests/fakes/ids.py`、`tests/fakes/plan_intake.py`；`tests/contracts/test_trade_plan.py` 加最小变动单位；`tests/integrations/test_random_ids.py`；`tests/integrations/discord/` 加 `test_plans.py`、`test_commands.py` 和替身 `calls.py`，`test_config.py`、`test_gateway.py` 加用例；冒烟测试 `test_plan_smoke.py`，`test_bot_smoke.py` 跟着改 `DiscordGateway` 的构造
+- **测试**：`tests/fakes/ids.py`、`tests/fakes/plan_intake.py`，`tests/modules/notification/test_ports.py` 检查替身满足 `PlanIntake`；`tests/contracts/test_trade_plan.py` 加最小变动单位；`tests/integrations/test_random_ids.py`；`tests/integrations/discord/` 加 `test_plans.py`、`test_commands.py` 和替身 `calls.py`，`test_config.py`、`test_gateway.py` 加用例；冒烟测试 `test_plan_smoke.py`，`test_bot_smoke.py` 跟着改 `DiscordGateway` 的构造
 - **依赖**：无。斜杠命令用 discord.py 自带的 `app_commands`
 - **配置**：`pyproject.toml` 的 Ruff 只放行 `integrations/random_ids.py` 调用 `uuid.uuid4`，和 `system_clock.py` 读系统时间一样
 - **文档**：README 的冒烟测试命令写明要在 Discord 里运行 `/plan`

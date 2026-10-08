@@ -209,7 +209,9 @@ class PlanIntake(Protocol):
 ### D7 最小变动单位放在 TradePlan
 
 ```python
-_TICKS = ((Decimal(1), Decimal("0.01")), (Decimal(0), Decimal("0.0001")))
+_ONE_DOLLAR = Decimal(1)
+_CENT = Decimal("0.01")
+_SUB_DOLLAR_TICK = Decimal("0.0001")
 _PRICE_NAMES = {"limit_price": "限价", "stop_price": "止损价"}
 
 
