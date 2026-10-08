@@ -649,17 +649,25 @@ def test_new_case_voids_a_plan_awaiting_confirmation() -> None:
 
 
 def test_confirmed_opening_plan_is_voided_too() -> None:
-    """spec「已经确认的开仓方案也作废」：BBB 没有运行中的案件。"""
-    decision = queue_decision(
+    """spec「已经确认的开仓方案也作废」：BBB 的关注股事件因方案被作废结束以后才启动。"""
+    queue = [queued("BBB 的关注复查日到期", watch_review_due("BBB"), at(20))]
+
+    awaiting_order = queue_decision(
         snapshot(
-            [queued("BBB 的关注复查日到期", watch_review_due("BBB"), at(20))],
-            plans=[plan(P_1, AWAITING_ORDER)],
+            queue,
+            [running("BBB 的关注股事件", CaseType.WATCH_EVENT, "BBB", calling_models=False)],
+            [plan(P_1, AWAITING_ORDER)],
         ),
         DEFAULT,
     )
+    case_over = queue_decision(snapshot(queue), DEFAULT)
 
-    assert decision.void == (P_1,)
-    assert _started(decision) == [(case_id("BBB 的关注复查日到期"), CaseType.WATCH_REVIEW)]
+    assert awaiting_order == QueueDecision(start=(), drop=(), void=(P_1,))
+    assert case_over == QueueDecision(
+        start=(CaseStart(case_id("BBB 的关注复查日到期"), _definition(watch_review_due("BBB"))),),
+        drop=(),
+        void=(),
+    )
 
 
 def test_plan_reaching_confirmation_with_a_case_already_queued() -> None:
@@ -720,22 +728,27 @@ def test_queued_retrospective_alone_does_not_void() -> None:
 
 
 def test_exit_plans_are_not_voided() -> None:
-    """spec「退出类方案不作废」：P-3 确认、进入等下单，CCC 的持仓事件结束以后才启动。"""
+    """spec「退出类方案不作废」：P-3 确认、进入等下单时 CCC 的持仓事件还在运行，订单提交、
+    案件结束以后才启动。
+    """
     queue = [queued("CCC 的持仓复查日到期", holding_review_due("CCC"), at(20))]
+    ccc_event = running("CCC 的持仓事件", CaseType.HOLDING_EVENT, "CCC", calling_models=False)
 
     awaiting_confirmation = queue_decision(
-        snapshot(
-            queue,
-            [running("CCC 的持仓事件", CaseType.HOLDING_EVENT, "CCC", calling_models=False)],
-            [plan(P_3, AWAITING_CONFIRMATION)],
-        ),
-        DEFAULT,
+        snapshot(queue, [ccc_event], [plan(P_3, AWAITING_CONFIRMATION)]), DEFAULT
     )
-    case_over = queue_decision(snapshot(queue, plans=[plan(P_3, AWAITING_ORDER)]), DEFAULT)
+    awaiting_order = queue_decision(
+        snapshot(queue, [ccc_event], [plan(P_3, AWAITING_ORDER)]), DEFAULT
+    )
+    case_over = queue_decision(snapshot(queue), DEFAULT)
 
     assert awaiting_confirmation == NOTHING
-    assert case_over.void == ()
-    assert _started(case_over) == [(case_id("CCC 的持仓复查日到期"), CaseType.HOLDING_REVIEW)]
+    assert awaiting_order == NOTHING
+    assert case_over == QueueDecision(
+        start=(CaseStart(case_id("CCC 的持仓复查日到期"), _definition(holding_review_due("CCC"))),),
+        drop=(),
+        void=(),
+    )
 
 
 def test_case_that_cannot_start_yet_still_voids() -> None:
@@ -743,7 +756,8 @@ def test_case_that_cannot_start_yet_still_voids() -> None:
     decision = queue_decision(
         snapshot(
             [queued("BBB 的关注复查日到期", watch_review_due("BBB"), at(20))],
-            plans=[plan(P_1, AWAITING_ORDER)],
+            [running("BBB 的关注股事件", CaseType.WATCH_EVENT, "BBB", calling_models=False)],
+            [plan(P_1, AWAITING_ORDER)],
             general_budget_exhausted=True,
         ),
         DEFAULT,
@@ -792,7 +806,8 @@ def test_drop_and_void_go_on_while_degraded() -> None:
                 queued("BBB 的新闻事件", news("BBB"), at(14)),
                 queued("CCC 的持仓复查日到期", holding_review_due("CCC"), at(20)),
             ],
-            plans=[plan(P_1, AWAITING_ORDER)],
+            [running("BBB 的关注股事件", CaseType.WATCH_EVENT, "BBB", calling_models=False)],
+            [plan(P_1, AWAITING_ORDER)],
             statuses=statuses(CCC=CANDIDATE),
             degraded=True,
         ),
@@ -821,30 +836,42 @@ def test_emergency_aborts_the_running_case_and_voids_its_plan() -> None:
 
 
 def test_emergency_voids_plans_of_every_action_and_stage() -> None:
-    """spec「开仓类和退出类、各个阶段的方案都作废」：P-2 所属的案件已经结束。"""
-    decision = emergency_decision(
+    """spec「开仓类和退出类、各个阶段的方案都作废」：减仓方案在审核，加仓方案等下单。"""
+    in_review = emergency_decision(
         snapshot(
             running=[running("CCC 的持仓复查", CaseType.HOLDING_REVIEW, "CCC")],
-            plans=[plan(P_3, REVIEW), plan(P_2, AWAITING_ORDER)],
+            plans=[plan(P_3, REVIEW)],
         ),
         "CCC",
     )
-
-    assert decision.abort == case_id("CCC 的持仓复查")
-    assert sorted(decision.void) == sorted([P_2, P_3])
-
-
-def test_emergency_does_not_abort_a_retrospective() -> None:
-    """spec「复盘案件不中止」。"""
-    decision = emergency_decision(
+    awaiting_order = emergency_decision(
         snapshot(
-            running=[running("CCC 的卖出复盘", CaseType.SELL_RETROSPECTIVE, "CCC")],
+            running=[
+                running("CCC 的持仓事件", CaseType.HOLDING_EVENT, "CCC", calling_models=False)
+            ],
             plans=[plan(P_2, AWAITING_ORDER)],
         ),
         "CCC",
     )
 
-    assert decision == EmergencyDecision(abort=None, void=(P_2,))
+    assert in_review == EmergencyDecision(abort=case_id("CCC 的持仓复查"), void=(P_3,))
+    assert awaiting_order == EmergencyDecision(abort=case_id("CCC 的持仓事件"), void=(P_2,))
+
+
+def test_emergency_does_not_abort_a_retrospective() -> None:
+    """spec「复盘案件不中止」：中止 CCC 的持仓事件，CCC 的卖出复盘照常运行。"""
+    decision = emergency_decision(
+        snapshot(
+            running=[
+                running("CCC 的卖出复盘", CaseType.SELL_RETROSPECTIVE, "CCC"),
+                running("CCC 的持仓事件", CaseType.HOLDING_EVENT, "CCC", calling_models=False),
+            ],
+            plans=[plan(P_2, AWAITING_ORDER)],
+        ),
+        "CCC",
+    )
+
+    assert decision == EmergencyDecision(abort=case_id("CCC 的持仓事件"), void=(P_2,))
 
 
 def test_emergency_leaves_queued_cases_and_other_stocks() -> None:

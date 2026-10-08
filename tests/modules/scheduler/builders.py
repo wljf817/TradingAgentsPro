@@ -1,6 +1,8 @@
-"""调度器测试的数据：case-types spec「触发」和 case-queue spec「队列的输入和决定」里的基准数据。"""
+"""调度器测试的数据：case-types spec「触发」、case-queue spec「队列的输入和决定」和 case-stages spec
+「案件的状态」里的基准数据。
+"""
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
@@ -19,6 +21,8 @@ from tradingagentspro.contracts.conclusion import (
     WatchConclusion,
 )
 from tradingagentspro.contracts.event import EventCategory
+from tradingagentspro.contracts.review import ResponseDecision, Verdict
+from tradingagentspro.contracts.risk import RiskOutcome
 from tradingagentspro.contracts.stock_pool import StockStatus
 from tradingagentspro.contracts.thesis import (
     Catalyst,
@@ -32,6 +36,8 @@ from tradingagentspro.contracts.thesis import (
 )
 from tradingagentspro.contracts.trade_plan import OrderType, TradeAction
 from tradingagentspro.modules.scheduler import (
+    CaseStage,
+    CaseState,
     EventTrigger,
     FollowUpTrigger,
     HeartbeatTrigger,
@@ -40,8 +46,10 @@ from tradingagentspro.modules.scheduler import (
     QueuedCase,
     QueueSnapshot,
     RunningCase,
+    SchedulerConfig,
     SellTrigger,
     Trigger,
+    new_case,
 )
 
 INVESTMENT_THESIS = InvestmentThesis(
@@ -235,3 +243,93 @@ def snapshot(
         general_budget_exhausted=general_budget_exhausted,
         exploration_budget_exhausted=exploration_budget_exhausted,
     )
+
+
+# 案件阶段的基准数据（case-stages spec「案件的状态」）：开仓案件是 BBB（关注）的关注股事件，
+# 结论是买入；退出案件是 CCC（持仓）的持仓事件，结论是减仓
+
+type CaseEvent = Callable[[CaseState], CaseState]
+DEFAULT_CONFIG = SchedulerConfig()
+
+
+def opening_case() -> CaseState:
+    """开仓案件开始：在唤醒 PM。"""
+    return new_case(CaseType.WATCH_EVENT)
+
+
+def exit_case() -> CaseState:
+    """退出案件开始：在唤醒 PM。"""
+    return new_case(CaseType.HOLDING_EVENT)
+
+
+def receive(state: CaseState, *events: CaseEvent) -> list[CaseState]:
+    """依次把事件交给案件状态，返回每个事件之后的状态，对应场景里的"依次收到"。"""
+    states = []
+    for case_event in events:
+        state = case_event(state)
+        states.append(state)
+    return states
+
+
+def after(state: CaseState, *events: CaseEvent) -> CaseState:
+    """依次收到这些事件以后的状态。"""
+    for case_event in events:
+        state = case_event(state)
+    return state
+
+
+# 事件：不带参数的事件直接用 CaseState 的方法，比如 CaseState.confirm
+
+
+def rejected(config: SchedulerConfig = DEFAULT_CONFIG) -> CaseEvent:
+    """结论校验不通过。"""
+    return lambda state: state.reject_conclusion(config)
+
+
+def accepted(action: TradeAction | None) -> CaseEvent:
+    """结论通过；action 是结论里交易方案的动作，没有方案时为 None。"""
+    return lambda state: state.accept_conclusion(action)
+
+
+def critic(verdict: Verdict, config: SchedulerConfig = DEFAULT_CONFIG) -> CaseEvent:
+    """Critic 给出结论。"""
+    return lambda state: state.review(verdict, config)
+
+
+def pm(decision: ResponseDecision) -> CaseEvent:
+    """PM 回应质询。"""
+    return lambda state: state.respond(decision)
+
+
+def risk(outcome: RiskOutcome) -> CaseEvent:
+    """风控给出结果。"""
+    return lambda state: state.risk_checked(outcome)
+
+
+def _at(state: CaseState, action: TradeAction, stage: CaseStage) -> CaseState:
+    """沿"结论通过、Critic 通过、风控通过、已确认"把案件推到 stage；PM 回应是 Critic 质询一次
+    以后。
+    """
+    verdict = Verdict.CHALLENGE if stage is CaseStage.PM_RESPONSE else Verdict.APPROVE
+    steps: tuple[CaseEvent, ...] = (
+        accepted(action),
+        critic(verdict),
+        risk(RiskOutcome.PASSED),
+        CaseState.confirm,
+    )
+    for step in steps:
+        if state.stage is stage:
+            break
+        state = step(state)
+    assert state.stage is stage  # 退出案件不会进入 PM 回应
+    return state
+
+
+def opening_at(stage: CaseStage) -> CaseState:
+    """开仓案件（结论是买入）推到 stage；在 Critic 审核时还没有被质询过。"""
+    return _at(opening_case(), TradeAction.BUY, stage)
+
+
+def exit_at(stage: CaseStage) -> CaseState:
+    """退出案件（结论是减仓）推到 stage。"""
+    return _at(exit_case(), TradeAction.REDUCE, stage)

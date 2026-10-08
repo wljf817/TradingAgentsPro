@@ -1,6 +1,8 @@
-"""案件类型：开始运行时由调度器确定，固定问题、结论种类和优先级，见 case-types spec「案件类型」。
+"""案件类型和结束原因。
 
-案件记录、按类型评估和任务派发都要用，所以放在 contracts。
+案件类型在开始运行时由调度器确定，固定问题、结论种类和优先级，见 case-types spec「案件类型」；
+案件记录、按类型评估和任务派发都要用。结束原因由调度器的案件状态给出，见 case-stages spec
+「结束原因」；案件记录、收盘检查和复盘的反事实评估都要读。所以都放在 contracts。
 """
 
 from enum import StrEnum
@@ -23,3 +25,21 @@ class CaseType(StrEnum):
     EXPLORATION = "exploration"  # 寻股
     WEEKLY_RETROSPECTIVE = "weekly_retrospective"  # 每周复盘
     SELL_RETROSPECTIVE = "sell_retrospective"  # 卖出复盘
+
+
+class CaseEndReason(StrEnum):
+    """案件的结束原因，见 case-stages spec「结束原因」。"""
+
+    NO_PLAN = "no_plan"  # 结论没有交易方案
+    ORDER_SUBMITTED = "order_submitted"  # 订单已提交
+    VETOED = "vetoed"  # Critic 否决开仓类方案
+    WITHDRAWN = "withdrawn"  # PM 撤回方案
+    RISK_REJECTED = "risk_rejected"  # 风控拒绝
+    HUMAN_REJECTED = "human_rejected"  # 人工拒绝
+    CONFIRMATION_TIMED_OUT = "confirmation_timed_out"  # 确认超时
+    RECHECK_VOIDED = "recheck_voided"  # 下单前再校验作废
+    PLAN_VOIDED = "plan_voided"  # 方案被作废：这只股票有新案件排队
+    EMERGENCY_ABORTED = "emergency_aborted"  # 紧急退出中止
+    INVALID_CONCLUSION = "invalid_conclusion"  # 结论重交用完仍不通过
+    FAILED = "failed"  # 系统故障
+    RETROSPECTIVE_DONE = "retrospective_done"  # 复盘完成
