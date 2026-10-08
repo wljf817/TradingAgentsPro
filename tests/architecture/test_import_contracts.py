@@ -5,6 +5,7 @@
 """
 
 import json
+import logging
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
@@ -108,9 +109,23 @@ def _write_contracts_config(path: Path) -> Path:
 
 
 def _run_contract(config_path: Path, contract_id: str) -> int:
-    return lint_imports(
-        config_filename=str(config_path), limit_to_contracts=(contract_id,), no_cache=True
-    )
+    """对样例包运行一个契约。
+
+    lint_imports 用 logging.config.dictConfig 配置自己的日志，默认会停用已经存在的全部 logger；
+    跑完以后恢复它们，免得之后的测试收不到项目代码写的日志。
+    """
+    enabled = [
+        logger
+        for logger in logging.root.manager.loggerDict.values()
+        if isinstance(logger, logging.Logger) and not logger.disabled
+    ]
+    try:
+        return lint_imports(
+            config_filename=str(config_path), limit_to_contracts=(contract_id,), no_cache=True
+        )
+    finally:
+        for logger in enabled:
+            logger.disabled = False
 
 
 def test_compliant_sample_keeps_every_contract(

@@ -53,6 +53,7 @@ uv run lint-imports          # 依赖方向检查
 uv run pytest                # 测试
 uv run pytest -m alpaca_paper  # 连 Alpaca 模拟盘的冒烟测试，需要 APCA_API_KEY_ID、APCA_API_SECRET_KEY
 uv run pytest -m moomoo_opend  # 连本机 OpenD 的行情冒烟测试，需要先开着 OpenD 并登录
+uv run pytest -m discord_bot   # 连真实 Discord 的冒烟测试，需要 DISCORD_BOT_TOKEN、DISCORD_GUILD_ID、DISCORD_CHANNEL_ID、DISCORD_USER_ID；运行中要在 3 分钟内按消息上的按钮
 ```
 
 连数据库的测试会用 testcontainers 启动一个临时的 PostgreSQL 18 容器，用完即删，所以跑完整的测试要开着 Docker（比如 OrbStack 或 Docker Desktop）。第一次运行会先下载镜像。不连数据库的测试不需要 Docker。
