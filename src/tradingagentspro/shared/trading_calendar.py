@@ -90,6 +90,14 @@ class TradingCalendar:
         self._check_moment(moment)
         return self._at(bisect_right(self._closes, moment) - 1)
 
+    def session_closing_after(self, moment: datetime) -> TradingSession:
+        """moment 归属的交易日：收盘时间晚于 moment 的第一个时段。
+
+        盘前和盘中是当天；收盘时刻或之后、休市日是之后的第一个交易日。
+        """
+        self._check_moment(moment)
+        return self._at(bisect_right(self._closes, moment))
+
     def _check_moment(self, moment: datetime) -> None:
         if not self._opens[0] <= moment < self._closes[-1]:
             raise CalendarRangeError(

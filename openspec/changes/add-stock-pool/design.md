@@ -225,7 +225,7 @@ class PoolEntry:
 
 - 状态变化写成返回新记录的方法，对应 spec「状态变化」表的每一行：`promoted(thesis)`、`kept(expires_at)`、`demoted(expires_at)`、`bought()`、`closed_to_candidate(expires_at)`、`closed_to_watch(thesis)`、`scored(score, at)`、`removed(kind, at, reason)`
 - 不变量由这些方法维持：候选有过期时间、没有关注论点；关注有关注论点、没有过期时间；持仓两者都没有
-- 代码发起的变化在方法里检查状态，不对就抛 `ValueError`：`bought` 要求在池子里，`closed_*` 要求持仓。PM 发起的变化由 D4 的检查先给出拒绝原因，方法本身不再检查
+- 代码发起的变化在方法里检查状态，不对就抛 `ValueError`：`bought` 要求在池子里，`closed_*` 和清仓后移出（`removed(CLOSED, ...)`）要求池子里的持仓。PM 发起的变化由 D4 的检查先给出拒绝原因，方法本身不再检查
 - 记分要求 -2 到 +2 的整数，否则抛 `ValueError`。完整的评分格式在「信号格式」，这里只存这个数
 - 移出以后记录保留，带着移出的时刻和原因，用来判断冷却期；重新加入时换成一条新记录，旧的评分、复查时间都不带过来
 - 过期时间存时刻（收盘时刻），不存日期：收盘检查在收盘后运行，这时"归属的交易日"已经是下一天；比较时刻就不会差一天
@@ -257,7 +257,7 @@ class Rejection(StrEnum):
 - `add_rejection`：加入的八项
 - `remove_rejection`：删除的四项
 - `status_rejection(entry, required)`：升级、保持要求候选，降为候选要求关注；不在池子里时是"不在池子里"
-- 升级的关注名额在 `status_rejection` 之后检查
+- `promote_rejection`：升级的两项，先按 `status_rejection` 要求候选，再检查关注名额
 
 PM 和手动发起的操作返回 `PoolEntry | Rejection`：通过时是新的记录，不通过时是原因，不改变任何记录。
 
@@ -412,7 +412,7 @@ class StockPoolConfig(BaseModel):
 
 ### D9 包根导出
 
-`StockPoolConfig`、`StockPoolService`、`StockPoolStore`、`PoolEntry`、`PoolSource`、`Removal`、`RemovalKind`、`Rejection`，以及 domain 的 `candidate_expiry`、`cooling_down`、`changes_since`、`add_rejection`、`remove_rejection`、`status_rejection`。纯函数导出是为了测试只从包根 import。
+`StockPoolConfig`、`StockPoolService`、`StockPoolStore`、`PoolEntry`、`PoolSource`、`Removal`、`RemovalKind`、`Rejection`，以及 domain 的 `candidate_expiry`、`cooling_down`、`changes_since`、`add_rejection`、`remove_rejection`、`status_rejection`、`promote_rejection`。纯函数导出是为了测试只从包根 import。
 
 domain 只用 `dataclasses`、`datetime`、`decimal`、`enum`、`typing`、`collections.abc`，都在纯区域白名单里，不改 `tests/architecture/rules.py`。
 

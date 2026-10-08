@@ -233,6 +233,55 @@ def test_any_moment_is_in_a_session_or_between_adjacent_sessions(
         assert before.close <= moment < after.open
 
 
+# 时刻归属的交易日
+
+
+def test_before_the_open_and_in_session_belong_to_the_same_day() -> None:
+    """spec「盘前和盘中归属当天」。"""
+    day = date(2026, 10, 14)
+
+    assert NYSE.session_closing_after(_utc(day, 12)).day == day
+    assert NYSE.session_closing_after(_utc(day, 20) - timedelta(seconds=1)).day == day
+
+
+def test_at_or_after_the_close_belongs_to_the_next_trading_day() -> None:
+    """spec「收盘时刻或之后归属下一个交易日」。"""
+    assert NYSE.session_closing_after(_utc(date(2026, 10, 14), 20)).day == date(2026, 10, 15)
+    # 美东时间 2026-10-14 晚上。
+    assert NYSE.session_closing_after(_utc(date(2026, 10, 15), 3)).day == date(2026, 10, 15)
+    # 感恩节次日提前收盘的收盘时刻。
+    assert NYSE.session_closing_after(_utc(date(2026, 11, 27), 18)).day == date(2026, 11, 30)
+
+
+def test_a_closed_day_belongs_to_the_next_trading_day() -> None:
+    """spec「休市日归属之后的第一个交易日」：周六和感恩节。"""
+    assert NYSE.session_closing_after(_utc(date(2026, 10, 17), 15)).day == date(2026, 10, 19)
+    assert NYSE.session_closing_after(_utc(date(2026, 11, 26), 15)).day == date(2026, 11, 27)
+
+
+@given(sessions=session_lists(), data=st.data())
+def test_closing_after_is_the_current_session_or_the_next_to_open(
+    sessions: list[TradingSession], data: st.DataObject
+) -> None:
+    """spec「归属的交易日是所在时段或下一个开盘的时段」：覆盖范围内的任意时刻。"""
+    calendar = TradingCalendar(sessions)
+    start, end = sessions[0].open, sessions[-1].close
+    offset = data.draw(st.integers(0, (end - start) // timedelta(microseconds=1) - 1))
+    moment = start + timedelta(microseconds=offset)
+
+    result = calendar.session_closing_after(moment)
+
+    assert result == (calendar.session_at(moment) or calendar.next_session_after(moment))
+
+
+def test_closing_after_outside_the_coverage() -> None:
+    """spec「时刻超出覆盖范围」。"""
+    with pytest.raises(CalendarRangeError):
+        NYSE_Q4.session_closing_after(_utc(date(2026, 9, 30), 15))
+    with pytest.raises(CalendarRangeError):
+        NYSE_Q4.session_closing_after(_utc(date(2026, 12, 31), 21))
+
+
 # 超出覆盖范围的查询报错：时刻
 
 
