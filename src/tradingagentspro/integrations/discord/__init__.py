@@ -9,6 +9,6 @@ add-manual-plan-entry 的 design。装配时先建 PlanCommand，再用它建 Di
 from tradingagentspro.integrations.discord.commands import PlanCommand
 from tradingagentspro.integrations.discord.config import DiscordConfig
 from tradingagentspro.integrations.discord.gateway import DiscordGateway
-from tradingagentspro.integrations.discord.notifier import DiscordNotifier
+from tradingagentspro.integrations.discord.notifier import DiscordNotifier, Gateway
 
-__all__ = ["DiscordConfig", "DiscordGateway", "DiscordNotifier", "PlanCommand"]
+__all__ = ["DiscordConfig", "DiscordGateway", "DiscordNotifier", "Gateway", "PlanCommand"]

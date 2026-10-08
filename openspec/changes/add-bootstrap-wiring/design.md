@@ -227,7 +227,7 @@ def start(
         end = (clock.now() + config.calendar_lookahead).date()  # 范围的边界，不是交易日
         calendar = load_nyse_calendar(config.calendar_first_day, end)
     with step("装配"):
-        parts = assemble(settings, externals, engine, calendar, stack)
+        parts = _assemble(settings, externals, engine, calendar, stack)
     with step("Alpaca 账户设置"):
         configure_account(parts.alpaca)
     with step("启动对账"):
@@ -242,10 +242,11 @@ def start(
         DBOS(config={"name": APP_NAME, "system_database_url": url})
         on_stop(stack, "DBOS", DBOS.destroy)
         DBOS.launch()
-    return parts.trading_app(reconciliation)
+    # 装配好的用例加上启动对账的结果
+    return TradingApp(clock=clock, calendar=calendar, reconciliation=reconciliation)
 ```
 
-`assemble` 建出 spec「模拟盘的装配」表里的全部部件（D11），返回一个只在 bootstrap 里用的 dataclass，`trading_app` 把装配好的用例和启动对账的结果拼成 `TradingApp`；OpenD 行情连接打开以后的关闭在 `assemble` 里登记。骨架里的名字以实现为准，顺序和登记关闭的位置照此。第一次健康判定不会因为 OpenD 失败（spec），放进 `step` 只是为了万一出了别的异常也按启动失败处理。
+`_assemble` 建出 spec「模拟盘的装配」表里的全部部件（D11），返回一个只在 bootstrap 里用的 dataclass `_Parts`，最后把装配好的用例和启动对账的结果拼成 `TradingApp`；OpenD 行情连接打开以后的关闭在 `_assemble` 里登记。每一步成功时由这一步自己写一条 INFO（比如「数据库已升级到最新版本」「Discord 已连接」），`step` 只管失败。骨架里的名字以实现为准，顺序和登记关闭的位置照此。第一次健康判定不会因为 OpenD 失败（spec），放进 `step` 只是为了万一出了别的异常也按启动失败处理。
 
 ### D6 失败处理和关闭：ExitStack
 
@@ -256,7 +257,7 @@ class StartupError(RuntimeError):
 
 @contextmanager
 def step(name: str) -> Iterator[None]:
-    """把这一步里的任何异常转成 StartupError，写明步骤；成功时写一条 INFO。"""
+    """把这一步里的任何异常转成 StartupError，写明步骤和原来的异常类型、信息。"""
     ...
 
 
@@ -267,9 +268,9 @@ def on_stop(stack: ExitStack, name: str, close: Callable[[], object]) -> None:
         try:
             close()
         except Exception:
-            _log.exception("关闭%s时出错", name)
+            _log.exception("关闭时出错：%s", name)
         else:
-            _log.info("已关闭%s", name)
+            _log.info("已关闭：%s", name)
 
     stack.callback(call)
 
@@ -405,9 +406,10 @@ DEFAULT_CONFIG = BootstrapConfig()
 
 
 def paper_execution(
-    client: AlpacaClient, commission: Decimal
+    client: AlpacaClient, risk: RiskConfig
 ) -> tuple[Broker, StopBroker, ExecutionConfig]:
     """模拟盘的券商：两个 Alpaca 适配器共用一个客户端，打开买单和止损单错开。"""
+    commission = risk.commission_per_order
     return (
         AlpacaBroker(client, commission),
         AlpacaStopBroker(client, commission),
@@ -432,7 +434,7 @@ class TradingApp:
 ```
 
 - 券商的选择集中在 `paper_execution`：错开开关是「用哪个券商」的一部分，M7 加一个 `live_execution`（moomoo 适配器、开关关闭），业务代码不变
-- 每笔佣金：`RiskConfig().commission_per_order`，和风控估算用同一个值（add-trade-records 的 design D5）
+- 每笔佣金：`paper_execution` 接收装配风控用的同一个 `RiskConfig`，取它的 `commission_per_order`，和风控估算用同一个值（add-trade-records 的 design D5）；测试直接检查 `paper_execution` 的结果
 - 各模块的配置用默认值，不读配置文件：update-risk-loosen-defaults 定了「直接用这些默认值装配风控和紧急退出，不另外配置」，add-risk-rules 的 design 里「M2 由 bootstrap 从配置文件读取」不再适用；别的模块也一样，要改阈值就改 `config.py` 的默认值
 - 日历的加载范围放在 `BootstrapConfig`：trading-calendar spec 要求可以配置，默认值用 `nyse_calendar` 的两个常量
 - `TradingApp` 是 `start` 的结果，`run` 现在不用它；测试用它检查装配，以后的流程变更从它取用例
@@ -450,7 +452,7 @@ class TradingApp:
   - 升级失败：在空数据库里先手工建一张 `risk_reservations`
   - 「启动过程中收到停止信号」：`FakeGateway.run` 里设置 `stop`
   - 「某一项关闭出错」：OpenD 替身的 `close` 抛错
-- `tests/bootstrap/test_cli.py`：`--version`、用法错误（`SystemExit` 的代码是 0 和 2）；`run` 子命令把 `os.environ` 和一个 `Event` 交给 `app.run`（monkeypatch），并且装好了两个信号处理（测试结束恢复原来的处理）；向本进程发 SIGTERM 以后 `Event` 被设置
+- `tests/bootstrap/test_cli.py`：`--version`、用法错误（`SystemExit` 的代码是 0 和 2）；`run` 子命令先配置日志，再把 `os.environ` 和一个 `Event` 交给 `run`（monkeypatch `cli.run`），并且装好了两个信号处理（测试结束恢复原来的处理）；向本进程发 SIGTERM、SIGINT 以后 `Event` 被设置
 - 冒烟运行（人在自己的终端里做）：见 tasks 的最后一项。不写成 pytest：要看的是真实的启动日志、Discord 里的回复和 Ctrl-C 的退出
 
 ## Risks / Trade-offs

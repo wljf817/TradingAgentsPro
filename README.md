@@ -57,6 +57,14 @@ uv run pytest -m discord_bot   # 连真实 Discord 的冒烟测试，需要 DISC
 uv run pytest -m discord_bot tests/integrations/discord/test_plan_smoke.py  # 只跑 /plan 的冒烟测试
 ```
 
+启动交易侧程序（模拟盘），Ctrl-C 停止：
+
+```bash
+uv run tradingagentspro run
+```
+
+要先在终端里设好 7 个环境变量（只设在终端或部署机器的环境里，不写进仓库）：`TRADINGAGENTSPRO_DATABASE_URL`（`postgresql://用户:密码@主机:端口/数据库`）、`APCA_API_KEY_ID`、`APCA_API_SECRET_KEY`、`DISCORD_BOT_TOKEN`、`DISCORD_GUILD_ID`、`DISCORD_CHANNEL_ID`、`DISCORD_USER_ID`，并开着 PostgreSQL。启动时自动升级数据库；OpenD 没开时照常启动，盘中进入降级模式。日志写到 stderr。启动失败退出码 1，正常停止退出码 0。
+
 连数据库的测试会用 testcontainers 启动一个临时的 PostgreSQL 18 容器，用完即删，所以跑完整的测试要开着 Docker（比如 OrbStack 或 Docker Desktop）。第一次运行会先下载镜像。不连数据库的测试不需要 Docker。
 
 克隆后启用提交前检查（和 CI 跑同一套，任何一项失败就拒绝提交）：
