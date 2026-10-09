@@ -1,4 +1,6 @@
-"""定时心跳的阈值和默认值，含义见 review-dates spec「复查日与催化剂的配置」。"""
+"""定时心跳的阈值和默认值，含义见 review-dates spec「复查日与催化剂的配置」和 close-check spec
+「收盘检查的配置」。
+"""
 
 from decimal import Decimal
 from typing import Self
@@ -24,6 +26,16 @@ class HeartbeatConfig(BaseModel):
     max_schedule_lag_sessions: int = Field(default=2, ge=1)
     # 不引用日程项的催化剂，截止日期不晚于今天之后第这么多个交易日
     max_deadline_sessions: int = Field(default=60, ge=1)
+    # 在排队或运行的候选评估加上这次开的，不超过这么多个
+    max_daily_evaluations: int = Field(default=3, ge=1)
+    # 有效候选（最新评分为空或不低于 0）少于这么多只时寻股
+    min_viable_candidates: int = Field(default=5, ge=1)
+    # 最新评分 ≥ 1 的候选少于这么多只时寻股
+    min_strong_candidates: int = Field(default=2, ge=1)
+    # 过期时间不晚于今天之后第这么多个交易日收盘时刻的候选算临近过期
+    expiring_sessions: int = Field(default=3, ge=1)
+    # 今天早于上一次寻股的那一天之后第这么多个交易日时不寻股
+    exploration_cooldown_sessions: int = Field(default=3, ge=1)
 
     @model_validator(mode="after")
     def _check_review_range(self) -> Self:
