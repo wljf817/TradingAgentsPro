@@ -1,7 +1,7 @@
-"""agent 和模型身份的测试：六个 agent、一个模型、实际使用的模型。
+"""agent 和模型身份的测试：六个 agent、一个模型、实际使用的模型、一次尝试的 token 用量。
 
-规则见 openspec 的 model-fallback spec「模型的配置」「实际使用的模型」，类型见 add-model-fallback 的
-design D1。
+规则见 openspec 的 model-fallback spec「模型的配置」「实际使用的模型」和 call-budget spec「费用的
+算法」，类型见 add-model-fallback 的 design D1 和 add-call-budget 的 design D2。
 """
 
 from typing import Any
@@ -10,7 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from tradingagentspro.contracts.agent import Agent, SubAgent
-from tradingagentspro.contracts.model import ModelRef, ModelUse
+from tradingagentspro.contracts.model import ModelRef, ModelUse, TokenUsage
 
 P1 = ModelRef(vendor="anthropic", name="p-1")
 
@@ -132,3 +132,52 @@ def test_model_use_cannot_be_changed(field: str, value: object) -> None:
         setattr(use, field, value)
 
     assert use == ModelUse(model=ModelRef(vendor="anthropic", name="p-2"), fallback=True)
+
+
+# TokenUsage
+
+
+def test_token_usage() -> None:
+    """输入和输出的 token 数；可以从 JSON 读回。"""
+    usage = TokenUsage(input_tokens=20_000, output_tokens=2_000)
+
+    assert (usage.input_tokens, usage.output_tokens) == (20_000, 2_000)
+    assert TokenUsage.model_validate_json(usage.model_dump_json()) == usage
+
+
+def test_zero_usage_is_valid() -> None:
+    """call-budget spec「不舍入」：输入 0、输出 0 合法。"""
+    usage = TokenUsage(input_tokens=0, output_tokens=0)
+
+    assert (usage.input_tokens, usage.output_tokens) == (0, 0)
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"input_tokens": -1, "output_tokens": 0},
+        {"input_tokens": 0, "output_tokens": -1},
+        {"input_tokens": 0, "output_tokens": 1.5},
+        {"input_tokens": 0},
+        {"output_tokens": 0},
+    ],
+    ids=["输入 -1", "输出 -1", "输出 1.5", "没有输出", "没有输入"],
+)
+def test_invalid_usage_is_an_error(fields: dict[str, Any]) -> None:
+    """call-budget spec「用量不合法」：用量小于 0 或者不是整数，都报错。"""
+    with pytest.raises(ValidationError):
+        TokenUsage.model_validate(fields)
+
+
+def test_usage_rejects_extra_fields() -> None:
+    with pytest.raises(ValidationError):
+        TokenUsage.model_validate({"input_tokens": 1, "output_tokens": 1, "cached_tokens": 1})
+
+
+def test_usage_cannot_be_changed() -> None:
+    usage = TokenUsage(input_tokens=1, output_tokens=2)
+
+    with pytest.raises(ValidationError):
+        usage.input_tokens = 3  # type: ignore[misc]
+
+    assert usage == TokenUsage(input_tokens=1, output_tokens=2)

@@ -1,12 +1,13 @@
-"""模型的身份和实际使用的模型，见 model-fallback spec「模型的配置」「实际使用的模型」。
+"""模型的身份、实际使用的模型和一次尝试的 token 用量，见 model-fallback spec「模型的配置」「实际
+使用的模型」和 call-budget spec「费用的算法」。
 
-各 agent 用哪些模型由 Agent 网关的配置给出；实际使用的模型写进 Result 和案件记录，评估按它统计，
-所以放在 contracts。
+各 agent 用哪些模型由 Agent 网关的配置给出；实际使用的模型写进 Result 和案件记录，评估按它统计；
+token 用量由调用方从模型的返回里取得，交给 Agent 网关算费用，也写进程序日志。所以都放在 contracts。
 """
 
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, StringConstraints
 
 
 class ModelRef(BaseModel):
@@ -29,3 +30,12 @@ class ModelUse(BaseModel):
 
     model: ModelRef
     fallback: bool  # 不是这个 agent 的主模型
+
+
+class TokenUsage(BaseModel):
+    """一次尝试的 token 用量，调用方从模型的返回里取得。推理 token 算输出，缓存命中算输入。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    input_tokens: NonNegativeInt
+    output_tokens: NonNegativeInt

@@ -1,9 +1,11 @@
 """Agent 网关需要的外部接口。"""
 
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
 from tradingagentspro.contracts.task import Result, Task
+from tradingagentspro.modules.gateway.domain.budget import CallCost
 from tradingagentspro.modules.gateway.domain.dispatch import TaskRecord
 
 
@@ -27,4 +29,19 @@ class TaskStore(Protocol):
 
     def add_result(self, result: Result) -> None:
         """写入一个 Task 的 Result；service 保证每个 Task 只写一次。"""
+        ...
+
+
+class CostStore(Protocol):
+    """模型调用费用的存储。只追加：每次尝试写入一条，写入以后不改。
+
+    网关是唯一的写入者；数据库实现（M4）建本模块的表。
+    """
+
+    def since(self, moment: datetime) -> tuple[CallCost, ...]:
+        """记下的时刻不早于 moment 的记录，按写入的先后。"""
+        ...
+
+    def add(self, entry: CallCost) -> None:
+        """写入一条记录。"""
         ...

@@ -146,7 +146,8 @@ class Result(BaseModel):
     reason: TaskFailure | TaskRejection | None = None
     detail: str | None = Field(default=None, min_length=1)  # 失败的说明
     elapsed: timedelta = Field(ge=timedelta(0))  # 耗时：生成 Result 的时刻减派发时刻
-    cost: Decimal = Field(ge=0)  # 费用：调用方给出，怎么算由「调用预算」定
+    # 这个任务各次尝试记下的费用之和，见 call-budget spec「子 agent 任务的费用」
+    cost: Decimal = Field(ge=0)
     model_use: ModelUse | None = None  # 给出输出的模型：完成、无信号、格式不合法的失败才有
 
     @property

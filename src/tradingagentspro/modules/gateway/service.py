@@ -4,6 +4,8 @@
   Result，给出本案件的任务，见 task-dispatch spec。这里只读当前时刻、生成 ID、解析输出、读写存储
 - ModelFallbackService：一次调用向哪个模型尝试、失败以后换不换，按模型熔断，记下案件内的起点，见
   model-fallback spec。这里只读当前时刻、查模型的配置，在内存里保存熔断状态和起点
+- CallBudgetService：记下每次尝试的费用，给出三个预算的情况，见 call-budget spec。这里只读当前时刻、
+  查交易日历和单价、读写存储
 
 规则都在 domain 里。
 """
@@ -17,10 +19,18 @@ from uuid import UUID
 from pydantic import TypeAdapter, ValidationError
 
 from tradingagentspro.contracts.agent import Agent
-from tradingagentspro.contracts.model import ModelRef, ModelUse
+from tradingagentspro.contracts.model import ModelRef, ModelUse, TokenUsage
 from tradingagentspro.contracts.signal import SubAgentOutput
 from tradingagentspro.contracts.task import Dispatcher, Result, Task, TaskRequest
 from tradingagentspro.modules.gateway.config import GatewayConfig, ModelAssignments
+from tradingagentspro.modules.gateway.domain.budget import (
+    Budget,
+    BudgetStatus,
+    CallCost,
+    budget_status,
+    charged_budget,
+    cost_of,
+)
 from tradingagentspro.modules.gateway.domain.dispatch import (
     CaseScope,
     Dispatch,
@@ -47,9 +57,10 @@ from tradingagentspro.modules.gateway.domain.result import (
     received,
     rejected,
 )
-from tradingagentspro.modules.gateway.ports import TaskStore
+from tradingagentspro.modules.gateway.ports import CostStore, TaskStore
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.ids import IdGenerator
+from tradingagentspro.shared.trading_calendar import TradingCalendar
 
 _OUTPUT: Final[TypeAdapter[SubAgentOutput]] = TypeAdapter(SubAgentOutput)
 
@@ -207,6 +218,60 @@ class ModelFallbackService:
     def _breaker(self, model: ModelRef) -> Breaker:
         """这个模型的熔断状态；没有记录时是正常。"""
         return self._breakers.get(model, Breaker())
+
+
+class CallBudgetService:
+    """调用预算的入口：记下每次尝试的费用，给出三个预算的情况，见 call-budget spec。
+
+    这里只读当前时刻、查单价、读写存储；预算的情况每次从存储里今天的记录重新算，不缓存，进程重启
+    以后接着算。网关不因为预算用完拒绝任务或调用（spec「已经开始的案件」）。同一个实例由调用方串行
+    调用：记到哪个预算是先读后写，做法 M4 定。
+    """
+
+    def __init__(
+        self,
+        store: CostStore,
+        clock: Clock,
+        calendar: TradingCalendar,
+        models: ModelAssignments,
+        config: GatewayConfig,
+    ) -> None:
+        self._store = store
+        self._clock = clock
+        self._calendar = calendar
+        self._models = models
+        self._config = config
+
+    def record(
+        self, scope: CaseScope, agent: Agent, model: ModelRef, usage: TokenUsage
+    ) -> CallCost:
+        """为案件 scope 里 agent 的一次尝试记下费用，"现在"是记下的时刻；model 没有单价时抛
+        KeyError。返回记下的一条，子 agent 任务的费用由调用方把这个任务各条的 cost 加起来。
+        """
+        now = self._clock.now()
+        general_exhausted = Budget.GENERAL in self._status(now).exhausted
+        entry = CallCost(
+            case_id=scope.case_id,
+            case_type=scope.case_type,
+            agent=agent,
+            model=model,
+            usage=usage,
+            cost=cost_of(usage, self._models.price(model)),
+            budget=charged_budget(scope.case_type, general_exhausted),
+            recorded_at=now,
+        )
+        self._store.add(entry)
+        return entry
+
+    def status(self) -> BudgetStatus:
+        """现在归属的交易日里三个预算的情况。"""
+        return self._status(self._clock.now())
+
+    def _status(self, now: datetime) -> BudgetStatus:
+        """now 归属的交易日从上一个交易日的收盘时刻开始。"""
+        start = self._calendar.last_session_before(now).close
+        day = self._calendar.session_closing_after(now).day
+        return budget_status(self._store.since(start), day, self._config)
 
 
 def _parse(output: str) -> SubAgentOutput | Malformed:

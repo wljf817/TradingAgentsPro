@@ -7,11 +7,27 @@
 - 备用模型：各 agent 的模型配置和厂商校验；主模型不可用时按顺序切换备用模型，案件内不切回，按模型
   熔断；给出实际使用的模型、切换的事件、PM 和 Critic 是否还有可用的模型，以及 PM 用备用模型时不能
   提的决定（model-fallback spec）
+- 调用预算：模型的单价；记下每次尝试的费用，按记之前普通预算是否用完整笔记到普通预算、持仓保留预算
+  或寻股预算；按现在归属的交易日给出三个预算今天的费用和用完的预算，不因为预算用完拒绝任务或调用
+  （call-budget spec）
 
 网关不做交易判断、不下单。模块之外的代码只能 import 这里导出的名字。
 """
 
-from tradingagentspro.modules.gateway.config import AgentModels, GatewayConfig, ModelAssignments
+from tradingagentspro.modules.gateway.config import (
+    AgentModels,
+    GatewayConfig,
+    ModelAssignments,
+    ModelPrice,
+)
+from tradingagentspro.modules.gateway.domain.budget import (
+    Budget,
+    BudgetStatus,
+    CallCost,
+    budget_status,
+    charged_budget,
+    cost_of,
+)
 from tradingagentspro.modules.gateway.domain.dispatch import (
     CaseScope,
     Dispatch,
@@ -56,17 +72,26 @@ from tradingagentspro.modules.gateway.domain.signal import (
     conclusion_signal_rejection,
     signal_rejection,
 )
-from tradingagentspro.modules.gateway.ports import TaskStore
-from tradingagentspro.modules.gateway.service import ModelFallbackService, TaskDispatchService
+from tradingagentspro.modules.gateway.ports import CostStore, TaskStore
+from tradingagentspro.modules.gateway.service import (
+    CallBudgetService,
+    ModelFallbackService,
+    TaskDispatchService,
+)
 
 __all__ = [
     "AgentModels",
     "AllUnavailable",
     "Attempt",
     "Breaker",
+    "Budget",
+    "BudgetStatus",
+    "CallBudgetService",
+    "CallCost",
     "CallError",
     "CallStep",
     "CaseScope",
+    "CostStore",
     "DeadlineReached",
     "Dispatch",
     "DispatchAction",
@@ -75,6 +100,7 @@ __all__ = [
     "ModelAssignments",
     "ModelCall",
     "ModelFallbackService",
+    "ModelPrice",
     "ModelSwitch",
     "SignalRejection",
     "TaskDispatchService",
@@ -85,9 +111,12 @@ __all__ = [
     "after_failure",
     "attempt_timeout",
     "blocked_decision",
+    "budget_status",
     "call_failed",
+    "charged_budget",
     "completed_results",
     "conclusion_signal_rejection",
+    "cost_of",
     "dispatch_rejection",
     "dispatched_agents",
     "exhausted",

@@ -1,6 +1,6 @@
 """Agent 网关测试的数据：signal-format spec「信号的格式」的基准数据，case-types spec 的结论（信号是
-基准信号），task-dispatch spec「任务清单」的基准数据，以及 model-fallback spec「模型的配置」的基准
-模型。
+基准信号），task-dispatch spec「任务清单」的基准数据，model-fallback spec「模型的配置」的基准模型，
+以及 call-budget spec「费用的记录」的基准单价和案件。
 """
 
 from datetime import UTC, date, datetime, timedelta
@@ -8,7 +8,9 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+from tests.fakes.calendar import sample_nyse_calendar
 from tests.fakes.clock import FakeClock
+from tests.fakes.costs import InMemoryCostStore
 from tests.fakes.ids import FakeIds
 from tests.fakes.tasks import InMemoryTaskStore
 from tradingagentspro.contracts.agent import Agent
@@ -25,7 +27,7 @@ from tradingagentspro.contracts.conclusion import (
     PoolAddition,
     WatchConclusion,
 )
-from tradingagentspro.contracts.model import ModelRef, ModelUse
+from tradingagentspro.contracts.model import ModelRef, ModelUse, TokenUsage
 from tradingagentspro.contracts.signal import NoSignal, Signal
 from tradingagentspro.contracts.task import (
     Dispatcher,
@@ -51,20 +53,23 @@ from tradingagentspro.contracts.trade_plan import OrderType
 from tradingagentspro.modules.gateway import (
     AgentModels,
     Attempt,
+    CallBudgetService,
+    CallCost,
     CallError,
     CallStep,
     CaseScope,
     GatewayConfig,
     ModelAssignments,
     ModelFallbackService,
+    ModelPrice,
     TaskDispatchService,
     TaskRecord,
 )
 
 
-def at(hour: int, minute: int = 0, second: int = 0, *, day: int = 14) -> datetime:
-    """2026 年 10 月某一天的某个 UTC 时刻，默认是 2026-10-14。"""
-    return datetime(2026, 10, day, hour, minute, second, tzinfo=UTC)
+def at(hour: int, minute: int = 0, second: int = 0, *, day: int = 14, month: int = 10) -> datetime:
+    """2026 年某一天的某个 UTC 时刻，默认是 2026-10-14。"""
+    return datetime(2026, month, day, hour, minute, second, tzinfo=UTC)
 
 
 NOW = at(15)  # 当前时刻：周三，盘中
@@ -288,15 +293,38 @@ _MODELS: dict[Agent, AgentModels] = {
 }
 
 
-def assignments(**changes: Any) -> ModelAssignments:
-    """基准模型的配置，只把这几个 agent 的模型改为 changes，比如 assignments(pm={"primary": P1})。
+def price(model: ModelRef, input_price: str, output_price: str) -> ModelPrice:
+    """一个模型的单价，美元/百万 token。"""
+    return ModelPrice(
+        model=model, input_price=Decimal(input_price), output_price=Decimal(output_price)
+    )
 
-    键是 agent 的值；值是 AgentModels 或者它的各项，为 None 时不配这个 agent。
+
+# call-budget spec 的基准单价：p-1、p-2 是 2 和 10，p-3 是 1 和 4，c-1、c-2 是 1.25 和 10，s-1、s-2
+# 是 0.3 和 2.5
+BASELINE_PRICES = (
+    price(P1, "2", "10"),
+    price(P2, "2", "10"),
+    price(P3, "1", "4"),
+    price(C1, "1.25", "10"),
+    price(C2, "1.25", "10"),
+    price(S1, "0.3", "2.5"),
+    price(S2, "0.3", "2.5"),
+)
+
+
+def assignments(**changes: Any) -> ModelAssignments:
+    """基准模型的配置和基准单价，只把这几个 agent 的模型改为 changes，比如
+    assignments(pm={"primary": P1})。
+
+    键是 agent 的值；值是 AgentModels 或者它的各项，为 None 时不配这个 agent。prices 覆盖全部单价：
+    ModelPrice 或者它的各项。
     """
+    prices = changes.pop("prices", BASELINE_PRICES)
     agents: dict[str, Any] = {agent.value: models for agent, models in _MODELS.items()}
     agents |= changes
     present = {agent: models for agent, models in agents.items() if models is not None}
-    return ModelAssignments.model_validate({"agents": present})
+    return ModelAssignments.model_validate({"agents": present, "prices": prices})
 
 
 BASELINE_MODELS = assignments()
@@ -368,3 +396,46 @@ def unavailable(
         2,
     )
     return service.fail(retry.call, error)
+
+
+# call-budget spec「费用的记录」的基准数据：K-1 到 K-4 同 task-dispatch spec；K-5 是每周复盘；K-6 是
+# CCC 的持仓跟进；K-7 是 BBB 的关注跟进；K-8 是 AAA 的候选评估
+K5 = CaseScope(UUID("00000000-0000-0000-0000-00000000c005"), CaseType.WEEKLY_RETROSPECTIVE, None)
+K6 = CaseScope(UUID("00000000-0000-0000-0000-00000000c006"), CaseType.HOLDING_FOLLOW_UP, "CCC")
+K7 = CaseScope(UUID("00000000-0000-0000-0000-00000000c007"), CaseType.WATCH_FOLLOW_UP, "BBB")
+K8 = CaseScope(UUID("00000000-0000-0000-0000-00000000c008"), CaseType.CANDIDATE_EVALUATION, "AAA")
+NYSE = sample_nyse_calendar()
+_RETROSPECTIVES = frozenset({CaseType.WEEKLY_RETROSPECTIVE, CaseType.SELL_RETROSPECTIVE})
+
+
+def tokens(input_tokens: int, output_tokens: int = 0) -> TokenUsage:
+    """一次尝试的用量：输入和输出的 token 数。"""
+    return TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens)
+
+
+def spend(service: CallBudgetService, case: CaseScope, x: str) -> CallCost:
+    """call-budget spec 里的"K-n 记下 x"：为 case 记下一次 p-1 的尝试，输入 x 乘 500,000 个 token、
+    没有输出，费用正好是 x 美元。agent 是 PM，复盘（K-5）是 Reviewer。返回记下的一条。
+    """
+    count = Decimal(x) * 500_000
+    assert count == int(count), f"{x} 乘 500,000 不是整数"
+    agent = Agent.REVIEWER if case.case_type in _RETROSPECTIVES else Agent.PM
+    entry = service.record(case, agent, P1, tokens(int(count)))
+    assert entry.cost == Decimal(x)
+    return entry
+
+
+def budget_service(
+    clock: FakeClock | None = None, store: InMemoryCostStore | None = None, **config: Any
+) -> CallBudgetService:
+    """调用预算的用例：测试时钟（没有传入时停在当前时刻 15:00Z）、纽交所样例日历、基准模型的配置和
+    基准单价、内存存储（没有传入时是空的；传入同一个存储就是 spec 的"进程重启"）、默认配置。config
+    覆盖其中的配置项。
+    """
+    return CallBudgetService(
+        InMemoryCostStore() if store is None else store,
+        FakeClock(NOW) if clock is None else clock,
+        NYSE,
+        BASELINE_MODELS,
+        GatewayConfig(**config),
+    )

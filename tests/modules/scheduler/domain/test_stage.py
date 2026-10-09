@@ -530,8 +530,8 @@ def test_aborted_after_the_conclusion() -> None:
 
 
 def test_pm_call_fails() -> None:
-    """spec「PM 的调用失败」：CCC 的持仓复查；主备模型都超时和预算用完被拒绝，调用方都按系统故障
-    交给状态。
+    """spec「PM 的调用失败」：CCC 的持仓复查；PM 的主模型和备用模型都超时，Agent 网关返回失败，
+    调用方按系统故障交给状态。
     """
     state = new_case(CaseType.HOLDING_REVIEW).fail()
 

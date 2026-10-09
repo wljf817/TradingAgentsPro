@@ -1,9 +1,11 @@
-"""Agent 网关的阈值、默认值和各 agent 的模型，含义见 signal-format spec「信号的配置」、task-dispatch
-spec「派发的配置」、model-fallback spec「模型的配置」「厂商校验」「备用模型的配置」。
+"""Agent 网关的阈值、默认值、各 agent 的模型和模型的单价，含义见 signal-format spec「信号的配置」、
+task-dispatch spec「派发的配置」、model-fallback spec「模型的配置」「厂商校验」「备用模型的配置」、
+call-budget spec「模型的单价」「预算的配置」。
 """
 
 from collections.abc import Mapping
 from datetime import timedelta
+from decimal import Decimal
 from typing import Self
 
 from pydantic import (
@@ -23,6 +25,8 @@ from tradingagentspro.contracts.model import ModelRef
 class GatewayConfig(BaseModel):
     """Agent 网关的阈值。配置项之间只有一项约束：子 agent 的主模型和第一个备用模型的全部尝试放得进
     任务时限。
+
+    三个预算的额度见 call-budget spec「预算的配置」：都是每个交易日多少美元，必须大于 0。
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -53,6 +57,11 @@ class GatewayConfig(BaseModel):
         {Decision.BUY, Decision.ADD, Decision.PROMOTE}
     )
 
+    # 三个预算的额度：每个交易日记到这个预算的费用到这么多美元就用完
+    general_budget: Decimal = Field(default=Decimal("2.00"), gt=0)
+    reserve_budget: Decimal = Field(default=Decimal("1.00"), gt=0)
+    exploration_budget: Decimal = Field(default=Decimal("0.50"), gt=0)
+
     @model_validator(mode="after")
     def _check_fallback_fits(self) -> Self:
         if (self.call_retries + 1) * self.subagent_call_timeout * 2 > self.task_timeout:
@@ -80,19 +89,39 @@ class AgentModels(BaseModel):
         return self
 
 
-class ModelAssignments(BaseModel):
-    """六个 agent 各自的模型，见 model-fallback spec「模型的配置」「厂商校验」。
+class ModelPrice(BaseModel):
+    """一个模型的单价：每百万 token 多少美元。"""
 
-    没有默认值：bootstrap 启动时从配置文件构造，报错就拒绝启动。
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    model: ModelRef
+    input_price: Decimal = Field(ge=0)
+    output_price: Decimal = Field(ge=0)
+
+
+class ModelAssignments(BaseModel):
+    """六个 agent 各自的模型和模型的单价，见 model-fallback spec「模型的配置」「厂商校验」和
+    call-budget spec「模型的单价」。
+
+    没有默认值：bootstrap 启动时从配置文件构造，报错就拒绝启动。任何 agent 用到的模型都要有单价，
+    同一个模型只配一份；没有 agent 用到的模型配了单价不报错。
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     agents: Mapping[Agent, AgentModels]
+    prices: tuple[ModelPrice, ...]
 
     def of(self, agent: Agent) -> AgentModels:
         """这个 agent 的模型。"""
         return self.agents[agent]
+
+    def price(self, model: ModelRef) -> ModelPrice:
+        """这个模型的单价；没有配时抛 KeyError。"""
+        for price in self.prices:
+            if price.model == model:
+                return price
+        raise KeyError(model)
 
     @model_validator(mode="after")
     def _check(self) -> Self:
@@ -102,6 +131,13 @@ class ModelAssignments(BaseModel):
         shared = _vendors(self.agents[Agent.CRITIC]) & _vendors(self.agents[Agent.PM])
         if shared:
             raise ValueError(f"Critic 和 PM 不能用同一家厂商的模型：{'、'.join(sorted(shared))}")
+        priced = [price.model for price in self.prices]
+        if len(set(priced)) != len(priced):
+            raise ValueError("同一个模型不能配两份单价")
+        used = {model for models in self.agents.values() for model in models.chain}
+        unpriced = sorted(str(model) for model in used - set(priced))
+        if unpriced:
+            raise ValueError(f"这些模型没有单价：{'、'.join(unpriced)}")
         return self
 
 

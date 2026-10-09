@@ -1,10 +1,12 @@
 """Agent 网关配置的测试。场景见 openspec 的 signal-format spec「信号的配置」、task-dispatch spec
-「派发的配置」，以及 model-fallback spec「模型的配置」「厂商校验」「备用模型的配置」。
+「派发的配置」、model-fallback spec「模型的配置」「厂商校验」「备用模型的配置」，以及 call-budget
+spec「模型的单价」「预算的配置」。
 
-模型用 builders 里的基准模型的配置，模型写作"厂商/模型名"。
+模型用 builders 里的基准模型的配置和基准单价，模型写作"厂商/模型名"。
 """
 
 from datetime import timedelta
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -12,6 +14,7 @@ from pydantic import ValidationError
 
 from tests.modules.gateway.builders import (
     BASELINE_MODELS,
+    BASELINE_PRICES,
     C1,
     C2,
     P1,
@@ -20,11 +23,12 @@ from tests.modules.gateway.builders import (
     S1,
     S2,
     assignments,
+    price,
 )
 from tradingagentspro.contracts.agent import Agent
 from tradingagentspro.contracts.conclusion import Decision
 from tradingagentspro.contracts.model import ModelRef
-from tradingagentspro.modules.gateway import AgentModels, GatewayConfig
+from tradingagentspro.modules.gateway import AgentModels, GatewayConfig, ModelPrice
 
 
 def test_default_config() -> None:
@@ -259,3 +263,124 @@ def test_attempts_do_not_fit_the_task_timeout(changes: dict[str, Any]) -> None:
     """spec「放得进任务时限的边界」：超过任务时限，配置报错。"""
     with pytest.raises(ValidationError, match="放不进任务时限"):
         GatewayConfig.model_validate(changes)
+
+
+# 模型的单价（call-budget spec）
+
+X9 = ModelRef(vendor="openai", name="x-9")  # 没有 agent 用到的模型
+
+
+def _prices(target: ModelRef, /, **fields: Any) -> list[ModelPrice | dict[str, Any]]:
+    """基准单价，只把 target 的单价的这几项改为 fields（可以是不合法的值）。"""
+    return [p.model_dump() | fields if p.model == target else p for p in BASELINE_PRICES]
+
+
+def test_baseline_prices() -> None:
+    """call-budget spec「基准单价」：配置正确；p-1 的输入单价 2、输出单价 10。"""
+    p1 = BASELINE_MODELS.price(P1)
+
+    assert (p1.input_price, p1.output_price) == (Decimal(2), Decimal(10))
+    assert BASELINE_MODELS.price(P3) == price(P3, "1", "4")
+    assert BASELINE_MODELS.price(C2) == price(C2, "1.25", "10")
+    assert BASELINE_MODELS.price(S1) == price(S1, "0.3", "2.5")
+
+
+def test_price_of_an_unconfigured_model() -> None:
+    """取不在配置里的模型的单价抛 KeyError：调用方只用配置里的模型。"""
+    with pytest.raises(KeyError):
+        BASELINE_MODELS.price(X9)
+
+
+def test_price_matches_the_normalized_vendor() -> None:
+    """单价的模型和 agent 的模型一样去掉空白、转成小写：按同一个模型取单价。"""
+    models = assignments(prices=_prices(P1, model={"vendor": " Anthropic ", "name": "p-1"}))
+
+    assert models.price(P1) == price(P1, "2", "10")
+
+
+def test_missing_price_names_the_models() -> None:
+    """call-budget spec「缺少单价或单价不合法」：不配 c-2 的单价，配置报错，错误指出没有单价的
+    模型。
+    """
+    prices = [p for p in BASELINE_PRICES if p.model != C2]
+
+    with pytest.raises(ValidationError, match="这些模型没有单价：openai/c-2"):
+        assignments(prices=prices)
+
+
+def test_missing_prices_of_several_models() -> None:
+    """几个模型没有单价时都列出来：只配 PM 的三个模型的单价。"""
+    prices = [p for p in BASELINE_PRICES if p.model in (P1, P2, P3)]
+
+    with pytest.raises(
+        ValidationError, match="这些模型没有单价：google/s-1、openai/c-1、openai/c-2、openai/s-2"
+    ):
+        assignments(prices=prices)
+
+
+@pytest.mark.parametrize(
+    ("prices", "loc"),
+    [
+        (_prices(P3, input_price="-0.01"), ("prices", 2, "input_price")),
+        (_prices(S1, output_price="-1"), ("prices", 5, "output_price")),
+    ],
+    ids=["p-3 的输入单价 -0.01", "s-1 的输出单价 -1"],
+)
+def test_negative_price_is_an_error(prices: list[Any], loc: tuple[Any, ...]) -> None:
+    """call-budget spec「缺少单价或单价不合法」：单价小于 0，配置报错，错误指出这一项。"""
+    with pytest.raises(ValidationError) as raised:
+        assignments(prices=prices)
+
+    assert [(e["type"], e["loc"]) for e in raised.value.errors()] == [("greater_than_equal", loc)]
+
+
+def test_two_prices_for_one_model() -> None:
+    """call-budget spec「缺少单价或单价不合法」：p-1 配了两份单价，配置报错。"""
+    prices = (*BASELINE_PRICES, price(P1, "3", "15"))
+
+    with pytest.raises(ValidationError, match="同一个模型不能配两份单价"):
+        assignments(prices=prices)
+
+
+def test_zero_and_extra_prices_are_valid() -> None:
+    """call-budget spec「单价可以是 0，可以多配」：s-2 的两个单价都是 0；另外给没有 agent 用到的
+    openai/x-9 配了单价。都配置正确。
+    """
+    free = assignments(prices=_prices(S2, input_price="0", output_price="0"))
+    extra = assignments(prices=(*BASELINE_PRICES, price(X9, "5", "20")))
+
+    assert free.price(S2) == price(S2, "0", "0")
+    assert extra.price(X9) == price(X9, "5", "20")
+
+
+# 预算的配置（call-budget spec）
+
+
+def test_default_budget_config() -> None:
+    """call-budget spec「默认配置」：普通预算的额度 2.00，持仓保留预算的额度 1.00，寻股预算的额度
+    0.50。
+    """
+    config = GatewayConfig()
+
+    assert config.general_budget == Decimal("2.00")
+    assert config.reserve_budget == Decimal("1.00")
+    assert config.exploration_budget == Decimal("0.50")
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"general_budget": Decimal(0)},
+        {"reserve_budget": Decimal(-1)},
+        {"exploration_budget": Decimal(0)},
+    ],
+    ids=["普通预算的额度 0", "持仓保留预算的额度 -1", "寻股预算的额度 0"],
+)
+def test_invalid_budget_config(changes: dict[str, Any]) -> None:
+    """call-budget spec「配置不合法」（预算的配置）：都配置报错，错误指出这一项必须大于 0。"""
+    with pytest.raises(ValidationError) as raised:
+        GatewayConfig.model_validate(changes)
+
+    assert [(e["type"], e["loc"]) for e in raised.value.errors()] == [
+        ("greater_than", tuple(changes))
+    ]
