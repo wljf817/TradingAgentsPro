@@ -2,7 +2,7 @@
 
 ## 1. Proposal
 
-- [ ] 1.1 人对 proposal「需要人决定」第 1 条表态以后，改完整版 Proposal「风控引擎与执行 · 额度预留」里预留释放的那一句：同意就按推荐做法改，不同意按人的决定改（简版不动）。验证：`git diff` 只有这一句；specs 和 design 不用跟着改（risk-reservations spec 已经包括订单过期）
+- [x] 1.1 人对 proposal「需要人决定」第 1 条表态以后，改完整版 Proposal「风控引擎与执行 · 额度预留」里预留释放的那一句：同意就按推荐做法改，不同意按人的决定改（简版不动）。验证：`git diff` 只有这一句；specs 和 design 不用跟着改（risk-reservations spec 已经包括订单过期）
 
 ## 2. 执行模块和风控的只读查询
 
@@ -33,4 +33,3 @@
 
 - [ ] 7.1 对照 `specs/session-patrol/spec.md` 和 `specs/bootstrap/spec.md`，确认每个场景都有对应的测试，测试名或说明里写明场景。验证：逐条列出场景和测试的对应关系，没有遗漏
 - [ ] 7.2 运行全部检查：`uv run pytest`、`uv run ruff check`、`uv run ruff format --check`、`uv run mypy`、`uv run lint-imports`、`openspec validate --all --strict`。验证：全部通过
-- [ ] 7.3 部署以后在部署机器上看一个交易日（需要在部署机器上操作，按 deploy/README.md 更新代码并重启主程序）：`journalctl -u tradingagentspro` 里有「盘中巡检已开始，间隔 15 秒」，盘中和盘后都没有巡检的 ERROR；有持仓时启动后有每只持仓的止损单日志。验证：日志符合；不符时先改 spec 和 design，再改代码和 3 到 6 组的测试
