@@ -20,6 +20,7 @@ import httpx
 import pytest
 
 from tests.fakes.plan_intake import FakePlanIntake, passed
+from tests.integrations.discord.pacing import wait_for_registration
 from tradingagentspro.contracts.risk import RiskDecision, RiskOutcome, RiskViolation
 from tradingagentspro.contracts.trade_plan import OrderType, TradeAction, TradePlan
 from tradingagentspro.integrations.discord import (
@@ -45,6 +46,7 @@ CONFIG = _config()
 API = "https://discord.com/api/v10"
 CLOCK = SystemClock()
 RUN_SECONDS = 300  # 人工部分等人运行完四条命令的时长
+REPLY_SECONDS = 5  # 最后一条命令的结果日志写下以后，等它的回复发完的时长
 COMMANDS_LOGGER = "tradingagentspro.integrations.discord.commands"
 
 pytestmark = [
@@ -79,6 +81,7 @@ def _start() -> tuple[DiscordNotifier, FakePlanIntake]:
     calendar = load_nyse_calendar(today - timedelta(days=7), today + timedelta(days=60))
     plans = PlanCommand(intake, RandomIdGenerator(), calendar, CONFIG)
     notifier = DiscordNotifier(DiscordGateway(CONFIG, plans), CONFIG, CLOCK, _ignore)
+    wait_for_registration()
     notifier.start()
     return notifier, intake
 
@@ -177,6 +180,8 @@ def test_four_commands_by_hand(logs: _Collector) -> None:
 
         finished = _until(lambda: len(logs.command_results()) - before >= 4, RUN_SECONDS)
         assert finished, "5 分钟内没有运行完四条 /plan"
+        # 结果日志在回复之前写：等最后一条回复发完再关闭，否则关闭会打断它
+        threading.Event().wait(REPLY_SECONDS)
     finally:
         notifier.close()
 

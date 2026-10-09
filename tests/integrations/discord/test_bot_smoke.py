@@ -22,6 +22,7 @@ import pytest
 from pydantic import SecretStr
 
 from tests.fakes.plan_intake import FakePlanIntake
+from tests.integrations.discord.pacing import wait_for_registration
 from tradingagentspro.contracts.risk import RiskDecision, RiskOutcome
 from tradingagentspro.contracts.trade_plan import OrderType, TradeAction, TradePlan
 from tradingagentspro.integrations.discord import (
@@ -108,6 +109,7 @@ def bot(logs: _Collector) -> Iterator[tuple[DiscordNotifier, Decisions]]:
     assert CONFIG is not None
     decisions = Decisions()
     notifier = DiscordNotifier(_gateway(CONFIG), CONFIG, CLOCK, decisions)
+    wait_for_registration()
     notifier.start()
     yield notifier, decisions
     notifier.close()
@@ -188,6 +190,7 @@ def test_wrong_channel(logs: _Collector) -> None:
     config = CONFIG.model_copy(update={"channel_id": CONFIG.user_id})
     notifier = DiscordNotifier(_gateway(config), config, CLOCK, Decisions())
 
+    wait_for_registration()
     with pytest.raises(NotificationUnavailableError, match=str(CONFIG.user_id)):
         notifier.start()
     notifier.close()
