@@ -23,6 +23,7 @@ from tradingagentspro.contracts.conclusion import (
 from tradingagentspro.contracts.event import EventCategory
 from tradingagentspro.contracts.review import ResponseDecision, Verdict
 from tradingagentspro.contracts.risk import RiskOutcome
+from tradingagentspro.contracts.signal import Signal
 from tradingagentspro.contracts.stock_pool import StockStatus
 from tradingagentspro.contracts.thesis import (
     Catalyst,
@@ -94,11 +95,22 @@ FOLLOW_UP = FollowUpRequest(
 DISPATCHED = frozenset({SubAgent.NEWS, SubAgent.QUANT})
 COMPLETED = {"R-1": SubAgent.NEWS, "R-2": SubAgent.QUANT}
 
-# 结论的公共部分：回答、理由、评分 1、引用 R-1 和 R-2
+# signal-format spec 的基准信号（评分 1）
+SIGNAL = Signal(
+    horizon=5,
+    score=1,
+    confidence=Decimal("0.6"),
+    data_as_of=datetime(2026, 10, 14, 14, 30, tzinfo=UTC),
+    cited_entries=("E-1", "E-2"),
+    rationale="订单回暖，放量突破前高",
+    risks="板块整体回调时跟跌",
+)
+
+# 结论的公共部分：回答、理由、基准信号、引用 R-1 和 R-2
 _COMMON: dict[str, Any] = {
     "answer": "论点仍然成立",
     "rationale": "订单和毛利率都符合预期",
-    "score": 1,
+    "signal": SIGNAL,
     "cited_results": ("R-1", "R-2"),
 }
 
@@ -119,8 +131,8 @@ def candidate(decision: Decision, **changes: Any) -> CandidateConclusion:
 
 
 def exploration(**changes: Any) -> ExplorationConclusion:
-    """寻股的结论：公共部分（没有评分），changes 覆盖或补充其中的字段。"""
-    common = {key: value for key, value in _COMMON.items() if key != "score"}
+    """寻股的结论：公共部分（没有信号），changes 覆盖或补充其中的字段。"""
+    common = {key: value for key, value in _COMMON.items() if key != "signal"}
     return ExplorationConclusion.model_validate(common | changes)
 
 

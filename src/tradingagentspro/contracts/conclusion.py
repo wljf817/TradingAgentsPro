@@ -3,6 +3,9 @@
 结论来自模型输出，所以在这里校验格式，见 case-types spec「结论的公共部分」到「跟进申请的格式」。
 哪个决定附什么由各结论的 validator 按 spec 的表检查；和案件类型有关的检查（结论种类、跟进、续期、
 研究要求）由调度器的结论校验负责。
+
+持仓、关注、候选的结论各带一个信号，寻股每只加入的候选一个，格式见 signal-format spec，不能是
+无信号；信号的评估窗口和数据截至时刻由 Agent 网关检查（spec「结论里的信号」）。
 """
 
 from decimal import Decimal
@@ -20,6 +23,7 @@ from pydantic import (
     model_validator,
 )
 
+from tradingagentspro.contracts.signal import Signal
 from tradingagentspro.contracts.thesis import (
     CatalystReference,
     Condition,
@@ -141,7 +145,10 @@ def _trade_plan(
 
 
 class _ConclusionBase(BaseModel):
-    """四种结论的公共部分。方案的理由和引用、PM 发起的移出的理由，就是这里的理由和引用。"""
+    """四种结论的公共部分。方案的理由和引用、PM 发起的移出的理由，就是这里的理由和引用。
+
+    信号不在这里：寻股的结论没有自己的信号。信号自带理由和引用，不借用这里的。
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid", str_strip_whitespace=True)
 
@@ -156,7 +163,7 @@ class HoldingConclusion(_ConclusionBase):
     论点更新 thesis 是一份完整的投资论点，整份代替原来的；清仓后转为关注时附 watch_thesis。
     """
 
-    score: int = Field(ge=-2, le=2)
+    signal: Signal  # PM 对这只股票的信号；信号里的评分记为股票池的最新评分
     decision: Literal[Decision.HOLD, Decision.ADD, Decision.REDUCE, Decision.CLOSE]
     plan: PlanDraft | None = None
     thesis: InvestmentThesis | None = None  # 论点更新
@@ -189,7 +196,7 @@ class WatchConclusion(_ConclusionBase):
     thesis 是开仓方案附的新建仓的投资论点；论点更新 watch_thesis 是一份完整的关注论点。
     """
 
-    score: int = Field(ge=-2, le=2)
+    signal: Signal  # PM 对这只股票的信号；信号里的评分记为股票池的最新评分
     decision: Literal[Decision.BUY, Decision.KEEP_WATCHING, Decision.DEMOTE, Decision.REMOVE]
     plan: PlanDraft | None = None
     thesis: InvestmentThesis | None = None  # 新建仓的投资论点
@@ -215,7 +222,7 @@ class WatchConclusion(_ConclusionBase):
 class CandidateConclusion(_ConclusionBase):
     """候选的结论，见 spec「候选的结论」。"""
 
-    score: int = Field(ge=-2, le=2)
+    signal: Signal  # PM 对这只股票的信号；信号里的评分记为股票池的最新评分
     decision: Literal[Decision.PROMOTE, Decision.KEEP, Decision.REMOVE]
     watch_thesis: WatchThesis | None = None  # 升级时的关注论点
 
@@ -233,7 +240,7 @@ class PoolAddition(BaseModel):
 
     symbol: str = Field(min_length=1)
     reason: str = Field(min_length=1)  # 理由与论点草稿
-    score: int = Field(ge=-2, le=2)
+    signal: Signal  # PM 对这只候选的信号；加入以后信号里的评分记为股票池的最新评分
 
 
 class PoolRemoval(BaseModel):
@@ -246,7 +253,7 @@ class PoolRemoval(BaseModel):
 
 
 class ExplorationConclusion(_ConclusionBase):
-    """寻股的结论：只增删股票池，两个列表都可以为空。没有自己的评分，每只加入的候选各有一个。"""
+    """寻股的结论：只增删股票池，两个列表都可以为空。没有自己的信号，每只加入的候选各有一个。"""
 
     additions: tuple[PoolAddition, ...] = ()
     removals: tuple[PoolRemoval, ...] = ()

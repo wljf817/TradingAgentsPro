@@ -20,6 +20,7 @@ from tests.modules.scheduler.builders import (
     INVESTMENT_THESIS,
     PLAN,
     REDUCE_PLAN,
+    SIGNAL,
     WATCH_THESIS,
     candidate,
     exploration,
@@ -247,7 +248,9 @@ def test_add_and_promote_have_research_requirements_too() -> None:
             EXPLORATION,
             exploration(
                 additions=(
-                    PoolAddition(symbol="DDD", reason="放量突破，论点草稿：订单回暖", score=1),
+                    PoolAddition(
+                        symbol="DDD", reason="放量突破，论点草稿：订单回暖", signal=SIGNAL
+                    ),
                 ),
                 cited_results=(),
             ),

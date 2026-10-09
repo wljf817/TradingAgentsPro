@@ -1,7 +1,8 @@
 """PM 结论格式的测试：四种结论、PM 写的交易方案和跟进申请。
 
 场景见 openspec 的 case-types spec「结论的公共部分」「持仓的结论」「关注的结论」「候选的结论」
-「寻股的结论」「PM 写的交易方案」「跟进申请的格式」。基准数据和 spec 一致。
+「寻股的结论」「PM 写的交易方案」「跟进申请的格式」。基准数据和 spec 一致，结论里的信号是
+signal-format spec 的基准信号。
 """
 
 from datetime import UTC, date, datetime
@@ -23,6 +24,7 @@ from tradingagentspro.contracts.conclusion import (
     PlanDraft,
     WatchConclusion,
 )
+from tradingagentspro.contracts.signal import Signal
 from tradingagentspro.contracts.thesis import (
     Catalyst,
     CatalystReference,
@@ -65,6 +67,25 @@ WATCH_THESIS = WatchThesis(
     review_day=date(2026, 10, 21),
 )
 TRIGGER_AT = datetime(2026, 11, 19, 14, 30, tzinfo=UTC)
+
+
+def _signal(**changes: Any) -> dict[str, Any]:
+    """signal-format spec 的基准信号的各项，changes 覆盖其中的项。"""
+    fields = {
+        "horizon": 5,
+        "score": 1,
+        "confidence": Decimal("0.6"),
+        "data_as_of": datetime(2026, 10, 14, 14, 30, tzinfo=UTC),
+        "cited_entries": ("E-1", "E-2"),
+        "rationale": "订单回暖，放量突破前高",
+        "risks": "板块整体回调时跟跌",
+    }
+    return fields | changes
+
+
+SIGNAL = Signal.model_validate(_signal())
+# signal-format spec 的基准无信号
+NO_SIGNAL = {"reason": "最近一期财报还没有进状态库，无法判断"}
 
 
 def _follow_up_fields(**changes: Any) -> dict[str, Any]:
@@ -110,7 +131,7 @@ def _conclusion(decision: Decision, **changes: Any) -> dict[str, Any]:
     fields = {
         "answer": "论点仍然成立",
         "rationale": "订单和毛利率都符合预期",
-        "score": 1,
+        "signal": _signal(),
         "cited_results": ("R-1", "R-2"),
         "decision": decision,
     }
@@ -147,7 +168,7 @@ def test_complete_common_part() -> None:
     conclusion = HoldingConclusion(
         answer="论点仍然成立",
         rationale="订单和毛利率都符合预期",
-        score=1,
+        signal=SIGNAL,
         cited_results=("R-1", "R-2"),
         decision=Decision.HOLD,
     )
@@ -155,6 +176,7 @@ def test_complete_common_part() -> None:
 
     assert conclusion == HoldingConclusion.model_validate(_conclusion(HOLD))
     assert conclusion.decision is HOLD
+    assert conclusion.signal == SIGNAL
     assert without_results.cited_results == ()
 
 
@@ -166,18 +188,35 @@ def test_empty_answer_or_rationale(changes: dict[str, Any]) -> None:
 
 @pytest.mark.parametrize("score", [-2, 2])
 def test_score_bounds_inside(score: int) -> None:
-    """spec「评分的边界」：-2 和 2 格式正确。"""
-    assert HoldingConclusion.model_validate(_conclusion(HOLD, score=score)).score == score
+    """spec「评分的边界」：评分 -2 和 2 的信号格式正确。"""
+    conclusion = HoldingConclusion.model_validate(_conclusion(HOLD, signal=_signal(score=score)))
+
+    assert conclusion.signal.score == score
 
 
-@pytest.mark.parametrize("score", [-3, 3, 1.5, None], ids=["-3", "3", "1.5", "不写评分"])
+@pytest.mark.parametrize("score", [-3, 3, 1.5, None], ids=["-3", "3", "1.5", "不写信号"])
 def test_score_bounds_outside(score: float | None) -> None:
-    """spec「评分的边界」：超出范围、不是整数或者不写评分都是格式错误。"""
-    fields = _conclusion(HOLD, score=score)
+    """spec「评分的边界」：信号的评分超出范围、不是整数，或者不写信号，都是格式错误。"""
+    fields = _conclusion(HOLD, signal=_signal(score=score))
     if score is None:
-        del fields["score"]
+        del fields["signal"]
 
     _assert_format_error(HoldingConclusion, fields)
+
+
+def _without_risks() -> dict[str, Any]:
+    """缺少主要风险的基准信号。"""
+    signal = _signal()
+    del signal["risks"]
+    return signal
+
+
+@pytest.mark.parametrize(
+    "signal", [_without_risks(), NO_SIGNAL], ids=["信号缺少主要风险", "信号是基准无信号"]
+)
+def test_signal_format_error_or_no_signal(signal: dict[str, Any]) -> None:
+    """spec「信号的格式错误或者是无信号」。"""
+    _assert_format_error(HoldingConclusion, _conclusion(HOLD, signal=signal))
 
 
 def test_text_is_stripped() -> None:
@@ -357,15 +396,16 @@ def test_candidate_cannot_choose_other_decisions(decision: Decision) -> None:
 
 
 def _exploration(**changes: Any) -> dict[str, Any]:
-    """寻股的结论的公共部分（没有评分），changes 覆盖或补充其中的字段。"""
+    """寻股的结论的公共部分（没有信号），changes 覆盖或补充其中的字段。"""
     fields = _conclusion(KEEP)
-    del fields["score"], fields["decision"]
+    del fields["signal"], fields["decision"]
     return fields | changes
 
 
 def _ddd(**changes: Any) -> dict[str, Any]:
-    """加入 DDD：理由"放量突破，论点草稿：订单回暖"，评分 1。"""
-    return {"symbol": "DDD", "reason": "放量突破，论点草稿：订单回暖", "score": 1} | changes
+    """加入 DDD：理由"放量突破，论点草稿：订单回暖"，评分 1 的信号。"""
+    fields = {"symbol": "DDD", "reason": "放量突破，论点草稿：订单回暖", "signal": _signal()}
+    return fields | changes
 
 
 AAA_REMOVAL = {"symbol": "AAA", "reason": "论点不再成立"}
@@ -373,13 +413,13 @@ AAA_REMOVAL = {"symbol": "AAA", "reason": "论点不再成立"}
 
 def test_exploration_adds_and_removes() -> None:
     """spec「增删股票池」。"""
-    eee = {"symbol": "EEE", "reason": "盈利预期上调", "score": 2}
+    eee = {"symbol": "EEE", "reason": "盈利预期上调", "signal": _signal(score=2)}
 
     conclusion = ExplorationConclusion.model_validate(
         _exploration(additions=(_ddd(), eee), removals=(AAA_REMOVAL,))
     )
 
-    assert [(a.symbol, a.score) for a in conclusion.additions] == [("DDD", 1), ("EEE", 2)]
+    assert [(a.symbol, a.signal.score) for a in conclusion.additions] == [("DDD", 1), ("EEE", 2)]
     assert [(r.symbol, r.reason) for r in conclusion.removals] == [("AAA", "论点不再成立")]
 
 
@@ -390,17 +430,19 @@ def test_exploration_without_changes() -> None:
     assert (conclusion.additions, conclusion.removals) == ((), ())
 
 
-def test_exploration_has_no_score_of_its_own() -> None:
-    """spec「结论的公共部分」：寻股的结论没有评分，每只加入的候选各有一个。"""
-    _assert_format_error(ExplorationConclusion, _exploration(score=1))
+def test_exploration_has_no_signal_of_its_own() -> None:
+    """spec「结论的公共部分」：寻股的结论没有信号，每只加入的候选各有一个。"""
+    _assert_format_error(ExplorationConclusion, _exploration(signal=_signal()))
 
 
-@pytest.mark.parametrize("score", [None, 3], ids=["不写评分", "评分是 3"])
-def test_each_addition_needs_a_score(score: int | None) -> None:
+@pytest.mark.parametrize(
+    "signal", [None, _signal(score=3), NO_SIGNAL], ids=["不写信号", "评分是 3", "信号是无信号"]
+)
+def test_each_addition_needs_a_signal(signal: dict[str, Any] | None) -> None:
     """spec「加入的候选必须有评分」。"""
-    addition = _ddd(score=score)
-    if score is None:
-        del addition["score"]
+    addition = _ddd(signal=signal)
+    if signal is None:
+        del addition["signal"]
 
     _assert_format_error(ExplorationConclusion, _exploration(additions=(addition,)))
 
