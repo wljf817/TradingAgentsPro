@@ -455,7 +455,7 @@ def read_env_template(name: str) -> list[tuple[str, str]]:
 
 ## Risks / Trade-offs
 
-- [OpenD 在 systemd 下的行为没有在 Linux 上验证过：控制台模式在没有终端输入时是否正常、`-no_monitor=1` 时是不是一个前台进程、记住的密码在 systemd 启动时能不能用、Ubuntu 的构建在 Debian 上缺不缺库] → 部署说明的 OpenD 一步逐项检查：服务是 active、只有一个 OpenD 进程、CPU 占用接近 0、日志里登录成功、11111 和 22222 在 127.0.0.1 上监听。不符时停下来告诉我，按看到的现象改单元（比如加 `-console=0`），先改 spec 和 design
+- [OpenD 在 systemd 下的行为没有在 Linux 上验证过：控制台模式在没有终端输入时是否正常、`-no_monitor=1` 时是不是一个前台进程、记住的密码在 systemd 启动时能不能用、Ubuntu 的构建在 Debian 上缺不缺库] → 部署说明的 OpenD 一步逐项检查：服务是 active、只有一个 OpenD 进程、CPU 占用接近 0、日志里登录成功、11111 和 22222 在 127.0.0.1 上监听。不符时停下来告诉我，按看到的现象改单元（比如加 `-console=0`），先改 spec 和 design。2026-10-10 在部署机器（Debian 13）上验证：没有终端输入时照常运行；`-no_monitor=1` 时只有一个前台进程，启动后 CPU 约 3%；记住的密码在 systemd 启动时可用，行情和交易都已登录；Ubuntu 的构建在 Debian 13 上不缺库。和预想不同的一点：OpenD 的控制台输出不进 journald，登录成功改为看 `~/.com.moomoo.OpenD/Log` 里以 moomoo ID 命名的 `GTWLog_<ID>_…` 文件
 - [`OpenD.xml` 里 `telnet_port` 的写法没有文字文档] → 部署说明让人在自带文件里找到 `telnet_port` 那一行改值（自带文件里是注释掉的示例）；`ss -ltn` 看到 22222 才算完成
 - [记住的登录过期以后 OpenD 登录不上，盘中行情停止] → 主程序进入降级模式，暂停开仓，券商那边的止损单照常挂着；「健康监控接线」以后会推送降级告警；部署说明有重新登录的步骤
 - [服务用户能改 root 运行的 compose 文件和备份脚本（它们在服务用户的克隆里），等于能拿到 root] → 这台机器只跑本系统，服务用户本来就持有全部密钥；要避免就得让 root 拥有代码、另找 Python 的安装位置、更新命令都要 root，不值得

@@ -252,7 +252,7 @@ ss -ltn | grep -E ':(11111|22222) '
 
 - `status` 是 `active (running)`；过一分钟再看一次，还是同一个进程，没有反复重启
 - 只有一个 OpenD 进程，CPU 占用接近 0
-- 日志里有登录成功，没有在等你输入账号或密码
+- 登录成功的标志：`sudo ls -t /opt/tradingagentspro/.com.moomoo.OpenD/Log | head` 里有这次启动以后新出现的、以 moomoo ID 命名的 `GTWLog_<moomoo ID>_…` 文件（只有登录以后才有）。OpenD 的控制台输出不进 journald，journal 里只有 systemd 的启动记录
 - 只有 `127.0.0.1:11111` 和 `127.0.0.1:22222`
 
 再试一下远程命令：
@@ -518,7 +518,7 @@ sudo systemctl start tradingagentspro-opend
 sudo journalctl -u tradingagentspro-opend -n 30 --no-pager
 ```
 
-检查：日志里登录成功。
+检查：登录成功的标志：`sudo ls -t /opt/tradingagentspro/.com.moomoo.OpenD/Log | head` 里有这次启动以后新出现的、以 moomoo ID 命名的 `GTWLog_<moomoo ID>_…` 文件（只有登录以后才有）。OpenD 的控制台输出不进 journald，journal 里只有 systemd 的启动记录。
 
 ### 运行中输入手机验证码
 
@@ -573,7 +573,7 @@ sudo systemctl start tradingagentspro-opend
 sudo journalctl -u tradingagentspro-opend -n 30 --no-pager
 ```
 
-检查：日志里登录成功（要求验证码时按「运行中输入手机验证码」）。确认没问题以后 `sudo rm -rf /opt/tradingagentspro/opend.old`。
+检查：登录成功的标志：`sudo ls -t /opt/tradingagentspro/.com.moomoo.OpenD/Log | head` 里有这次启动以后新出现的、以 moomoo ID 命名的 `GTWLog_<moomoo ID>_…` 文件（只有登录以后才有）。OpenD 的控制台输出不进 journald，journal 里只有 systemd 的启动记录（要求验证码时按「运行中输入手机验证码」）。确认没问题以后 `sudo rm -rf /opt/tradingagentspro/opend.old`。
 
 ## 更新 PostgreSQL 小版本（可选）
 
