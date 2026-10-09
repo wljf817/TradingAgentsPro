@@ -51,7 +51,7 @@
 
 - [x] 8.1 对照两个 spec，确认每个场景都有对应的测试，测试名或说明里写明场景；只能在真实 Discord 上验证的（注册、全局命令里没有、只有本人看得到、真实的 3 秒应答）写明由冒烟测试覆盖。验证：逐条列出场景和测试的对应关系，没有遗漏
 - [x] 8.2 运行全部检查：`uv run pytest`、`uv run ruff check`、`uv run ruff format --check`、`uv run mypy`、`uv run lint-imports`、`openspec validate --all --strict`。验证：全部通过
-- [ ] 8.3 由人在自己的终端运行冒烟测试（最后一项，需要人操作）：
+- [x] 8.3 由人在自己的终端运行冒烟测试（最后一项，需要人操作）：
   - 先准备：token 由人自己复制，只放进终端的环境变量；部署机器上如果已经用同一个 token 运行着程序，先停掉
   - 在终端里设好 `DISCORD_BOT_TOKEN`、`DISCORD_GUILD_ID`、`DISCORD_CHANNEL_ID`、`DISCORD_USER_ID`（不要写进仓库里的任何文件），直接运行 `uv run pytest -m discord_bot tests/integrations/discord/test_plan_smoke.py`；看到告警后按提示在 5 分钟内依次运行四条 `/plan`，确认每条回复都标着「只有你能看到」，文字和告警里说的一致
   - 只有启动报「注册斜杠命令失败」（没有授权）时，才在 Discord 开发者后台用 OAuth2 链接（scope 选 `bot` 和 `applications.commands`）重新邀请一次，不用踢出机器人，然后再运行一次。现在邀请时选 `bot` 通常已经包含斜杠命令的权限
