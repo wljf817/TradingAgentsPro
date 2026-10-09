@@ -2,11 +2,12 @@
 
 一个单只股票的案件、一个寻股：随机交错 PM 和 Critic 的派发（任务类型、股票、问题、输入从小的集合
 里取，也常常照抄已有的任务，让重复和超限经常出现）、给任务交输出（合法的信号、无信号、结构错误、
-评估窗口不合法、数据截至时刻晚于现在）、调用失败、拨动时间和记超时。每次派发按参考模型推出每个请求
+评估窗口不合法、数据截至时刻晚于现在，出自主模型或备用模型）、调用失败、拨动时间和记超时。每次派发按参考模型推出每个请求
 的处理结果；每一步之后检查：PM 派发出去的任务不超过上限，轮次是从 1 开始连续的数、不超过上限，
 Critic 派发出去的不超过额度；寻股没有派给 News 的任务，单只股票的案件派发出去的都是案件的股票；
 同一个案件里可以复用的相同任务最多一个；被拒绝的任务一生成就有 Result，没有轮次；每个任务最多一个
-Result，写入以后不变，晚于截止时间生成的 Result 都是超时。配置用较小的上限。
+Result，写入以后不变，晚于截止时间生成的 Result 都是超时；完成、无信号和格式不合法的失败记下给出
+输出的模型，其他的不记。配置用较小的上限。
 """
 
 import json
@@ -21,9 +22,17 @@ from hypothesis.stateful import RuleBasedStateMachine, invariant, rule
 from tests.fakes.clock import FakeClock
 from tests.fakes.ids import FakeIds
 from tests.fakes.tasks import InMemoryTaskStore
-from tests.modules.gateway.builders import NO_SIGNAL_JSON, NOW, SIGNAL_JSON, signal
+from tests.modules.gateway.builders import (
+    NO_SIGNAL_JSON,
+    NOW,
+    S1_USE,
+    S2_USE,
+    SIGNAL_JSON,
+    signal,
+)
 from tradingagentspro.contracts.agent import SubAgent
 from tradingagentspro.contracts.case import CaseType
+from tradingagentspro.contracts.model import ModelUse
 from tradingagentspro.contracts.task import (
     Dispatcher,
     Result,
@@ -266,25 +275,31 @@ class TaskDispatchMachine(RuleBasedStateMachine):
         event("已有 Result，不变")
         return True
 
-    @rule(data=st.data(), kind=st.sampled_from(OUTPUTS), cost=st.sampled_from(["0", "0.02"]))
-    def receive(self, data: st.DataObject, kind: str, cost: str) -> None:
+    @rule(
+        data=st.data(),
+        kind=st.sampled_from(OUTPUTS),
+        cost=st.sampled_from(["0", "0.02"]),
+        model_use=st.sampled_from([S1_USE, S2_USE]),
+    )
+    def receive(self, data: st.DataObject, kind: str, cost: str, model_use: ModelUse) -> None:
         record = self._pick(data)
         if record is None:
             return
         output = self._output(kind)
 
-        result = self.service.receive(record.task.task_id, output, Decimal(cost))
+        result = self.service.receive(record.task.task_id, output, Decimal(cost), model_use)
 
         if self._settled_already(record, result):
             return
         if self.now > record.task.deadline:
-            assert (result.status, result.output) == (TIMED_OUT, None)
+            assert (result.status, result.output, result.model_use) == (TIMED_OUT, None, None)
             event("截止时间以后收到输出：超时")
             return
         assert result.status is _EXPECTED_STATUS[kind]
         if result.status is FAILED:
             assert result.reason is TaskFailure.FORMAT_INVALID
         assert result.cost == Decimal(cost)
+        assert result.model_use == model_use
         event(f"收到{kind}")
 
     def _output(self, kind: str) -> str:
@@ -314,10 +329,11 @@ class TaskDispatchMachine(RuleBasedStateMachine):
             assert result.status is TIMED_OUT
             event("截止时间以后调用失败：超时")
             return
-        assert (result.status, result.reason, result.detail) == (
+        assert (result.status, result.reason, result.detail, result.model_use) == (
             FAILED,
             TaskFailure.CALL_FAILED,
             "主模型和备用模型都失败",
+            None,
         )
         event("调用失败")
 
@@ -438,6 +454,8 @@ class TaskDispatchMachine(RuleBasedStateMachine):
                 assert result == self.results[task.task_id]
                 continue
             self.results[task.task_id] = result
+            with_output = result.status in _REUSABLE or result.reason is TaskFailure.FORMAT_INVALID
+            assert (result.model_use is not None) is with_output, "有输出的 Result 才记模型"
             if result.status is REJECTED:
                 assert (result.elapsed, result.cost) == (timedelta(0), Decimal(0))
                 continue

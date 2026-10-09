@@ -167,6 +167,19 @@ def test_rejected_conclusion_goes_back_to_the_pm() -> None:
     ]
 
 
+def test_fallback_limit_goes_back_to_the_pm() -> None:
+    """spec「备用模型的限制也退回 PM 重交」：被限制的决定和结论校验不通过是同一个事件，调度器的
+    代码不改；之后结论通过（继续关注）。
+    """
+    states = receive(opening_case(), rejected(), accepted(None))
+
+    assert [(s.stage, s.resubmissions, s.concluded) for s in states] == [
+        (CONCLUDING, 1, False),
+        (ENDED, 1, True),
+    ]
+    assert states[-1].end_reason is CaseEndReason.NO_PLAN
+
+
 def test_resubmissions_run_out() -> None:
     """spec「重交次数用完」：已经重交 2 次，又不通过。"""
     state = after(opening_case(), rejected(), rejected())

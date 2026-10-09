@@ -4,11 +4,14 @@
   时刻是否晚于现在（signal-format spec）
 - 任务派发：PM 和 Critic 的任务请求放行或拒绝，相同的任务复用，按案件计任务数和轮次；子 agent 的
   输出、调用失败和超时变成 Result；给出本案件的任务、用量和交给结论校验的数（task-dispatch spec）
+- 备用模型：各 agent 的模型配置和厂商校验；主模型不可用时按顺序切换备用模型，案件内不切回，按模型
+  熔断；给出实际使用的模型、切换的事件、PM 和 Critic 是否还有可用的模型，以及 PM 用备用模型时不能
+  提的决定（model-fallback spec）
 
 网关不做交易判断、不下单。模块之外的代码只能 import 这里导出的名字。
 """
 
-from tradingagentspro.modules.gateway.config import GatewayConfig
+from tradingagentspro.modules.gateway.config import AgentModels, GatewayConfig, ModelAssignments
 from tradingagentspro.modules.gateway.domain.dispatch import (
     CaseScope,
     Dispatch,
@@ -25,6 +28,22 @@ from tradingagentspro.modules.gateway.domain.dispatch import (
     tasks_used,
     usage,
 )
+from tradingagentspro.modules.gateway.domain.fallback import (
+    AllUnavailable,
+    Attempt,
+    Breaker,
+    CallError,
+    CallStep,
+    DeadlineReached,
+    ModelCall,
+    ModelSwitch,
+    Unavailable,
+    after_failure,
+    attempt_timeout,
+    blocked_decision,
+    exhausted,
+    start,
+)
 from tradingagentspro.modules.gateway.domain.result import (
     Malformed,
     call_failed,
@@ -38,24 +57,40 @@ from tradingagentspro.modules.gateway.domain.signal import (
     signal_rejection,
 )
 from tradingagentspro.modules.gateway.ports import TaskStore
-from tradingagentspro.modules.gateway.service import TaskDispatchService
+from tradingagentspro.modules.gateway.service import ModelFallbackService, TaskDispatchService
 
 __all__ = [
+    "AgentModels",
+    "AllUnavailable",
+    "Attempt",
+    "Breaker",
+    "CallError",
+    "CallStep",
     "CaseScope",
+    "DeadlineReached",
     "Dispatch",
     "DispatchAction",
     "GatewayConfig",
     "Malformed",
+    "ModelAssignments",
+    "ModelCall",
+    "ModelFallbackService",
+    "ModelSwitch",
     "SignalRejection",
     "TaskDispatchService",
     "TaskRecord",
     "TaskStore",
     "TaskUsage",
+    "Unavailable",
+    "after_failure",
+    "attempt_timeout",
+    "blocked_decision",
     "call_failed",
     "completed_results",
     "conclusion_signal_rejection",
     "dispatch_rejection",
     "dispatched_agents",
+    "exhausted",
     "expired",
     "new_task",
     "received",
@@ -64,6 +99,7 @@ __all__ = [
     "rounds_used",
     "same_task",
     "signal_rejection",
+    "start",
     "tasks_used",
     "usage",
 ]

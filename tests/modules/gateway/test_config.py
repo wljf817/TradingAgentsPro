@@ -1,5 +1,7 @@
-"""Agent 网关配置的测试。场景见 openspec 的 signal-format spec「信号的配置」和 task-dispatch spec
-「派发的配置」。
+"""Agent 网关配置的测试。场景见 openspec 的 signal-format spec「信号的配置」、task-dispatch spec
+「派发的配置」，以及 model-fallback spec「模型的配置」「厂商校验」「备用模型的配置」。
+
+模型用 builders 里的基准模型的配置，模型写作"厂商/模型名"。
 """
 
 from datetime import timedelta
@@ -8,7 +10,21 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from tradingagentspro.modules.gateway import GatewayConfig
+from tests.modules.gateway.builders import (
+    BASELINE_MODELS,
+    C1,
+    C2,
+    P1,
+    P2,
+    P3,
+    S1,
+    S2,
+    assignments,
+)
+from tradingagentspro.contracts.agent import Agent
+from tradingagentspro.contracts.conclusion import Decision
+from tradingagentspro.contracts.model import ModelRef
+from tradingagentspro.modules.gateway import AgentModels, GatewayConfig
 
 
 def test_default_config() -> None:
@@ -40,9 +56,16 @@ def test_default_dispatch_config() -> None:
 
 
 def test_smallest_valid_dispatch_config() -> None:
-    """四项都取最小的合法值：1 个、1 轮、1 个、1 秒。"""
+    """四项都取最小的合法值：1 个、1 轮、1 个、1 秒。重试次数 0、子 agent 的单次调用超时 0.5 秒，
+    主模型和第一个备用模型的尝试才放得进 1 秒的任务时限。
+    """
     config = GatewayConfig(
-        max_pm_tasks=1, max_pm_rounds=1, max_critic_tasks=1, task_timeout=timedelta(seconds=1)
+        max_pm_tasks=1,
+        max_pm_rounds=1,
+        max_critic_tasks=1,
+        task_timeout=timedelta(seconds=1),
+        call_retries=0,
+        subagent_call_timeout=timedelta(seconds=0.5),
     )
 
     assert (config.max_pm_tasks, config.max_pm_rounds, config.max_critic_tasks) == (1, 1, 1)
@@ -67,3 +90,172 @@ def test_invalid_dispatch_config_is_an_error(changes: dict[str, Any]) -> None:
     assert [(e["type"], e["loc"]) for e in raised.value.errors()] == [
         ("greater_than", tuple(changes))
     ]
+
+
+# 模型的配置
+
+
+def test_baseline_models() -> None:
+    """spec「基准配置」：PM 的模型依次是 p-1、p-2、p-3；Reviewer 只有主模型 p-1，和 PM 的主模型
+    是同一个模型。
+    """
+    pm, reviewer = BASELINE_MODELS.of(Agent.PM), BASELINE_MODELS.of(Agent.REVIEWER)
+
+    assert set(BASELINE_MODELS.agents) == set(Agent)
+    assert pm.chain == (P1, P2, P3)
+    assert reviewer == AgentModels(primary=P1)
+    assert reviewer.chain == (P1,)
+    assert reviewer.primary == pm.primary
+    assert BASELINE_MODELS.of(Agent.NEWS).chain == (S1, S2)
+    assert BASELINE_MODELS.of(Agent.CRITIC).chain == (C1, C2)
+
+
+def test_vendor_is_stripped_and_lowercased() -> None:
+    """spec「厂商去掉空白、转成小写」：PM 的主模型的厂商写成 " Anthropic "。"""
+    models = assignments(pm={"primary": {"vendor": " Anthropic ", "name": "p-1"}})
+
+    assert models.of(Agent.PM).primary.vendor == "anthropic"
+    assert models.of(Agent.PM).primary == models.of(Agent.REVIEWER).primary
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"reviewer": None},
+        {"news": {"primary": {"vendor": "  ", "name": "s-1"}}},
+        {"critic": {"primary": C1, "fallbacks": ({"vendor": "openai", "name": ""},)}},
+        {"pm": {"primary": P1, "fallbacks": (P2, P1)}},
+        {"pm": {"primary": P1, "fallbacks": (P2, P2)}},
+        {"pm": {"primary": P1, "fallbacks": ({"vendor": "Anthropic", "name": "p-1"},)}},
+    ],
+    ids=[
+        "不配 Reviewer",
+        "News 的主模型的厂商是空白",
+        "Critic 的备用模型的模型名是空字符串",
+        "PM 的备用模型依次是 p-2、p-1",
+        "PM 的备用模型依次是 p-2、p-2",
+        "PM 的备用模型是 Anthropic/p-1",
+    ],
+)
+def test_invalid_models(changes: dict[str, Any]) -> None:
+    """spec「配置不合法」：都配置报错。"""
+    with pytest.raises(ValidationError):
+        assignments(**changes)
+
+
+def test_missing_agents_are_named() -> None:
+    """缺少 agent 时，错误指出缺少哪几个。"""
+    with pytest.raises(ValidationError, match="缺少这些 agent 的模型：critic、reviewer"):
+        assignments(critic=None, reviewer=None)
+
+
+def test_different_agents_may_share_a_model() -> None:
+    """不同 agent 可以用同一个模型：三个子 agent 都用 s-1、s-2，Reviewer 和 PM 都用 p-1。"""
+    assert BASELINE_MODELS.of(Agent.QUANT) == BASELINE_MODELS.of(Agent.NEWS)
+
+
+# 厂商校验
+
+
+def test_baseline_vendors_pass() -> None:
+    """spec「基准配置通过」：PM 是 anthropic 和 google，Critic 是 openai；News 的备用模型 s-2 也是
+    openai，Reviewer 也是 anthropic。
+    """
+    assert {m.vendor for m in BASELINE_MODELS.of(Agent.PM).chain} == {"anthropic", "google"}
+    assert {m.vendor for m in BASELINE_MODELS.of(Agent.CRITIC).chain} == {"openai"}
+    assert BASELINE_MODELS.of(Agent.NEWS).fallbacks[0].vendor == "openai"
+    assert BASELINE_MODELS.of(Agent.REVIEWER).primary.vendor == "anthropic"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"critic": {"primary": C1, "fallbacks": (ModelRef(vendor="google", name="c-2"),)}},
+        {"pm": {"primary": P1, "fallbacks": (P2, ModelRef(vendor="openai", name="p-3"))}},
+        {"critic": {"primary": {"vendor": "Anthropic", "name": "c-1"}, "fallbacks": (C2,)}},
+    ],
+    ids=[
+        "Critic 的备用模型是 google/c-2",
+        "PM 的 p-3 是 openai/p-3",
+        "Critic 的主模型是 Anthropic/c-1",
+    ],
+)
+def test_critic_and_pm_share_a_vendor(changes: dict[str, Any]) -> None:
+    """spec「Critic 和 PM 有相同的厂商」：都配置报错，错误指出相同的厂商。"""
+    with pytest.raises(ValidationError, match="Critic 和 PM 不能用同一家厂商的模型"):
+        assignments(**changes)
+
+
+# 备用模型的配置
+
+
+def test_default_fallback_config() -> None:
+    """spec「默认配置」。"""
+    config = GatewayConfig()
+
+    assert config.call_retries == 1
+    assert config.subagent_call_timeout == timedelta(seconds=60)
+    assert config.call_timeout == timedelta(seconds=180)
+    assert config.breaker_failures == 3
+    assert config.breaker_window == timedelta(minutes=10)
+    assert config.breaker_cooldown == timedelta(minutes=5)
+    assert config.fallback_blocked_decisions == {Decision.BUY, Decision.ADD, Decision.PROMOTE}
+
+
+@pytest.mark.parametrize(
+    ("changes", "error"),
+    [
+        ({"call_retries": -1}, "greater_than_equal"),
+        ({"subagent_call_timeout": timedelta(0)}, "greater_than"),
+        ({"call_timeout": timedelta(0)}, "greater_than"),
+        ({"breaker_failures": 0}, "greater_than"),
+        ({"breaker_window": timedelta(0)}, "greater_than"),
+        ({"breaker_cooldown": timedelta(0)}, "greater_than"),
+    ],
+    ids=[
+        "重试次数 -1",
+        "子 agent 的单次调用超时 0 秒",
+        "PM、Critic、Reviewer 的单次调用超时 0 秒",
+        "熔断的连续不可用次数 0",
+        "熔断的时间窗口 0 秒",
+        "冷却时间 0 秒",
+    ],
+)
+def test_invalid_fallback_config(changes: dict[str, Any], error: str) -> None:
+    """spec「配置不合法」（备用模型的配置）：都配置报错，错误指出这一项。"""
+    with pytest.raises(ValidationError) as raised:
+        GatewayConfig.model_validate(changes)
+
+    assert [(e["type"], e["loc"]) for e in raised.value.errors()] == [(error, tuple(changes))]
+
+
+def test_no_blocked_decisions_is_valid() -> None:
+    """PM 用备用模型时不能提的决定可以为空。"""
+    assert GatewayConfig(fallback_blocked_decisions=frozenset()).fallback_blocked_decisions == set()
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"subagent_call_timeout": timedelta(seconds=75)},
+        {"call_retries": 0, "subagent_call_timeout": timedelta(seconds=150)},
+        {"call_retries": 2, "task_timeout": timedelta(minutes=6)},
+    ],
+    ids=["单次超时 75 秒", "重试 0 次、单次超时 150 秒", "重试 2 次、任务时限 6 分钟"],
+)
+def test_attempts_fit_the_task_timeout(changes: dict[str, Any]) -> None:
+    """spec「放得进任务时限的边界」：重试次数加 1，乘单次超时，再乘 2，等于任务时限，配置正确。"""
+    config = GatewayConfig.model_validate(changes)
+
+    assert (config.call_retries + 1) * config.subagent_call_timeout * 2 == config.task_timeout
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"subagent_call_timeout": timedelta(seconds=76)}, {"call_retries": 2}],
+    ids=["单次超时 76 秒", "重试 2 次"],
+)
+def test_attempts_do_not_fit_the_task_timeout(changes: dict[str, Any]) -> None:
+    """spec「放得进任务时限的边界」：超过任务时限，配置报错。"""
+    with pytest.raises(ValidationError, match="放不进任务时限"):
+        GatewayConfig.model_validate(changes)

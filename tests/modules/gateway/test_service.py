@@ -1,6 +1,7 @@
 """任务派发用例的测试。每个测试对应 openspec 的 task-dispatch spec 里的一个场景，说明里写明场景。
 
-基准数据见 tests/modules/gateway/builders.py：当前时刻 2026-10-14 15:00Z，T-n 就是 UUID(int=n)。
+基准数据见 tests/modules/gateway/builders.py：当前时刻 2026-10-14 15:00Z，T-n 就是 UUID(int=n)；
+没有说明时，子 agent 的输出出自它的主模型 s-1。
 spec 一个 WHEN 里用"；"或"或者"隔开的几种情况各自从 GIVEN 开始，测试里各用一个新的用例。
 """
 
@@ -27,6 +28,8 @@ from tests.modules.gateway.builders import (
     NO_SIGNAL_JSON,
     NOW,
     PRICE_REQUEST,
+    S1_USE,
+    S2_USE,
     SIGNAL,
     SIGNAL_JSON,
     T1,
@@ -86,6 +89,7 @@ PM_TASKS_USED_UP = TaskRejection.PM_TASKS_USED_UP
 CRITIC_TASKS_USED_UP = TaskRejection.CRITIC_TASKS_USED_UP
 HORIZON_4_JSON = signal(horizon=4).model_dump_json()  # "T-n 失败"收到的输出
 RECEIVED_AT = at(15, 1, 30)
+ALL_UNAVAILABLE = "模型都不可用：google/s-1 连接失败；openai/s-2 连接失败"  # 调用失败的说明
 
 AAA_PRICE = request(PRICE_REQUEST, symbol="AAA")  # AAA 的价格请求
 DDD_PRICE = request(PRICE_REQUEST, symbol="DDD")
@@ -109,15 +113,17 @@ class _Setup:
     def complete(self, *task_ids: UUID) -> None:
         """spec 里的"T-n 完成"：现在收到基准信号。"""
         for task_id in task_ids:
-            assert self.service.receive(task_id, SIGNAL_JSON, Decimal(0)).status is COMPLETED
+            result = self.service.receive(task_id, SIGNAL_JSON, Decimal(0), S1_USE)
+            assert result.status is COMPLETED
 
     def no_signal(self, task_id: UUID) -> None:
         """spec 里的"T-n 无信号"：现在收到基准无信号。"""
-        assert self.service.receive(task_id, NO_SIGNAL_JSON, Decimal(0)).status is NO_SIGNAL_STATUS
+        result = self.service.receive(task_id, NO_SIGNAL_JSON, Decimal(0), S1_USE)
+        assert result.status is NO_SIGNAL_STATUS
 
     def fail(self, task_id: UUID) -> None:
         """spec 里的"T-n 失败"：现在收到评估窗口 4 的信号。"""
-        assert self.service.receive(task_id, HORIZON_4_JSON, Decimal(0)).status is FAILED
+        assert self.service.receive(task_id, HORIZON_4_JSON, Decimal(0), S1_USE).status is FAILED
 
     def time_out(self, task_id: UUID) -> None:
         """spec 里的"T-n 超时"：到截止时间仍没有输出，记为超时；之后的派发仍在当前时刻。"""
@@ -224,15 +230,17 @@ def test_critic_task_has_no_round() -> None:
 
 
 def test_completed_and_no_signal_results() -> None:
-    """spec「完成和无信号的 Result」。"""
+    """spec「完成和无信号的 Result」：s-1 给出的输出，模型是 s-1、不是备用模型。"""
     completed = _Setup()
     completed.pm(PRICE_REQUEST)
     no_signal = _Setup()
     no_signal.pm(PRICE_REQUEST)
 
-    signal_result = completed.at(RECEIVED_AT).service.receive(T1, SIGNAL_JSON, Decimal("0.02"))
+    signal_result = completed.at(RECEIVED_AT).service.receive(
+        T1, SIGNAL_JSON, Decimal("0.02"), S1_USE
+    )
     no_signal_result = no_signal.at(RECEIVED_AT).service.receive(
-        T1, NO_SIGNAL_JSON, Decimal("0.02")
+        T1, NO_SIGNAL_JSON, Decimal("0.02"), S1_USE
     )
 
     assert signal_result == Result(
@@ -241,10 +249,12 @@ def test_completed_and_no_signal_results() -> None:
         output=SIGNAL,
         elapsed=timedelta(seconds=90),
         cost=Decimal("0.02"),
+        model_use=S1_USE,
     )
     assert signal_result.cited_entries == ("E-1", "E-2")
     assert (no_signal_result.status, no_signal_result.output) == (NO_SIGNAL_STATUS, NO_SIGNAL)
     assert no_signal_result.cited_entries == ()
+    assert no_signal_result.model_use == S1_USE
     assert completed.result(T1) == signal_result
 
 
@@ -695,13 +705,24 @@ def test_critic_quota_counts_per_case() -> None:
     ids=["基准信号", "基准无信号"],
 )
 def test_valid_signal_and_no_signal(output: str, status: ResultStatus, expected: object) -> None:
-    """spec「收到合法的信号和无信号」。"""
+    """spec「收到合法的信号和无信号」：模型是 s-1、不是备用模型。"""
     setup = _Setup()
     setup.pm(PRICE_REQUEST)
 
-    result = setup.at(RECEIVED_AT).service.receive(T1, output, Decimal("0.02"))
+    result = setup.at(RECEIVED_AT).service.receive(T1, output, Decimal("0.02"), S1_USE)
 
-    assert (result.status, result.output) == (status, expected)
+    assert (result.status, result.output, result.model_use) == (status, expected, S1_USE)
+    assert setup.result(T1) == result
+
+
+def test_output_from_a_fallback_model() -> None:
+    """spec「备用模型给出的输出」。"""
+    setup = _Setup()
+    setup.pm(PRICE_REQUEST)
+
+    result = setup.at(at(15, 3)).service.receive(T1, SIGNAL_JSON, Decimal("0.02"), S2_USE)
+
+    assert (result.status, result.model_use) == (COMPLETED, S2_USE)
     assert setup.result(T1) == result
 
 
@@ -712,16 +733,17 @@ def _without_risks() -> str:
 
 
 def test_structure_error_names_the_item() -> None:
-    """spec「结构错误」：缺少主要风险的基准信号，说明指出缺少主要风险。"""
+    """spec「结构错误」：s-1 给出缺少主要风险的基准信号，说明指出缺少主要风险，模型是 s-1。"""
     setup = _Setup()
     setup.pm(PRICE_REQUEST)
 
-    result = setup.at(RECEIVED_AT).service.receive(T1, _without_risks(), Decimal("0.02"))
+    result = setup.at(RECEIVED_AT).service.receive(T1, _without_risks(), Decimal("0.02"), S1_USE)
 
     assert (result.status, result.reason) == (FAILED, FORMAT_INVALID)
     assert result.detail is not None
     assert "Signal.risks: Field required" in result.detail.split("; ")
     assert result.output is None
+    assert result.model_use == S1_USE
 
 
 @pytest.mark.parametrize(
@@ -740,23 +762,24 @@ def test_other_structure_errors(output: str, detail: str) -> None:
     setup = _Setup()
     setup.pm(PRICE_REQUEST)
 
-    result = setup.at(RECEIVED_AT).service.receive(T1, output, Decimal("0.02"))
+    result = setup.at(RECEIVED_AT).service.receive(T1, output, Decimal("0.02"), S1_USE)
 
     assert (result.status, result.reason) == (FAILED, FORMAT_INVALID)
     assert result.detail is not None and detail in result.detail.split("; ")
 
 
 def test_horizon_not_in_the_options() -> None:
-    """spec「评估窗口不在配置的选项里」。"""
+    """spec「评估窗口不在配置的选项里」：s-2 给出的信号，模型是 s-2、是备用模型。"""
     setup = _Setup()
     setup.pm(PRICE_REQUEST)
 
-    result = setup.at(RECEIVED_AT).service.receive(T1, HORIZON_4_JSON, Decimal("0.02"))
+    result = setup.at(RECEIVED_AT).service.receive(T1, HORIZON_4_JSON, Decimal("0.02"), S2_USE)
 
-    assert (result.status, result.reason, result.detail) == (
+    assert (result.status, result.reason, result.detail, result.model_use) == (
         FAILED,
         FORMAT_INVALID,
         "horizon_not_offered",
+        S2_USE,
     )
 
 
@@ -773,7 +796,7 @@ def test_data_as_of_after_receipt(
     setup.pm(PRICE_REQUEST)
     output = signal(data_as_of=data_as_of).model_dump_json()
 
-    result = setup.at(RECEIVED_AT).service.receive(T1, output, Decimal("0.02"))
+    result = setup.at(RECEIVED_AT).service.receive(T1, output, Decimal("0.02"), S1_USE)
 
     assert (result.status, result.detail) == (status, detail)
 
@@ -792,9 +815,20 @@ def test_deadline_boundary(moment: datetime, status: ResultStatus, output: objec
     (dispatch,) = setup.pm(PRICE_REQUEST)
     assert dispatch.task.deadline == DEADLINE
 
-    result = setup.at(moment).service.receive(T1, SIGNAL_JSON, Decimal("0.02"))
+    result = setup.at(moment).service.receive(T1, SIGNAL_JSON, Decimal("0.02"), S1_USE)
 
     assert (result.status, result.output) == (status, output)
+
+
+def test_output_after_the_deadline_has_no_model() -> None:
+    """spec「晚于截止时间收到的不记模型」。"""
+    setup = _Setup()
+    setup.pm(PRICE_REQUEST)
+
+    result = setup.at(at(15, 5, 1)).service.receive(T1, SIGNAL_JSON, Decimal("0.02"), S1_USE)
+
+    assert (result.status, result.output, result.model_use) == (TIMED_OUT, None, None)
+    assert setup.result(T1) == result
 
 
 def test_no_output_by_the_deadline() -> None:
@@ -826,7 +860,7 @@ def test_call_failure_after_the_deadline() -> None:
     setup = _Setup()
     setup.pm(PRICE_REQUEST)
 
-    result = setup.at(at(15, 5, 1)).service.fail(T1, "主模型和备用模型都失败", Decimal(0))
+    result = setup.at(at(15, 5, 1)).service.fail(T1, ALL_UNAVAILABLE, Decimal(0))
 
     assert result.status is TIMED_OUT
 
@@ -835,20 +869,34 @@ def test_call_failure_after_the_deadline() -> None:
 
 
 def test_call_failed() -> None:
-    """spec「调用失败」。"""
+    """spec「调用失败」：说明是 model-fallback 给出的全部不可用的说明，没有模型。"""
     setup = _Setup()
     setup.pm(PRICE_REQUEST)
 
-    result = setup.at(at(15, 2)).service.fail(T1, "主模型和备用模型都失败", Decimal(0))
+    result = setup.at(at(15, 2)).service.fail(T1, ALL_UNAVAILABLE, Decimal(0))
 
     assert result == Result(
         task_id=T1,
         status=FAILED,
         reason=CALL_FAILED,
-        detail="主模型和备用模型都失败",
+        detail=ALL_UNAVAILABLE,
         elapsed=timedelta(minutes=2),
         cost=Decimal(0),
     )
+    assert result.model_use is None
+    assert setup.result(T1) == result
+
+
+def test_stopped_call_times_out() -> None:
+    """spec「停止尝试以后记超时」：调用在 15:05:00Z 停止尝试，调用方不给出调用失败，同一时刻记
+    超时。
+    """
+    setup = _Setup()
+    setup.pm(PRICE_REQUEST)
+
+    result = setup.at(at(15, 5)).service.expire(T1, Decimal(0))
+
+    assert (result.status, result.reason, result.model_use) == (TIMED_OUT, None, None)
     assert setup.result(T1) == result
 
 
@@ -861,7 +909,7 @@ def test_output_after_timing_out() -> None:
     setup.pm(PRICE_REQUEST)
     timed_out = setup.at(at(15, 5)).service.expire(T1, Decimal("0.01"))
 
-    result = setup.service.receive(T1, SIGNAL_JSON, Decimal("0.02"))
+    result = setup.service.receive(T1, SIGNAL_JSON, Decimal("0.02"), S1_USE)
 
     assert result == timed_out
     assert setup.result(T1) == timed_out
@@ -870,9 +918,9 @@ def test_output_after_timing_out() -> None:
 
 _LATER: list[Callable[[_Setup], Result]] = [
     lambda s: s.at(at(15, 2)).service.receive(
-        T1, signal(horizon=20).model_dump_json(), Decimal("0.03")
+        T1, signal(horizon=20).model_dump_json(), Decimal("0.03"), S2_USE
     ),
-    lambda s: s.at(at(15, 2)).service.fail(T1, "主模型和备用模型都失败", Decimal(0)),
+    lambda s: s.at(at(15, 2)).service.fail(T1, ALL_UNAVAILABLE, Decimal(0)),
     lambda s: s.at(at(15, 5)).service.expire(T1, Decimal("0.01")),
 ]
 
@@ -884,7 +932,7 @@ def test_nothing_changes_after_completion(later: Callable[[_Setup], Result]) -> 
     """spec「完成以后再收到」：T-1 的 Result 都不变。"""
     setup = _Setup()
     setup.pm(PRICE_REQUEST)
-    completed = setup.at(RECEIVED_AT).service.receive(T1, SIGNAL_JSON, Decimal("0.02"))
+    completed = setup.at(RECEIVED_AT).service.receive(T1, SIGNAL_JSON, Decimal("0.02"), S1_USE)
 
     result = later(setup)
 
@@ -898,7 +946,7 @@ def test_rejected_task_keeps_its_result() -> None:
     setup = _Setup()
     setup.pm(AAA_PRICE)
 
-    result = setup.service.receive(T1, SIGNAL_JSON, Decimal("0.02"))
+    result = setup.service.receive(T1, SIGNAL_JSON, Decimal("0.02"), S1_USE)
 
     assert (result.status, result.reason) == (REJECTED, NOT_CASE_STOCK)
     assert setup.result(T1) == result

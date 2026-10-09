@@ -5,7 +5,7 @@
 现状（M3 完成了股票池、调度器、触发三组和 Agent 网关的信号格式、任务派发）：
 
 - Agent 网关模块 `modules/gateway/`：`GatewayConfig`（评估窗口的选项、派发的四个阈值，配置项之间没有约束）；domain 的 `signal.py`（信号的两项检查）、`dispatch.py`（派发规则）、`result.py`（`received`、`call_failed`、`expired`、`rejected`）；`ports.py` 的 `TaskStore`；`service.py` 的 `TaskDispatchService`（`receive(task_id, output, cost)`、`fail(task_id, detail, cost)`、`expire`）
-- contracts：`SubAgent`（三个子 agent）、`Dispatcher`（PM、Critic）、`Task`、`Result`（`contracts/task.py` 写着"实际使用的模型和是否为备用模型：「备用模型」加字段"）、`Decision` 和四种结论（`contracts/conclusion.py`）。还没有六个 agent 的身份，也没有模型的类型
+- contracts：`SubAgent`（三个子 agent）、`Dispatcher`（PM、Critic）、`Task`、`Result`（还没有实际使用的模型；`TaskFailure.CALL_FAILED` 的注释写着"什么时候算由「备用模型」规定"）、`Decision` 和四种结论（`contracts/conclusion.py`）。还没有六个 agent 的身份，也没有模型的类型
 - 健康监控 `HealthSignals` 有 `pm_model_available`、`critic_model_available` 两个布尔值；`HealthService` 把状态放在内存里，新建以后是正常，进程重启以后从头算
 - 调度器的案件状态：`reject_conclusion(config)` 不带原因，只数重交次数；`critic_unavailable()`、`fail()` 处理 Critic 不可用和调用失败
 - M3 只写纯逻辑和测试：不接外部系统，不建表、不加迁移、不写 `repo.py`；模块之间互不 import，跨模块的流程留给 M4 的工作流

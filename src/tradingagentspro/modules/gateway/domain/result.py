@@ -4,12 +4,16 @@ Result」「超时」「调用失败」「Result 的格式」。
 截止时间先看：晚于截止时间收到的输出或调用失败，不论合不合法都是超时。格式不合法的两个来源合在
 一起：结构错误由调用方解析时给出 Malformed，评估窗口和数据截至时刻由 signal-format 的
 signal_rejection 检查；都记为失败、原因是格式不合法，这就是任务最终的 Result，不重新调用子 agent。
+
+完成、无信号和格式不合法的失败记下调用方给出的实际使用的模型（model-fallback spec「实际使用的
+模型」）；超时、调用失败和被拒绝没有输出，不记模型。
 """
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 
+from tradingagentspro.contracts.model import ModelUse
 from tradingagentspro.contracts.signal import NoSignal, Signal, SubAgentOutput
 from tradingagentspro.contracts.task import (
     Result,
@@ -34,18 +38,21 @@ def received(
     output: SubAgentOutput | Malformed,
     now: datetime,
     cost: Decimal,
+    model_use: ModelUse,
     config: GatewayConfig,
 ) -> Result:
-    """收到子 agent 的输出时的 Result。now 是收到输出的时刻，cost 是这个任务的费用。"""
+    """收到子 agent 的输出时的 Result。now 是收到输出的时刻，cost 是这个任务的费用，model_use 是
+    给出这个输出的模型。
+    """
     if now > task.deadline:
         return _settled(task, ResultStatus.TIMED_OUT, now, cost)
     if isinstance(output, Malformed):
-        return _failed(task, TaskFailure.FORMAT_INVALID, output.detail, now, cost)
+        return _failed(task, TaskFailure.FORMAT_INVALID, output.detail, now, cost, model_use)
     rejection = signal_rejection(output, now, config)
     if rejection is not None:
-        return _failed(task, TaskFailure.FORMAT_INVALID, rejection.value, now, cost)
+        return _failed(task, TaskFailure.FORMAT_INVALID, rejection.value, now, cost, model_use)
     status = ResultStatus.COMPLETED if isinstance(output, Signal) else ResultStatus.NO_SIGNAL
-    return _settled(task, status, now, cost, output)
+    return _settled(task, status, now, cost, output, model_use)
 
 
 def call_failed(task: Task, detail: str, now: datetime, cost: Decimal) -> Result:
@@ -79,6 +86,7 @@ def _settled(
     now: datetime,
     cost: Decimal,
     output: Signal | NoSignal | None = None,
+    model_use: ModelUse | None = None,
 ) -> Result:
     """完成、无信号或超时的 Result：耗时是 now 减派发时刻。"""
     return Result(
@@ -87,11 +95,19 @@ def _settled(
         output=output,
         elapsed=now - task.dispatched_at,
         cost=cost,
+        model_use=model_use,
     )
 
 
-def _failed(task: Task, reason: TaskFailure, detail: str, now: datetime, cost: Decimal) -> Result:
-    """失败的 Result：耗时是 now 减派发时刻。"""
+def _failed(
+    task: Task,
+    reason: TaskFailure,
+    detail: str,
+    now: datetime,
+    cost: Decimal,
+    model_use: ModelUse | None = None,
+) -> Result:
+    """失败的 Result：耗时是 now 减派发时刻；格式不合法时带给出输出的模型。"""
     return Result(
         task_id=task.task_id,
         status=ResultStatus.FAILED,
@@ -99,4 +115,5 @@ def _failed(task: Task, reason: TaskFailure, detail: str, now: datetime, cost: D
         detail=detail,
         elapsed=now - task.dispatched_at,
         cost=cost,
+        model_use=model_use,
     )

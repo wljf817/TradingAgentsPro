@@ -1,7 +1,11 @@
-"""任务派发的用例：放行或拒绝 PM 和 Critic 的任务请求，把子 agent 的输出、调用失败和超时记成
-Result，给出本案件的任务。
+"""Agent 网关的用例。
 
-见 task-dispatch spec。规则都在 domain 里；这里只读当前时刻、生成 ID、解析输出、读写存储。
+- TaskDispatchService：放行或拒绝 PM 和 Critic 的任务请求，把子 agent 的输出、调用失败和超时记成
+  Result，给出本案件的任务，见 task-dispatch spec。这里只读当前时刻、生成 ID、解析输出、读写存储
+- ModelFallbackService：一次调用向哪个模型尝试、失败以后换不换，按模型熔断，记下案件内的起点，见
+  model-fallback spec。这里只读当前时刻、查模型的配置，在内存里保存熔断状态和起点
+
+规则都在 domain 里。
 """
 
 from collections.abc import Callable, Sequence
@@ -12,9 +16,11 @@ from uuid import UUID
 
 from pydantic import TypeAdapter, ValidationError
 
+from tradingagentspro.contracts.agent import Agent
+from tradingagentspro.contracts.model import ModelRef, ModelUse
 from tradingagentspro.contracts.signal import SubAgentOutput
 from tradingagentspro.contracts.task import Dispatcher, Result, Task, TaskRequest
-from tradingagentspro.modules.gateway.config import GatewayConfig
+from tradingagentspro.modules.gateway.config import GatewayConfig, ModelAssignments
 from tradingagentspro.modules.gateway.domain.dispatch import (
     CaseScope,
     Dispatch,
@@ -24,6 +30,15 @@ from tradingagentspro.modules.gateway.domain.dispatch import (
     new_task,
     reusable,
     rounds_used,
+)
+from tradingagentspro.modules.gateway.domain.fallback import (
+    Breaker,
+    CallError,
+    CallStep,
+    ModelCall,
+    after_failure,
+    exhausted,
+    start,
 )
 from tradingagentspro.modules.gateway.domain.result import (
     Malformed,
@@ -89,13 +104,14 @@ class TaskDispatchService:
                 dispatches.append(Dispatch(task, DispatchAction.REJECTED))
         return tuple(dispatches)
 
-    def receive(self, task_id: UUID, output: str, cost: Decimal) -> Result:
-        """收到子 agent 的输出（JSON 文本）和这个任务的费用；"现在"是收到的时刻。
+    def receive(self, task_id: UUID, output: str, cost: Decimal, model_use: ModelUse) -> Result:
+        """收到子 agent 的输出（JSON 文本）、这个任务的费用和给出输出的模型；"现在"是收到的时刻。
 
         已经有 Result 时返回它，不改变。
         """
         return self._settle(
-            task_id, lambda task, now: received(task, _parse(output), now, cost, self._config)
+            task_id,
+            lambda task, now: received(task, _parse(output), now, cost, model_use, self._config),
         )
 
     def fail(self, task_id: UUID, detail: str, cost: Decimal) -> Result:
@@ -125,6 +141,72 @@ class TaskDispatchService:
         result = settle(record.task, self._clock.now())
         self._store.add_result(result)
         return result
+
+
+class ModelFallbackService:
+    """备用模型的入口：网关不调用模型，调用方按返回的步骤去尝试，把每次尝试的结果报告回来。
+
+    熔断状态和案件内的起点都放在内存里：新建以后所有模型都正常、所有起点都是主模型，进程重启以后
+    从头算（add-model-fallback 的 design D6、D7）。同一个实例由调用方串行调用。
+    """
+
+    def __init__(self, clock: Clock, models: ModelAssignments, config: GatewayConfig) -> None:
+        self._clock = clock
+        self._models = models
+        self._config = config
+        self._breakers: dict[ModelRef, Breaker] = {}
+        # 每个案件、每个 agent 的起点在 chain 里的位置；没有记录时是 0（主模型）
+        self._starts: dict[tuple[UUID, Agent], int] = {}
+
+    def begin(self, case_id: UUID, agent: Agent, deadline: datetime | None = None) -> CallStep:
+        """为案件里的 agent 开始一次调用，给出第一步。deadline 是子 agent 任务的截止时间。"""
+        chain = self._models.of(agent).chain
+        first = self._starts.get((case_id, agent), 0)
+        return start(
+            case_id, agent, chain, first, deadline, self._breakers, self._clock.now(), self._config
+        )
+
+    def fail(self, call: ModelCall, error: CallError) -> CallStep:
+        """正在进行的尝试失败了，给出下一步。这是这个模型的最后一次尝试时，它不可用，计入熔断。"""
+        now = self._clock.now()
+        if exhausted(call, self._config):
+            self._breakers[call.model] = self._breaker(call.model).failed(now, self._config)
+        return after_failure(call, error, self._breakers, now, self._config)
+
+    def succeed(self, call: ModelCall) -> ModelUse:
+        """正在进行的尝试拿到了输出（格式不合法也算）：模型回到正常，起点只往后移。"""
+        self._breakers[call.model] = self._breaker(call.model).succeeded()
+        key = (call.case_id, call.agent)
+        self._starts[key] = max(self._starts.get(key, 0), call.index)
+        return ModelUse(model=call.model, fallback=call.index > 0)
+
+    def case_model(self, case_id: UUID, agent: Agent) -> ModelUse:
+        """本案件这个 agent 的起点，以及它是不是备用模型。"""
+        index = self._starts.get((case_id, agent), 0)
+        return ModelUse(model=self._models.of(agent).chain[index], fallback=index > 0)
+
+    def end_case(self, case_id: UUID) -> None:
+        """案件结束：清掉这个案件所有 agent 的起点。"""
+        for key in [key for key in self._starts if key[0] == case_id]:
+            del self._starts[key]
+
+    def has_available_model(self, agent: Agent) -> bool:
+        """这个 agent 还有可用的模型：主模型或者任何一个备用模型不在冷却中。"""
+        now = self._clock.now()
+        return any(not self._breaker(model).cooling(now) for model in self._models.of(agent).chain)
+
+    def cooling(self) -> dict[ModelRef, datetime]:
+        """现在冷却中的模型和各自冷却结束的时刻。"""
+        now = self._clock.now()
+        return {
+            model: breaker.cooling_until
+            for model, breaker in self._breakers.items()
+            if breaker.cooling_until is not None and breaker.cooling(now)
+        }
+
+    def _breaker(self, model: ModelRef) -> Breaker:
+        """这个模型的熔断状态；没有记录时是正常。"""
+        return self._breakers.get(model, Breaker())
 
 
 def _parse(output: str) -> SubAgentOutput | Malformed:

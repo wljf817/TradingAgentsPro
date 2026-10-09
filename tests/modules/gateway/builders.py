@@ -1,8 +1,9 @@
-"""Agent 网关测试的数据：signal-format spec「信号的格式」的基准数据，case-types spec 的结论的
-公共部分（信号是基准信号），以及 task-dispatch spec「任务清单」的基准数据。
+"""Agent 网关测试的数据：signal-format spec「信号的格式」的基准数据，case-types spec 的结论（信号是
+基准信号），task-dispatch spec「任务清单」的基准数据，以及 model-fallback spec「模型的配置」的基准
+模型。
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -10,15 +11,21 @@ from uuid import UUID
 from tests.fakes.clock import FakeClock
 from tests.fakes.ids import FakeIds
 from tests.fakes.tasks import InMemoryTaskStore
+from tradingagentspro.contracts.agent import Agent
 from tradingagentspro.contracts.case import CaseType
 from tradingagentspro.contracts.conclusion import (
+    AfterClose,
     CandidateConclusion,
     Decision,
     ExplorationConclusion,
+    FollowUpReason,
+    FollowUpRequest,
     HoldingConclusion,
+    PlanDraft,
     PoolAddition,
     WatchConclusion,
 )
+from tradingagentspro.contracts.model import ModelRef, ModelUse
 from tradingagentspro.contracts.signal import NoSignal, Signal
 from tradingagentspro.contracts.task import (
     Dispatcher,
@@ -30,9 +37,26 @@ from tradingagentspro.contracts.task import (
     TaskRequest,
     TaskType,
 )
+from tradingagentspro.contracts.thesis import (
+    Catalyst,
+    CatalystReference,
+    Comparison,
+    Condition,
+    ConditionKind,
+    InvestmentThesis,
+    ReferenceKind,
+    WatchThesis,
+)
+from tradingagentspro.contracts.trade_plan import OrderType
 from tradingagentspro.modules.gateway import (
+    AgentModels,
+    Attempt,
+    CallError,
+    CallStep,
     CaseScope,
     GatewayConfig,
+    ModelAssignments,
+    ModelFallbackService,
     TaskDispatchService,
     TaskRecord,
 )
@@ -76,24 +100,83 @@ _COMMON: dict[str, Any] = {
 }
 
 
-def _common(signal: Signal) -> dict[str, Any]:
-    """结论的公共部分，信号是 signal。"""
-    return _COMMON | {"signal": signal}
+# case-types spec 的基准投资论点、关注论点、方案条款和跟进申请
+INVESTMENT_THESIS = InvestmentThesis(
+    rationale="新品周期带动收入加速",
+    catalyst=Catalyst(description="Q3 财报", deadline=date(2026, 10, 29)),
+    target_price=Decimal(60),
+    invalidation="毛利率连续两个季度下滑",
+    invalidation_conditions=(
+        Condition(kind=ConditionKind.PRICE, comparison=Comparison.AT_MOST, value=Decimal(42)),
+    ),
+    review_day=date(2026, 10, 21),
+)
+WATCH_THESIS = WatchThesis(
+    rationale="新品周期带动收入加速",
+    entry_conditions=(
+        Condition(kind=ConditionKind.PRICE, comparison=Comparison.AT_MOST, value=Decimal(50)),
+    ),
+    catalyst=Catalyst(description="Q3 财报", deadline=date(2026, 10, 29)),
+    invalidation="毛利率连续两个季度下滑",
+    review_day=date(2026, 10, 21),
+)
+PLAN = PlanDraft(  # 100 股，限价单，限价 50，止损价 45，紧急阈值 0.08
+    quantity=100,
+    order_type=OrderType.LIMIT,
+    limit_price=Decimal(50),
+    stop_price=Decimal(45),
+    emergency_threshold=Decimal("0.08"),
+)
+FOLLOW_UP = FollowUpRequest(
+    reason=FollowUpReason.EXTERNAL_SCHEDULE,
+    reference=CatalystReference(kind=ReferenceKind.SCHEDULE, ref_id="S-9"),
+    question="竞争对手 11 月 18 日发财报，之后对这只股票有什么影响？",
+    possible_actions="减仓",
+    trigger_at=datetime(2026, 11, 19, 14, 30, tzinfo=UTC),
+)
+
+# 每个决定必须附的内容：交易方案、投资论点、清仓后的去向、升级的关注论点
+_ATTACHMENTS: dict[Decision, dict[str, Any]] = {
+    Decision.ADD: {"plan": PLAN},
+    Decision.REDUCE: {"plan": PlanDraft(quantity=60, order_type=OrderType.MARKET)},
+    Decision.CLOSE: {
+        "plan": PlanDraft(order_type=OrderType.MARKET),
+        "after_close": AfterClose.REMOVE,
+    },
+    Decision.BUY: {"plan": PLAN, "thesis": INVESTMENT_THESIS},
+    Decision.PROMOTE: {"watch_thesis": WATCH_THESIS},
+}
 
 
-def holding(signal: Signal = SIGNAL) -> HoldingConclusion:
-    """持仓的结论：持有。"""
-    return HoldingConclusion.model_validate(_common(signal) | {"decision": Decision.HOLD})
+def _common(signal: Signal, decision: Decision, changes: dict[str, Any]) -> dict[str, Any]:
+    """结论的公共部分，信号是 signal，加上决定和它必须附的内容；changes 覆盖或补充其中的字段。"""
+    return (
+        _COMMON
+        | {"signal": signal, "decision": decision}
+        | _ATTACHMENTS.get(decision, {})
+        | changes
+    )
 
 
-def watch(signal: Signal = SIGNAL) -> WatchConclusion:
-    """关注的结论：继续关注。"""
-    return WatchConclusion.model_validate(_common(signal) | {"decision": Decision.KEEP_WATCHING})
+def holding(
+    signal: Signal = SIGNAL, decision: Decision = Decision.HOLD, **changes: Any
+) -> HoldingConclusion:
+    """持仓的结论，默认是持有。"""
+    return HoldingConclusion.model_validate(_common(signal, decision, changes))
 
 
-def candidate(signal: Signal = SIGNAL) -> CandidateConclusion:
-    """候选的结论：保持。"""
-    return CandidateConclusion.model_validate(_common(signal) | {"decision": Decision.KEEP})
+def watch(
+    signal: Signal = SIGNAL, decision: Decision = Decision.KEEP_WATCHING, **changes: Any
+) -> WatchConclusion:
+    """关注的结论，默认是继续关注。"""
+    return WatchConclusion.model_validate(_common(signal, decision, changes))
+
+
+def candidate(
+    signal: Signal = SIGNAL, decision: Decision = Decision.KEEP, **changes: Any
+) -> CandidateConclusion:
+    """候选的结论，默认是保持。"""
+    return CandidateConclusion.model_validate(_common(signal, decision, changes))
 
 
 def ddd(signal: Signal = SIGNAL) -> PoolAddition:
@@ -181,19 +264,60 @@ def task(
     )
 
 
+# model-fallback spec「模型的配置」的基准模型
+P1 = ModelRef(vendor="anthropic", name="p-1")
+P2 = ModelRef(vendor="anthropic", name="p-2")
+P3 = ModelRef(vendor="google", name="p-3")
+C1 = ModelRef(vendor="openai", name="c-1")
+C2 = ModelRef(vendor="openai", name="c-2")
+S1 = ModelRef(vendor="google", name="s-1")
+S2 = ModelRef(vendor="openai", name="s-2")
+S1_USE = ModelUse(model=S1, fallback=False)  # 输出出自 s-1，不是备用模型
+S2_USE = ModelUse(model=S2, fallback=True)  # 输出出自 s-2，是备用模型
+
+# 基准模型的配置：PM 是 p-1、p-2、p-3；Critic 是 c-1、c-2；三个子 agent 都是 s-1、s-2；Reviewer
+# 只有 p-1，和 PM 的主模型是同一个模型
+_SUB_AGENT_MODELS = AgentModels(primary=S1, fallbacks=(S2,))
+_MODELS: dict[Agent, AgentModels] = {
+    Agent.PM: AgentModels(primary=P1, fallbacks=(P2, P3)),
+    Agent.NEWS: _SUB_AGENT_MODELS,
+    Agent.QUANT: _SUB_AGENT_MODELS,
+    Agent.FUNDAMENTALS: _SUB_AGENT_MODELS,
+    Agent.CRITIC: AgentModels(primary=C1, fallbacks=(C2,)),
+    Agent.REVIEWER: AgentModels(primary=P1),
+}
+
+
+def assignments(**changes: Any) -> ModelAssignments:
+    """基准模型的配置，只把这几个 agent 的模型改为 changes，比如 assignments(pm={"primary": P1})。
+
+    键是 agent 的值；值是 AgentModels 或者它的各项，为 None 时不配这个 agent。
+    """
+    agents: dict[str, Any] = {agent.value: models for agent, models in _MODELS.items()}
+    agents |= changes
+    present = {agent: models for agent, models in agents.items() if models is not None}
+    return ModelAssignments.model_validate({"agents": present})
+
+
+BASELINE_MODELS = assignments()
+
 # 直接构造 Result 时各状态默认带的内容
 _CONTENT: dict[ResultStatus, dict[str, Any]] = {
-    ResultStatus.COMPLETED: {"output": SIGNAL},
-    ResultStatus.NO_SIGNAL: {"output": NO_SIGNAL},
+    ResultStatus.COMPLETED: {"output": SIGNAL, "model_use": S1_USE},
+    ResultStatus.NO_SIGNAL: {"output": NO_SIGNAL, "model_use": S1_USE},
     ResultStatus.TIMED_OUT: {},
-    ResultStatus.FAILED: {"reason": TaskFailure.FORMAT_INVALID, "detail": "horizon_not_offered"},
+    ResultStatus.FAILED: {
+        "reason": TaskFailure.FORMAT_INVALID,
+        "detail": "horizon_not_offered",
+        "model_use": S1_USE,
+    },
     ResultStatus.REJECTED: {"reason": TaskRejection.NOT_CASE_STOCK},
 }
 
 
 def result(task_id: UUID, status: ResultStatus, **changes: Any) -> Result:
-    """直接构造的 Result：完成是基准信号，无信号是基准无信号，失败是格式不合法，被拒绝是股票不是
-    案件的股票；耗时和费用都是 0。changes 覆盖其中的项。
+    """直接构造的 Result：完成是基准信号，无信号是基准无信号，失败是格式不合法，这三种的模型是
+    s-1；被拒绝是股票不是案件的股票；耗时和费用都是 0。changes 覆盖其中的项。
     """
     fields = {"task_id": task_id, "status": status, "elapsed": timedelta(0), "cost": Decimal(0)}
     return Result.model_validate(fields | _CONTENT[status] | changes)
@@ -216,3 +340,31 @@ def task_service(
         FakeIds(),
         GatewayConfig(**config),
     )
+
+
+def fallback_service(
+    clock: FakeClock | None = None, models: ModelAssignments | None = None, **config: Any
+) -> ModelFallbackService:
+    """备用模型的用例：测试时钟（没有传入时停在当前时刻 15:00Z）、基准模型的配置（没有传入时）、
+    默认配置。config 覆盖其中的配置项。
+    """
+    return ModelFallbackService(
+        FakeClock(NOW) if clock is None else clock,
+        BASELINE_MODELS if models is None else models,
+        GatewayConfig(**config),
+    )
+
+
+def unavailable(
+    service: ModelFallbackService, step: CallStep, error: CallError = CallError.TIMEOUT
+) -> CallStep:
+    """model-fallback spec 里的"某模型不可用（调用错误）"：正在第 1 次尝试的模型连续两次尝试都失败，
+    调用错误都是 error（省略时是超时），返回之后的下一步。用默认的重试次数 1。
+    """
+    assert isinstance(step, Attempt) and step.call.attempt == 1
+    retry = service.fail(step.call, error)
+    assert isinstance(retry, Attempt) and (retry.call.model, retry.call.attempt) == (
+        step.call.model,
+        2,
+    )
+    return service.fail(retry.call, error)

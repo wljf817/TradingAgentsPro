@@ -3,7 +3,7 @@
 任务请求是 PM 和 Critic 的 dispatch_tasks 工具参数，来自模型输出，所以在这里校验格式；Task 和
 Result 要写进状态库，案件记录、工具结果和评估都要读，所以放在 contracts。放行还是拒绝、Result 怎样
 生成由 Agent 网关决定。见 task-dispatch spec「任务清单」「任务请求的格式」「Task 的格式」「Result
-的格式」。
+的格式」；Result 记下的实际使用的模型见 model-fallback spec「实际使用的模型」。
 """
 
 from datetime import timedelta
@@ -15,6 +15,7 @@ from uuid import UUID
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from tradingagentspro.contracts.agent import SubAgent
+from tradingagentspro.contracts.model import ModelUse
 from tradingagentspro.contracts.signal import EntryId, NoSignal, Signal
 
 
@@ -123,7 +124,7 @@ class TaskFailure(StrEnum):
     """失败的原因。"""
 
     FORMAT_INVALID = "format_invalid"  # 格式不合法：不重新调用，不切换模型
-    CALL_FAILED = "call_failed"  # 调用失败：什么时候算由「备用模型」规定
+    CALL_FAILED = "call_failed"  # 调用失败：model-fallback spec 的全部不可用
 
 
 # 有输出的状态和输出的类型；带原因的状态和原因的类型
@@ -146,6 +147,7 @@ class Result(BaseModel):
     detail: str | None = Field(default=None, min_length=1)  # 失败的说明
     elapsed: timedelta = Field(ge=timedelta(0))  # 耗时：生成 Result 的时刻减派发时刻
     cost: Decimal = Field(ge=0)  # 费用：调用方给出，怎么算由「调用预算」定
+    model_use: ModelUse | None = None  # 给出输出的模型：完成、无信号、格式不合法的失败才有
 
     @property
     def cited_entries(self) -> tuple[EntryId, ...]:
@@ -160,6 +162,9 @@ class Result(BaseModel):
             raise ValueError("失败带失败的原因，被拒绝带被拒绝的原因，其他状态不带")
         if (self.status is ResultStatus.FAILED) != (self.detail is not None):
             raise ValueError("失败必须写说明，其他状态不写")
+        received = self.status in _OUTPUTS or self.reason is TaskFailure.FORMAT_INVALID
+        if received != (self.model_use is not None):
+            raise ValueError("完成、无信号和格式不合法的失败记下给出输出的模型，其他状态不记")
         return self
 
 

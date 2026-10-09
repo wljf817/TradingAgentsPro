@@ -2,7 +2,7 @@
 
 规则见 openspec 的 task-dispatch spec「子 agent 的输出变成 Result」「超时」「调用失败」「Result 的
 格式」；JSON 文本经用例解析的场景见 tests/modules/gateway/test_service.py。T-1 是 PM 派发的价格
-请求：派发时刻 2026-10-14 15:00Z，截止时间 15:05Z。
+请求：派发时刻 2026-10-14 15:00Z，截止时间 15:05Z；没有说明时，输出出自 Quant 的主模型 s-1。
 """
 
 from datetime import datetime, timedelta
@@ -10,7 +10,17 @@ from decimal import Decimal
 
 import pytest
 
-from tests.modules.gateway.builders import NO_SIGNAL, SIGNAL, T1, at, signal, task
+from tests.modules.gateway.builders import (
+    NO_SIGNAL,
+    S1_USE,
+    S2_USE,
+    SIGNAL,
+    T1,
+    at,
+    signal,
+    task,
+)
+from tradingagentspro.contracts.model import ModelUse
 from tradingagentspro.contracts.signal import SubAgentOutput
 from tradingagentspro.contracts.task import Result, ResultStatus, TaskFailure, TaskRejection
 from tradingagentspro.modules.gateway import (
@@ -36,39 +46,53 @@ T1_TASK = task()
 COST = Decimal("0.02")
 RECEIVED_AT = at(15, 1, 30)
 MISSING_RISKS = Malformed("Signal.risks: Field required; NoSignal.reason: Field required")
+ALL_UNAVAILABLE = "模型都不可用：google/s-1 连接失败；openai/s-2 连接失败"  # 调用失败的说明
 
 
-def _received(output: SubAgentOutput | Malformed, now: datetime = RECEIVED_AT) -> Result:
-    return received(T1_TASK, output, now, COST, CONFIG)
+def _received(
+    output: SubAgentOutput | Malformed, now: datetime = RECEIVED_AT, model_use: ModelUse = S1_USE
+) -> Result:
+    return received(T1_TASK, output, now, COST, model_use, CONFIG)
 
 
 # 子 agent 的输出变成 Result
 
 
 def test_valid_signal_is_completed() -> None:
-    """spec「收到合法的信号和无信号」：完成，输出是基准信号；耗时 90 秒，费用原样。"""
+    """spec「收到合法的信号和无信号」：完成，输出是基准信号，模型是 s-1；耗时 90 秒，费用原样。"""
     assert _received(SIGNAL) == Result(
         task_id=T1,
         status=COMPLETED,
         output=SIGNAL,
         elapsed=timedelta(seconds=90),
         cost=COST,
+        model_use=S1_USE,
     )
 
 
 def test_valid_no_signal() -> None:
-    """spec「收到合法的信号和无信号」：无信号，输出是基准无信号。"""
+    """spec「收到合法的信号和无信号」：无信号，输出是基准无信号，模型是 s-1。"""
     assert _received(NO_SIGNAL) == Result(
         task_id=T1,
         status=NO_SIGNAL_STATUS,
         output=NO_SIGNAL,
         elapsed=timedelta(seconds=90),
         cost=COST,
+        model_use=S1_USE,
     )
 
 
+def test_output_from_a_fallback_model() -> None:
+    """spec「备用模型给出的输出」：15:03:00Z 收到 s-2 给出的基准信号，完成，模型是 s-2、是备用
+    模型。
+    """
+    result = _received(SIGNAL, at(15, 3), S2_USE)
+
+    assert (result.status, result.model_use) == (COMPLETED, S2_USE)
+
+
 def test_malformed_output_fails() -> None:
-    """spec「结构错误」：失败，原因是格式不合法，说明是 Malformed 的说明；不带输出。"""
+    """spec「结构错误」：失败，原因是格式不合法，说明是 Malformed 的说明，模型是 s-1；不带输出。"""
     assert _received(MISSING_RISKS) == Result(
         task_id=T1,
         status=FAILED,
@@ -76,6 +100,7 @@ def test_malformed_output_fails() -> None:
         detail="Signal.risks: Field required; NoSignal.reason: Field required",
         elapsed=timedelta(seconds=90),
         cost=COST,
+        model_use=S1_USE,
     )
 
 
@@ -89,12 +114,13 @@ def test_malformed_output_fails() -> None:
 )
 def test_signal_rejected_by_the_checks_fails(output: SubAgentOutput, detail: str) -> None:
     """spec「评估窗口不在配置的选项里」「数据截至时刻晚于收到的时刻」：失败，原因是格式不合法，
-    说明是 signal-format 给出的原因。
+    说明是 signal-format 给出的原因，模型是给出输出的 s-2、是备用模型。
     """
-    result = _received(output)
+    result = _received(output, model_use=S2_USE)
 
     assert (result.status, result.reason, result.detail) == (FAILED, FORMAT_INVALID, detail)
     assert result.output is None
+    assert result.model_use == S2_USE
 
 
 def test_data_as_of_equal_to_now_is_completed() -> None:
@@ -108,7 +134,7 @@ def test_other_horizon_options() -> None:
     """配置的评估窗口选项改为 5 和 20：评估窗口 3 的信号失败。"""
     config = GatewayConfig(signal_horizons=(5, 20))
 
-    result = received(T1_TASK, signal(horizon=3), RECEIVED_AT, COST, config)
+    result = received(T1_TASK, signal(horizon=3), RECEIVED_AT, COST, S1_USE, config)
 
     assert (result.status, result.detail) == (FAILED, SignalRejection.HORIZON_NOT_OFFERED)
 
@@ -130,7 +156,9 @@ def test_output_at_the_deadline_is_handled() -> None:
     ids=["基准信号", "基准无信号", "结构错误", "评估窗口 4"],
 )
 def test_output_after_the_deadline_times_out(output: SubAgentOutput | Malformed) -> None:
-    """spec「截止时间的边界」：15:05:01Z 收到，不论输出合不合法都是超时，没有输出。"""
+    """spec「截止时间的边界」「晚于截止时间收到的不记模型」：15:05:01Z 收到，不论输出合不合法都是
+    超时，没有输出，也没有模型。
+    """
     assert _received(output, at(15, 5, 1)) == Result(
         task_id=T1,
         status=TIMED_OUT,
@@ -151,7 +179,7 @@ def test_expire_before_the_deadline_is_an_error() -> None:
     ids=["15:05:00Z", "15:07:30Z"],
 )
 def test_expire_at_or_after_the_deadline(now: datetime, elapsed: timedelta) -> None:
-    """spec「到截止时间仍没有输出」：超时，耗时是记超时的时刻减派发时刻，费用原样。"""
+    """spec「到截止时间仍没有输出」：超时，耗时是记超时的时刻减派发时刻，费用原样，没有模型。"""
     assert expired(T1_TASK, now, Decimal("0.01")) == Result(
         task_id=T1, status=TIMED_OUT, elapsed=elapsed, cost=Decimal("0.01")
     )
@@ -166,12 +194,14 @@ def test_expire_at_or_after_the_deadline(now: datetime, elapsed: timedelta) -> N
     ids=["15:02:00Z", "截止时间"],
 )
 def test_call_failed(now: datetime, elapsed: timedelta) -> None:
-    """spec「调用失败」：失败，原因是调用失败，说明原样，耗时 2 分钟；截止时间当时也是失败。"""
-    assert call_failed(T1_TASK, "主模型和备用模型都失败", now, Decimal(0)) == Result(
+    """spec「调用失败」：失败，原因是调用失败，说明原样，没有模型，耗时 2 分钟；截止时间当时也是
+    失败。
+    """
+    assert call_failed(T1_TASK, ALL_UNAVAILABLE, now, Decimal(0)) == Result(
         task_id=T1,
         status=FAILED,
         reason=CALL_FAILED,
-        detail="主模型和备用模型都失败",
+        detail=ALL_UNAVAILABLE,
         elapsed=elapsed,
         cost=Decimal(0),
     )
@@ -179,7 +209,7 @@ def test_call_failed(now: datetime, elapsed: timedelta) -> None:
 
 def test_call_failed_after_the_deadline_times_out() -> None:
     """spec「截止时间以后的调用失败」：15:05:01Z 给出调用失败，超时。"""
-    result = call_failed(T1_TASK, "主模型和备用模型都失败", at(15, 5, 1), Decimal("0.01"))
+    result = call_failed(T1_TASK, ALL_UNAVAILABLE, at(15, 5, 1), Decimal("0.01"))
 
     assert (result.status, result.reason, result.detail) == (TIMED_OUT, None, None)
     assert result.cost == Decimal("0.01")
@@ -190,7 +220,7 @@ def test_call_failed_after_the_deadline_times_out() -> None:
 
 @pytest.mark.parametrize("reason", list(TaskRejection))
 def test_rejected(reason: TaskRejection) -> None:
-    """spec「Result 的格式」：被拒绝的耗时和费用都是 0，原因原样。"""
+    """spec「Result 的格式」：被拒绝的耗时和费用都是 0，原因原样，没有模型。"""
     assert rejected(T1_TASK, reason) == Result(
         task_id=T1, status=REJECTED, reason=reason, elapsed=timedelta(0), cost=Decimal(0)
     )

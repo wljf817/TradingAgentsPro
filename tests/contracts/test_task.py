@@ -1,7 +1,8 @@
 """Task 和 Result 格式的测试：任务清单、任务请求、Task、Result。
 
 场景见 openspec 的 task-dispatch spec「任务清单」「任务请求的格式」「Task 的格式」
-「Result 的格式」。基准数据和 spec 一致：派发时刻 2026-10-14 15:00Z，截止时间 15:05Z。
+「Result 的格式」。基准数据和 spec 一致：派发时刻 2026-10-14 15:00Z，截止时间 15:05Z；Quant 的主模型
+是 google/s-1，备用模型是 openai/s-2（model-fallback spec 的基准模型的配置）。
 """
 
 from datetime import UTC, datetime, timedelta, timezone
@@ -15,6 +16,7 @@ from hypothesis import strategies as st
 from pydantic import ValidationError
 
 from tradingagentspro.contracts.agent import SubAgent
+from tradingagentspro.contracts.model import ModelRef, ModelUse
 from tradingagentspro.contracts.signal import NoSignal, Signal
 from tradingagentspro.contracts.task import (
     Dispatcher,
@@ -51,6 +53,9 @@ SIGNAL = Signal(
     risks="板块整体回调时跟跌",
 )
 NO_SIGNAL = NoSignal(reason="最近一期财报还没有进状态库，无法判断")
+# 给出输出的模型：主模型 s-1，备用模型 s-2
+S1_USE = ModelUse(model=ModelRef(vendor="google", name="s-1"), fallback=False)
+S2_USE = ModelUse(model=ModelRef(vendor="openai", name="s-2"), fallback=True)
 
 # 基准任务请求的各项
 PRICE_REQUEST: dict[str, Any] = {
@@ -282,15 +287,26 @@ def _result(status: ResultStatus, **changes: Any) -> Result:
 @pytest.mark.parametrize(
     ("status", "content", "cited"),
     [
-        (COMPLETED, {"output": SIGNAL}, ("E-1", "E-2")),
-        (NO_SIGNAL_STATUS, {"output": NO_SIGNAL}, ()),
+        (COMPLETED, {"output": SIGNAL, "model_use": S1_USE}, ("E-1", "E-2")),
+        (NO_SIGNAL_STATUS, {"output": NO_SIGNAL, "model_use": S1_USE}, ()),
         (
             NO_SIGNAL_STATUS,
-            {"output": NO_SIGNAL.model_copy(update={"cited_entries": ("E-1",)})},
+            {
+                "output": NO_SIGNAL.model_copy(update={"cited_entries": ("E-1",)}),
+                "model_use": S2_USE,
+            },
             ("E-1",),
         ),
         (TIMED_OUT, {}, ()),
-        (FAILED, {"reason": TaskFailure.FORMAT_INVALID, "detail": "horizon_not_offered"}, ()),
+        (
+            FAILED,
+            {
+                "reason": TaskFailure.FORMAT_INVALID,
+                "detail": "horizon_not_offered",
+                "model_use": S1_USE,
+            },
+            (),
+        ),
         (FAILED, {"reason": TaskFailure.CALL_FAILED, "detail": "主模型和备用模型都失败"}, ()),
         (
             REJECTED,
@@ -315,25 +331,31 @@ def _result(status: ResultStatus, **changes: Any) -> Result:
 def test_result_of_each_status(
     status: ResultStatus, content: dict[str, Any], cited: tuple[str, ...]
 ) -> None:
-    """spec「Result 的格式」表的每一种状态；引用的条目取自输出，没有输出时为空。"""
+    """spec「Result 的格式」表的每一种状态；引用的条目取自输出，没有输出时为空。spec「完成和无信号的
+    Result」：完成和无信号的模型是 s-1、不是备用模型。
+    """
     result = _result(status, **content)
 
     assert result.status is status
     assert result.cited_entries == cited
+    assert result.model_use == content.get("model_use")
 
 
 @pytest.mark.parametrize(
     ("status", "content"),
     [
-        (COMPLETED, {}),
-        (COMPLETED, {"output": NO_SIGNAL}),
-        (NO_SIGNAL_STATUS, {"output": SIGNAL}),
+        (COMPLETED, {"model_use": S1_USE}),
+        (COMPLETED, {"output": NO_SIGNAL, "model_use": S1_USE}),
+        (NO_SIGNAL_STATUS, {"output": SIGNAL, "model_use": S1_USE}),
         (TIMED_OUT, {"output": SIGNAL}),
         (FAILED, {"detail": "格式不合法"}),
-        (FAILED, {"reason": TaskFailure.FORMAT_INVALID}),
+        (FAILED, {"reason": TaskFailure.FORMAT_INVALID, "model_use": S1_USE}),
         (REJECTED, {"reason": TaskFailure.FORMAT_INVALID}),
-        (NO_SIGNAL_STATUS, {"output": NO_SIGNAL, "reason": TaskRejection.ROUNDS_USED_UP}),
-        (COMPLETED, {"output": SIGNAL, "cost": Decimal("-0.01")}),
+        (
+            NO_SIGNAL_STATUS,
+            {"output": NO_SIGNAL, "reason": TaskRejection.ROUNDS_USED_UP, "model_use": S1_USE},
+        ),
+        (COMPLETED, {"output": SIGNAL, "cost": Decimal("-0.01"), "model_use": S1_USE}),
     ],
     ids=[
         "完成，没有输出",
@@ -348,9 +370,51 @@ def test_result_of_each_status(
     ],
 )
 def test_status_and_content_do_not_match(status: ResultStatus, content: dict[str, Any]) -> None:
-    """spec「状态和内容不符」：都报错。"""
+    """spec「状态和内容不符」：都报错。该带模型的带上 s-1，只有一处不符。"""
     with pytest.raises(ValidationError):
         _result(status, **content)
+
+
+@pytest.mark.parametrize(
+    ("status", "content"),
+    [
+        (COMPLETED, {"output": SIGNAL}),
+        (NO_SIGNAL_STATUS, {"output": NO_SIGNAL}),
+        (FAILED, {"reason": TaskFailure.FORMAT_INVALID, "detail": "horizon_not_offered"}),
+        (TIMED_OUT, {"model_use": S1_USE}),
+        (
+            FAILED,
+            {"reason": TaskFailure.CALL_FAILED, "detail": "模型都不可用", "model_use": S1_USE},
+        ),
+        (REJECTED, {"reason": TaskRejection.NOT_CASE_STOCK, "model_use": S1_USE}),
+    ],
+    ids=[
+        "完成，没有模型",
+        "无信号，没有模型",
+        "失败，原因是格式不合法，没有模型",
+        "超时，模型是 s-1",
+        "失败，原因是调用失败，模型是 s-1",
+        "被拒绝，模型是 s-1",
+    ],
+)
+def test_model_and_status_do_not_match(status: ResultStatus, content: dict[str, Any]) -> None:
+    """spec「模型和状态不符」：都报错。"""
+    with pytest.raises(ValidationError, match="给出输出的模型"):
+        _result(status, **content)
+
+
+def test_format_invalid_failure_from_a_fallback_model() -> None:
+    """spec「模型和状态不符」：失败，原因是格式不合法，说明"评估窗口不在配置的选项里"，模型是 s-2、
+    是备用模型，格式正确。
+    """
+    result = _result(
+        FAILED,
+        reason=TaskFailure.FORMAT_INVALID,
+        detail="评估窗口不在配置的选项里",
+        model_use=S2_USE,
+    )
+
+    assert result.model_use == ModelUse(model=ModelRef(vendor="openai", name="s-2"), fallback=True)
 
 
 @pytest.mark.parametrize(
@@ -375,12 +439,12 @@ def test_negative_elapsed_is_an_error() -> None:
 
 
 def test_result_cannot_be_changed() -> None:
-    result = _result(COMPLETED, output=SIGNAL)
+    result = _result(COMPLETED, output=SIGNAL, model_use=S1_USE)
 
     with pytest.raises(ValidationError):
         result.status = TIMED_OUT  # type: ignore[misc]
 
-    assert result == _result(COMPLETED, output=SIGNAL)
+    assert result == _result(COMPLETED, output=SIGNAL, model_use=S1_USE)
 
 
 # 写出再读回（design D12）
@@ -408,6 +472,12 @@ _signals = st.builds(
 _no_signals = st.builds(NoSignal, reason=_texts, cited_entries=_entries)
 _elapsed = st.timedeltas(min_value=timedelta(0), max_value=timedelta(days=1))
 _costs = st.decimals(min_value=0, max_value=100, places=4)
+_names = st.text(alphabet="abcXYZ-.0123", min_size=1, max_size=10)
+_model_uses = st.builds(
+    ModelUse,
+    model=st.builds(ModelRef, vendor=_names, name=_names),
+    fallback=st.booleans(),
+)
 
 
 @st.composite
@@ -439,6 +509,7 @@ _results = st.one_of(
         output=_signals,
         elapsed=_elapsed,
         cost=_costs,
+        model_use=_model_uses,
     ),
     st.builds(
         Result,
@@ -447,13 +518,24 @@ _results = st.one_of(
         output=_no_signals,
         elapsed=_elapsed,
         cost=_costs,
+        model_use=_model_uses,
     ),
     st.builds(Result, task_id=st.uuids(), status=st.just(TIMED_OUT), elapsed=_elapsed, cost=_costs),
     st.builds(
         Result,
         task_id=st.uuids(),
         status=st.just(FAILED),
-        reason=st.sampled_from(TaskFailure),
+        reason=st.just(TaskFailure.FORMAT_INVALID),
+        detail=_texts,
+        elapsed=_elapsed,
+        cost=_costs,
+        model_use=_model_uses,
+    ),
+    st.builds(
+        Result,
+        task_id=st.uuids(),
+        status=st.just(FAILED),
+        reason=st.just(TaskFailure.CALL_FAILED),
         detail=_texts,
         elapsed=_elapsed,
         cost=_costs,
@@ -477,9 +559,10 @@ def test_task_survives_a_json_round_trip(task: Task) -> None:
 
 @given(result=_results)
 def test_result_survives_a_json_round_trip(result: Result) -> None:
-    """任意合法的五种状态的 Result 按 JSON 写出再读回，对象相等；输出和原因读回同样的类型。"""
+    """任意合法的五种状态的 Result 按 JSON 写出再读回，对象相等；输出、原因和模型读回同样的类型。"""
     restored = Result.model_validate_json(result.model_dump_json())
 
     assert restored == result
     assert type(restored.output) is type(result.output)
     assert type(restored.reason) is type(result.reason)
+    assert type(restored.model_use) is type(result.model_use)
