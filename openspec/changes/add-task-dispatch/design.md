@@ -430,7 +430,7 @@ class TaskStore(Protocol):
 
 - Task 和 Result 由网关写、只追加，正好是 Proposal 共享状态库的"当前任务状态"和"已产出的结构化结果"，网关是它们唯一的写入者
 - 按案件取：派发规则只看本案件的任务，最多十来个
-- `tests/fakes/tasks.py`：`InMemoryTaskStore`，Task 按写入的先后存在 list 里，Result 按 task_id 存在 dict 里；重复写入同一个 Task 的 Result 时抛错，让测试发现 service 的问题
+- `tests/fakes/tasks.py`：`InMemoryTaskStore`，Task 和 Result 都按 task_id 存在 dict 里，Task 保持写入的先后；重复写入同一个 Task、同一个 Task 写第二个 Result、给不存在的 Task 写 Result 时抛错，让测试发现 service 的问题
 - 考虑过：像队列、收盘检查那样输入一份快照、输出一个决定，存储交给 M4。没有采用：同一次里后面的请求要看到前面刚派发的任务（复用、计数），Result 只能写一次也要先读后写；这些都落到 M4，规则就不在本模块的测试里了。和跟进模块同样处理
 
 ### D7 用例
@@ -491,7 +491,7 @@ store.add_result(result)，返回 result
 - `new_task` 是 domain 的纯函数：截止时间是 now 加任务时限，其余照抄请求
 - 返回 `Dispatch(task, action)`，不直接返回 Result：派发的还没有 Result；复用的可能还在运行；被拒绝的 Result 已经在存储里，调用方用 `record(task_id)` 取，三种的取法一样
 - 已经有 Result 时直接返回：晚到的输出、M4 的步骤重新执行都不会改 Result，也不报错
-- 子 agent 的输出收 JSON 文本：模型给出的就是文本或者工具参数，M5 统一转成文本交过来，原样也方便写进程序日志。错误说明的格式是 `Signal.risks: Field required; NoSignal.reason: Field required` 这样每条的位置和说明，位置为空（不是 JSON）时写"输出"
+- 子 agent 的输出收 JSON 文本：模型给出的就是文本或者工具参数，M5 统一转成文本交过来，原样也方便写进程序日志。错误说明的格式是 `Signal.risks: Field required; NoSignal.horizon: Extra inputs are not permitted; …` 这样每条的位置和说明，信号和无信号两种解析的错误都列出，位置为空（不是 JSON）时写"输出"
 - 同一个案件由调用方串行调用：先读后写，做法 M4 定
 
 ### D8 案件的用量和给结论校验的数
