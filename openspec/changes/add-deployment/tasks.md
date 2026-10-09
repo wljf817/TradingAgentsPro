@@ -38,12 +38,12 @@
 
 - [x] 8.1 【人】第 1 步，部署机器的前提：Debian 12 或 13、x86_64；时间同步；Docker Engine 和 compose 插件；`git`、`telnet`；uv 装到 `/usr/local/bin`；journald 持久保存。验证：`uname -m` 是 `x86_64`；`timedatectl` 显示 `System clock synchronized: yes`；`sudo docker compose version`、`uv --version`、`git --version` 都有输出；`/var/log/journal` 里有目录
 - [x] 8.2 【人】第 2 步，服务用户、Deploy key、克隆、安装依赖。验证：`ssh -T git@github.com`（服务用户）回复已认证；GitHub 的 Deploy keys 页面上这把 key 是 Read-only；`~/app/.venv/bin/tradingagentspro --version` 打印版本号
-- [ ] 8.3 【人】第 3 步，Alpaca 模拟盘重置为 2,000 美元并生成新 key；核对 Discord 机器人的 scope 和频道权限。验证：Alpaca 后台模拟盘的权益是 $2,000、没有持仓和挂单；机器人在频道里有「查看频道」「发送消息」「嵌入链接」
+- [x] 8.3 【人】第 3 步，Alpaca 模拟盘重置为 2,000 美元并生成新 key；核对 Discord 机器人的 scope 和频道权限。验证：Alpaca 后台模拟盘的权益是 $2,000、没有持仓和挂单；机器人在频道里有「查看频道」「发送消息」「嵌入链接」
 - [x] 8.4 【人】第 4 步，三个环境变量文件：生成数据库密码，填好七个变量、PostgreSQL 密码和 moomoo ID。验证：`sudo ls -la /etc/tradingagentspro` 显示目录 `drwx------ root`、三个文件 `-rw------- root`；`sudo -u tradingagentspro cat /etc/tradingagentspro/tradingagentspro.env` 提示没有权限；`sudo grep -c '=$' …` 三个文件都是 0
 - [x] 8.5 【人】第 5 步，OpenD：下载和 `uv.lock` 里 moomoo-api 同版本的 Linux 命令行 OpenD，设 `telnet_port`，第一次交互登录（记住密码，必要时输入手机验证码）。验证：OpenD 提示登录成功；`grep -n telnet ~/opend/OpenD.xml` 里 `telnet_port` 是 22222、没有被注释
 - [x] 8.6 【人】第 6、7 步，安装单元、启动状态库。验证：`sudo systemd-analyze verify /etc/systemd/system/tradingagentspro*` 没有输出；`sudo docker compose ps` 显示 `healthy`；`ss -ltn` 里 5432 只在 127.0.0.1 上
 - [x] 8.7 【人】第 8 步，启动 OpenD 的服务，然后退出 Mac 上的 OpenD。验证：`systemctl status tradingagentspro-opend` 是 active，一分钟后还是同一个进程；只有一个 OpenD 进程、CPU 占用接近 0；`~/.com.moomoo.OpenD/Log` 里有以 moomoo ID 命名的 `GTWLog_<ID>_…` 文件（OpenD 的输出不进 journald）；`ss -ltn` 里 11111 和 22222 只在 127.0.0.1 上；经 `telnet 127.0.0.1 22222` 发 `help` 有回复。任何一项不符，停下来把现象告诉 Claude
-- [ ] 8.8 【人】第 9 步，启用并启动主程序。验证：`sudo journalctl -u tradingagentspro` 依次有数据库已升级、Alpaca 账户设置完成、「启动对账：没有不一致」、Discord 已连接、DBOS 已启动、「启动完成」；在 Discord 里运行 `/plan close symbol:XYZ`，回复没有 XYZ 的持仓；`sudo ss -ltnp | grep python` 没有输出
+- [x] 8.8 【人】第 9 步，启用并启动主程序。验证：`sudo journalctl -u tradingagentspro` 依次有数据库已升级、Alpaca 账户设置完成、「启动对账：没有不一致」、Discord 已连接、DBOS 已启动、「启动完成」；在 Discord 里运行 `/plan close symbol:XYZ`，回复没有 XYZ 的持仓；`sudo ss -ltnp | grep python` 没有输出
 - [x] 8.9 【人】第 10 步，启用备份定时器，手动备份一次，做一次恢复演练。验证：`systemctl list-timers` 里有下一次 06:00 UTC 的备份；`/var/backups/tradingagentspro` 里有一个 `.dump`；恢复到临时数据库以后 `\dn` 列出 `public` 和 `dbos`，演练完删掉临时数据库
 - [ ] 8.10 【人】第 11 步，重启部署机器。验证：开机后不做任何操作，状态库、OpenD、主程序都在运行；这次开机的日志里有「启动完成」；`sudo journalctl -u tradingagentspro -b -1` 能看到重启前的日志
 - [x] 8.11 【人】第 12 步，在 Mac 上开 SSH 隧道。验证：Mac 上没有 OpenD 进程；`uv run pytest -m moomoo_opend -k test_quotes_at_any_time` 经隧道通过（不是跳过）
