@@ -229,12 +229,15 @@ def _approved_today(self, now: datetime) -> int:
 ```python
 def due(pending: Iterable[FollowUp], now: datetime) -> list[FollowUp]:
     """触发时间不晚于 now 的待执行跟进，按触发时间、再按获批的先后。"""
-    return sorted(
-        (f for f in pending if f.request.trigger_at <= now),
-        key=lambda f: (f.request.trigger_at, f.requested_at),
-    )
+    return in_trigger_order(f for f in pending if f.request.trigger_at <= now)
+
+
+def in_trigger_order(follow_ups: Iterable[FollowUp]) -> list[FollowUp]:
+    """按触发时间从早到晚，触发时间相同的按获批的先后。"""
+    return sorted(follow_ups, key=lambda f: (f.request.trigger_at, f.requested_at))
 ```
 
+- `in_trigger_order` 由 `due` 和 service 的 `pending` 共用，顺序只在一处；只在模块内部用，不从包根导出
 - service 的 `trigger_due` 把 `due` 给出的跟进都记为已触发、保存，再返回它们：给出的就是这次记为已触发的，下一次不会再给，跟进只触发一次（proposal 第 6 条）
 - 排序决定 M4 入队的先后：同一优先级、同一触发时刻的案件按入队的先后启动（case-queue spec「启动的顺序」）
 - 不看股票状态、降级模式和调用预算：往下走的已经作废；降级或预算用完时案件由队列留着；开始运行时由 `define_case` 按那时的状态定类型
@@ -316,7 +319,7 @@ class FollowUpService:
     ) -> tuple[FollowUp, ...]: ...
 ```
 
-- `pending`：这只股票待执行的跟进，按 `due` 的顺序（触发时间、获批的先后）
+- `pending`：这只股票待执行的跟进，按 `in_trigger_order` 排列，和 `due` 的顺序相同（触发时间、获批的先后）
 - `trigger_due`：这次记为已触发的跟进（D6）
 - `status_changed`：`voids_follow_ups` 为真时把这只股票待执行的跟进都记为已作废，返回它们；否则返回空
 
