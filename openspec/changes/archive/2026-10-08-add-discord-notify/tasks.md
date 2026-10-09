@@ -53,7 +53,7 @@
 
 - [x] 7.1 对照 spec，确认每个场景都有对应的测试，测试名或说明里写明场景；只能在真实 Discord 上验证的（手机收到推送、真实的 3 秒应答、token 无效）写明由冒烟测试覆盖。验证：逐条列出场景和测试的对应关系，没有遗漏
 - [x] 7.2 运行全部检查：`uv run pytest`、`uv run ruff check`、`uv run ruff format --check`、`uv run mypy`、`uv run lint-imports`、`openspec validate --all --strict`。验证：全部通过
-- [ ] 7.3 由人在自己的终端运行冒烟测试（最后一项，需要人操作）：
+- [x] 7.3 由人在自己的终端运行冒烟测试（最后一项，需要人操作）：
   - 先准备：
     - 用服务器里现有的机器人。只有机器人还不在服务器里时，才需要在 Discord 开发者后台建应用和机器人，再用 OAuth2 链接（scope 选 `bot`）邀请进服务器
     - token 由人自己在开发者后台的 Bot 页面重置后复制，只放进终端的环境变量
