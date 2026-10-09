@@ -39,7 +39,7 @@
 
 - [x] 8.1 对照 `specs/bootstrap/spec.md`，确认每个场景都有对应的测试，测试名或说明里写明场景；只能在真实环境验证的（真实的 Alpaca 认证、OpenD、Discord 回复、Ctrl-C）写明由 8.3 的冒烟运行覆盖。验证：逐条列出场景和测试的对应关系，没有遗漏
 - [x] 8.2 运行全部检查：`uv run pytest`、`uv run ruff check`、`uv run ruff format --check`、`uv run mypy`、`uv run lint-imports`、`openspec validate --all --strict`。验证：全部通过
-- [ ] 8.3 由人在自己的终端做冒烟运行（最后一项，需要人操作）：
+- [x] 8.3 由人在自己的终端做冒烟运行（最后一项，需要人操作）：
   - 先准备：部署机器上如果已经用同一个 Discord token 或 Alpaca 账户运行着程序，先停掉；本机 OpenD 开着并已登录；OrbStack 开着
   - 起一个临时的 PostgreSQL，只在本机监听、不用密码：`docker run -d --name tradingagentspro-smoke-db -p 127.0.0.1:5432:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:18`（5432 被占用就换一个本机端口，下面的地址跟着改）
   - 在终端里设 `TRADINGAGENTSPRO_DATABASE_URL=postgresql://postgres@127.0.0.1:5432/postgres`；`APCA_API_KEY_ID`、`APCA_API_SECRET_KEY` 和四个 `DISCORD_*` 变量也只设在终端里，不写进仓库里的任何文件
