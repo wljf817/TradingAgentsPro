@@ -37,7 +37,6 @@ from tradingagentspro.integrations.discord.notifier import ButtonPress, Gateway
 from tradingagentspro.modules.notification import (
     ConfirmationOutcome,
     NotificationUnavailableError,
-    Notifier,
     PendingConfirmation,
 )
 
@@ -109,12 +108,6 @@ def _finishes_quickly(action: Callable[[], object]) -> BaseException | None:
     thread.join(1)
     assert not thread.is_alive()
     return errors[0] if errors else None
-
-
-def test_satisfies_the_port(make: Callable[..., Setup]) -> None:
-    """DiscordNotifier 满足通知模块的 Notifier。"""
-    notifier: Notifier = make().notifier
-    assert notifier is not None
 
 
 # 启动和关闭

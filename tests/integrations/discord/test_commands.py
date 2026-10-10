@@ -22,7 +22,6 @@ from tests.modules.notification.builders import CHANNEL_ID, GUILD_ID, OTHER_USER
 from tradingagentspro.contracts.risk import RiskDecision, RiskOutcome, RiskViolation
 from tradingagentspro.contracts.trade_plan import TradeAction, TradePlan
 from tradingagentspro.integrations.discord import DiscordConfig, PlanCommand
-from tradingagentspro.integrations.discord.commands import CommandCall
 from tradingagentspro.integrations.discord.plans import (
     PlanEntry,
     decision_reply,
@@ -107,11 +106,6 @@ def _info_logs(caplog: pytest.LogCaptureFixture) -> Iterator[None]:
     yield
     workers = [t for t in threading.enumerate() if t.name.startswith("asyncio_")]
     assert workers == []
-
-
-def test_fake_call_satisfies_the_protocol() -> None:
-    call: CommandCall = FakeCall(USER_ID)
-    assert call.user_id == USER_ID
 
 
 # 只接受本人

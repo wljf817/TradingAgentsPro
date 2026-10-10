@@ -19,7 +19,7 @@ from tests.fakes.calendar import sample_nyse_calendar
 from tests.fakes.ids import FakeIds
 from tests.fakes.plan_intake import FakePlanIntake
 from tests.modules.notification.builders import CHANNEL_ID, GUILD_ID, USER_ID
-from tradingagentspro.integrations.discord import DiscordConfig, DiscordGateway, PlanCommand
+from tradingagentspro.integrations.discord import DiscordConfig, PlanCommand
 from tradingagentspro.integrations.discord.gateway import (
     PlanGroup,
     _Client,
@@ -27,7 +27,6 @@ from tradingagentspro.integrations.discord.gateway import (
     plan_tree,
     register_commands,
 )
-from tradingagentspro.integrations.discord.notifier import Gateway
 from tradingagentspro.modules.notification import NotificationUnavailableError
 
 
@@ -43,12 +42,6 @@ CONFIG = DiscordConfig(
 
 def _plans() -> PlanCommand:
     return PlanCommand(FakePlanIntake(), FakeIds(), sample_nyse_calendar(), CONFIG)
-
-
-def test_satisfies_the_protocol() -> None:
-    """DiscordGateway 满足 Gateway；构造时不连 Discord。"""
-    gateway: Gateway = DiscordGateway(CONFIG, _plans())
-    assert gateway is not None
 
 
 @pytest.mark.parametrize(
