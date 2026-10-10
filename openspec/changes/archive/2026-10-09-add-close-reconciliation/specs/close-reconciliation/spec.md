@@ -88,7 +88,7 @@
 
 ### Requirement: 巡检里的收盘对账
 
-盘中巡检的每一轮 SHALL 在第 3 步（对齐止损单，session-patrol spec「每一轮」）之后做一项「收盘对账」：
+盘中巡检的每一轮 SHALL 在最后做一项「收盘对账」：在第 3 步（对齐止损单，session-patrol spec「每一轮」）之后，也在加在第 3 步之后的别的项（health-monitoring spec 的健康判定、emergency-exit-flow spec 的紧急退出）之后：
 
 1. 按「收盘对账的时机」判断要不要做；不做就结束这一项。判断不拿锁
 2. 要做时拿着锁（session-patrol spec「执行模块和风控的调用串行」）做收盘对账（「收盘对账的步骤」），做完放开锁

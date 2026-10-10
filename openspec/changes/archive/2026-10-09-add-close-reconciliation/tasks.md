@@ -2,7 +2,7 @@
 
 ## 1. 人的决定
 
-- [ ] 1.1 人对 proposal「需要人决定」第 1 条表态以后：同意就不改；不同意「收盘时没有持仓清零」时，删掉 spec「连续天数」表里那一行和「连续天数」「结果消息」里收盘时没有持仓的两个场景，design D5、D6 里 `counted` 改为等于 `clean`。场景清单那一半不进代码，不用改。验证：`openspec validate add-close-reconciliation --strict` 通过，spec、design、tasks 里说法一致
+- [x] 1.1 人对 proposal「需要人决定」第 1 条表态以后：同意就不改；不同意「收盘时没有持仓清零」时，删掉 spec「连续天数」表里那一行和「连续天数」「结果消息」里收盘时没有持仓的两个场景，design D5、D6 里 `counted` 改为等于 `clean`。场景清单那一半不进代码，不用改。验证：`openspec validate add-close-reconciliation --strict` 通过，spec、design、tasks 里说法一致
 
 ## 2. 状态库的历史读取
 
