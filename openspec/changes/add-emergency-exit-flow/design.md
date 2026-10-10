@@ -12,7 +12,7 @@
 - 行情：`MarketDataService.quotes(symbols)` 一次取完，没有股票时不调用行情源；失败抛 `QuoteUnavailableError`；开盘后还没有成交时 `last_price` 是 None。moomoo 快照每 30 秒最多 60 次
 - 通知：`NotificationService.alert(text)` 尽力而为，发不出去只写错误日志，最多等 10 秒
 
-要求见 specs/emergency-exit-flow/spec.md 和 specs/bootstrap/spec.md，动机见 proposal.md 的 Why。
+要求见 specs/emergency-exit-flow/spec.md、specs/session-patrol/spec.md 和 specs/bootstrap/spec.md，动机见 proposal.md 的 Why。
 
 ### 模块边界
 
@@ -291,7 +291,7 @@ class EmergencyFlow:
 ### D12 测试
 
 - `tests/modules/risk/test_service.py`：`active_plans` 只有有效预留的方案；释放了的、全部成交的不在里面
-- `tests/workflows/builders.py`（巡检的 `World`）：加上 `FakeQuoteSource`（默认没有行情）、紧急退出、健康监控、行情、`TradeServices`、`EmergencyFlow`，`FakeBroker` 的权益和前一交易日收盘时的权益都设为 10,000：巡检原有的测试不会触发紧急退出。它们只多一次读账户的请求；「没有持仓也没有订单」原来断言券商只收到一次读全部持仓，改为断言第 1 到 3 步只读了一次全部持仓、另外只有一次读账户（见 Risks）
+- `tests/workflows/builders.py`（巡检的 `World`）：加上 `FakeQuoteSource`（默认没有行情）、紧急退出、健康监控、行情、`TradeServices`、`EmergencyFlow`，`FakeBroker` 的权益和前一交易日收盘时的权益都设为 10,000：巡检原有的测试不会触发紧急退出，只多一次读账户的请求。「没有持仓也没有订单」按 session-patrol 的 delta 改为断言第 1 到 3 步只读了一次全部持仓（读账户之前的请求只有这一次），另加「第 3 步之后的项」
 - `tests/workflows/emergency_builders.py`：spec 的基准数据。AAA、BBB 的开仓订单直接写进订单存储并标为全部成交（成交日和止损价、紧急阈值），券商持仓和均价、权益在 `FakeBroker` 上设好，`execution.protect` 挂上 AAA-STOP-1、BBB-STOP-1 以后清掉调用记录；行情在 `FakeQuoteSource` 上设好；方案 P2 到 P7 的辅助函数
 - `tests/workflows/test_emergency_flow.py`：
   - 纯函数：`holdings_of`（有行情、没有最新价、没有行情）、每一种告警文字
@@ -301,7 +301,7 @@ class EmergencyFlow:
 
 ## Risks / Trade-offs
 
-- [session-patrol spec「每一轮」的场景「没有持仓也没有订单」写的是券商只收到一次读取全部持仓的请求，盘中现在还多一次读账户] → 本变更按要求不 MODIFY「每一轮」（「健康监控接线」在并行改它）；测试按 D12 改断言。归档时这条场景要把「券商只收到」限定为第 1 到 3 步，或者由之后改「每一轮」的变更一起改
+- [session-patrol spec「每一轮」原来只写三步，场景「没有持仓也没有订单」写的是券商只收到一次读取全部持仓的请求，盘中现在还多一次读账户] → 本变更 MODIFY「每一轮」：写明第 3 步之后还有别的 spec 的项（紧急退出、健康判定，收盘对账最后），场景限定为第 1 到 3 步。「健康监控接线」「收盘对账」都把规则写在自己的 spec 里，不改这条要求
 - [熔断只看券商给的权益：Alpaca 盘中用自己的价格算，和 moomoo 的行情可能有几秒的差别] → 熔断线是 7%，几秒的差别不影响；行情不可用时还能判定熔断，正是因为不依赖 moomoo
 - [当天做到底：价格只是瞬间跌破阈值（比如一笔异常成交）也会清仓] → 和券商端止损单一样；阈值由 PM 按波动设，范围 3% 到 20%
 - [错开中的备用止损：撤掉买单以后挂回、又撤掉止损单] → 多两次请求；省掉要改执行模块，不值得（D4）

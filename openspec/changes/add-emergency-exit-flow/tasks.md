@@ -3,7 +3,7 @@
 ## 1. 前置和 Proposal
 
 - [ ] 1.1 确认三个前置变更都已经归档、代码在 main 上：「下单流程」（`workflows/order_flow.py` 有 `TradeServices`，`workflows/account_snapshot.py` 有 `account_snapshot`）、「收盘对账」（`workflows/patrol.py` 的 `run_round` 最后一项是收盘对账，有 `workflows/names.py`）、「改单未生效时不再改单」。验证：`ls openspec/changes` 里没有 `add-order-flow`、`add-close-reconciliation`、`update-stop-pending-modify`，`grep -n "class TradeServices\|def account_snapshot\|_close_reconcile" src/tradingagentspro/workflows/*.py` 都有；不满足就停下，不开始本变更
-- [ ] 1.2 人对 proposal「需要人决定」两条表态以后，改完整版 Proposal：同意就按推荐做法改「订单生命周期」表的「止损单挂单失败」「加仓」两行和「持仓与退出」的「紧急风险退出的触发」；不同意按人的决定改，并同步改 specs/emergency-exit-flow/spec.md（「要清仓的股票」）和 design D2、D4（简版不动）。验证：`git diff docs/` 只有这三处（不同意时另有 spec 和 design 的对应改动）；`openspec validate add-emergency-exit-flow --strict` 通过
+- [x] 1.2 人对 proposal「需要人决定」两条表态以后，改完整版 Proposal：同意就按推荐做法改「订单生命周期」表的「止损单挂单失败」「加仓」两行和「持仓与退出」的「紧急风险退出的触发」；不同意按人的决定改，并同步改 specs/emergency-exit-flow/spec.md（「要清仓的股票」）和 design D2、D4（简版不动）。验证：`git diff docs/` 只有这三处（不同意时另有 spec 和 design 的对应改动）；`openspec validate add-emergency-exit-flow --strict` 通过
 
 ## 2. 风控的只读查询
 
@@ -22,7 +22,7 @@
 
 ## 5. 接到巡检
 
-- [ ] 5.1 先改巡检的测试（design D1、D10、D12）：`tests/workflows/builders.py` 的 `World` 加上 `FakeQuoteSource`（默认没有行情）、紧急退出、健康监控、行情、`TradeServices` 和 `EmergencyFlow`，`FakeBroker` 的权益和前一交易日收盘时的权益设为 10,000，巡检用新的构造参数（`restart` 同样重建）；`tests/workflows/test_patrol.py` 的「没有持仓也没有订单」改为断言第 1 到 3 步只读了一次全部持仓、另外只有一次读账户（说明里注明 design 的 Risks）；新增测试：一轮里紧急退出在对齐止损单之后、收盘对账之前（用会记录调用顺序的替身或 `caplog`），盘外一轮不读账户；`tests/workflows/test_patrol_thread.py` 补 spec「做某一项时停止」（止损单替身撤 AAA-STOP-1 时阻塞到测试放行，放行以后 AAA 的告警已推送、BBB 没有处理，`stop` 才返回；有超时）。验证：确认新的测试因为巡检还没调用紧急退出而失败，巡检原有的其余测试照常通过
+- [ ] 5.1 先改巡检的测试（design D1、D10、D12）：`tests/workflows/builders.py` 的 `World` 加上 `FakeQuoteSource`（默认没有行情）、紧急退出、健康监控、行情、`TradeServices` 和 `EmergencyFlow`，`FakeBroker` 的权益和前一交易日收盘时的权益设为 10,000，巡检用新的构造参数（`restart` 同样重建）；`tests/workflows/test_patrol.py` 按 specs/session-patrol/spec.md 改「没有持仓也没有订单」（读账户之前的请求只有一次读取全部持仓）、新增「第 3 步之后的项」（读全部持仓在读账户之前），再加一个测试：紧急退出在收盘对账之前（用会记录调用顺序的替身或 `caplog`），盘外一轮不读账户；`tests/workflows/test_patrol_thread.py` 补 spec「做某一项时停止」（止损单替身撤 AAA-STOP-1 时阻塞到测试放行，放行以后 AAA 的告警已推送、BBB 没有处理，`stop` 才返回；有超时）。验证：确认新的测试因为巡检还没调用紧急退出而失败，巡检原有的其余测试照常通过
 - [ ] 5.2 改 `src/tradingagentspro/workflows/patrol.py`：构造参数加 `emergency: EmergencyFlow`，`run_round` 在 `_align_stops` 之后、`_close_reconcile` 之前调用 `_emergency_exit`（design D1），模块和类的说明加上紧急退出。验证：`uv run pytest tests/workflows` 全部通过，`test_patrol_thread.py` 用 shell 循环连续跑 20 次都通过；`uv run mypy`、`uv run ruff check`、`uv run lint-imports` 通过
 - [ ] 5.3 写 spec 场景的测试（design D12）：在 `tests/workflows/test_emergency_flow.py` 第三部分，经 `world.patrol.run_round()` 覆盖 specs/emergency-exit-flow/spec.md 里「巡检里的紧急退出」（「做某一项时停止」已在 5.1）、「判定的输入」「要清仓的股票」「一只股票的清仓」「单日亏损熔断」「告警」「重启以后」「一轮里的失败」「执行模块和风控的调用串行」的全部场景；"之后一轮"拨 `FakeClock` 15 秒，券商的回报用替身安排；"重启"用同一套存储和替身重建执行模块（再对账一次）、风控、紧急退出、`EmergencyFlow` 和巡检；"处理 AAA 时读状态库出错"用订单存储替身抛一次错。和实现不符时先看 spec 和 design，确定是实现的错再改实现，是文档的错先改文档。验证：每个场景至少一个测试，测试的说明写明场景名；`uv run pytest tests/workflows` 全部通过
 
@@ -33,5 +33,5 @@
 
 ## 7. 收尾
 
-- [ ] 7.1 对照 specs/emergency-exit-flow/spec.md 和 specs/bootstrap/spec.md，确认每个场景都有对应的测试，测试名或说明里写明场景。验证：逐条列出场景和测试的对应关系，没有遗漏
+- [ ] 7.1 对照 specs/emergency-exit-flow/spec.md、specs/session-patrol/spec.md 和 specs/bootstrap/spec.md，确认每个场景都有对应的测试，测试名或说明里写明场景。验证：逐条列出场景和测试的对应关系，没有遗漏
 - [ ] 7.2 运行全部检查：`uv run pytest`、`uv run ruff check`、`uv run ruff format --check`、`uv run mypy`、`uv run lint-imports`、`openspec validate --all --strict`。验证：全部通过
