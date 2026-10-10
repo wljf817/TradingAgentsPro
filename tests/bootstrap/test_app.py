@@ -53,6 +53,7 @@ from tradingagentspro.integrations.alpaca import AlpacaClient, AlpacaConfig
 from tradingagentspro.integrations.discord import DiscordConfig
 from tradingagentspro.integrations.discord.notifier import PressHandler
 from tradingagentspro.integrations.discord.plans import PlanEntry
+from tradingagentspro.modules.emergency import close_plan
 from tradingagentspro.modules.execution import (
     Order,
     OrderSide,
@@ -908,8 +909,8 @@ def test_patrol_and_later_flows_share_one_lock(
     patrols: list[tuple[object, PatrolConfig]] = []
 
     class RecordingPatrol(SessionPatrol):
-        def __init__(self, *args: Any) -> None:
-            super().__init__(*args)
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
             patrols.append((args[4], args[5]))  # 锁和巡检配置
 
     monkeypatch.setattr(app_module, "SessionPatrol", RecordingPatrol)
@@ -1143,3 +1144,87 @@ def test_stop_while_a_plan_waits_for_confirmation(
             )
         )
     )
+
+
+# 紧急退出流程的接线
+
+AAA_BUY = UUID("00000000-0000-4000-8000-0000000000aa")
+
+
+def _held_aaa(url: str) -> None:
+    """停机前的状态库：AAA 的买单昨天全部成交 50 股（板块"科技"，止损价 90，紧急阈值 0.08）。"""
+    engine = _connect(url)
+    try:
+        migrate(engine)
+        PostgresOrderStore(engine, FakeClock(NOW)).save(
+            Order(
+                plan_id=AAA_BUY,
+                symbol="AAA",
+                sector="科技",
+                side=OrderSide.BUY,
+                order_type=OrderType.LIMIT,
+                limit_price=Decimal(100),
+                quantity=50,
+                deadline=NOW - timedelta(hours=18),
+                created_at=NOW - timedelta(days=1),
+                stop_price=Decimal(90),
+                emergency_threshold=Decimal("0.08"),
+                status=OrderStatus.FILLED,
+                broker_order_id="O2",
+                filled=50,
+                average_price=Decimal(100),
+            )
+        )
+    finally:
+        engine.dispose()
+
+
+def _alpaca_order(world: World, client_order_id: str) -> dict[str, Any] | None:
+    found = [o for o in world.alpaca.orders.values() if o["client_order_id"] == client_order_id]
+    return found[0] if found else None
+
+
+def test_emergency_close_in_session(
+    log_stream: io.StringIO, database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """spec「盘中紧急清仓」：撤掉 AAA-STOP-1 并告警；止损单撤销以后 Alpaca 收到市价卖单。
+
+    巡检的间隔改短，不用真的等 15 秒；不经过 DBOS 工作流，没有要等它结束的。
+    """
+    monkeypatch.setattr(
+        app_module, "PatrolConfig", lambda: PatrolConfig(interval=timedelta(seconds=0.1))
+    )
+    _held_aaa(database_url)
+    world = World()
+    world.alpaca.account = alpaca_payloads.account(equity="10000", cash="1000", last_equity="10000")
+    world.alpaca.hold("AAA", "50", "100")
+    world.opend_rows.append(
+        moomoo_payloads.row(
+            moomoo_payloads.SPY,
+            code="US.AAA",
+            name="AAA",
+            last_price=92.0,
+            prev_close_price=100.0,
+            volume=1000.0,
+        )
+    )
+    close_id = str(close_plan("AAA", "科技", NOW.date()).plan_id)
+
+    with ExitStack() as stack:
+        start(environment(database_url), world.externals(), BootstrapConfig(), stack)
+        _until(lambda: (_alpaca_order(world, "AAA-STOP-1") or {}).get("status") == "pending_cancel")
+        _until(lambda: any(a.startswith("紧急退出 AAA：") for a in _alerts(world)))
+        stop = _alpaca_order(world, "AAA-STOP-1")
+        assert stop is not None
+        stop["status"] = "canceled"
+        _until(lambda: _alpaca_order(world, close_id) is not None)
+
+    sell = _alpaca_order(world, close_id)
+    assert sell is not None
+    assert (sell["symbol"], sell["side"], sell["qty"], sell["type"]) == (
+        "AAA",
+        "sell",
+        "50",
+        "market",
+    )
+    assert _messages(log_stream, "ERROR") == []

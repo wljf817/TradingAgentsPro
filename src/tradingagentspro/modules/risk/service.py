@@ -125,6 +125,13 @@ class RiskService:
         """
         return tuple(r.plan.plan_id for r in self._store.active())
 
+    def active_plans(self) -> tuple[TradePlan, ...]:
+        """有有效预留的方案本身：没有释放、剩余股数大于 0。只读存储。
+
+        给紧急退出按股票作废还没下单的方案用，见 add-emergency-exit-flow 的 design D9。
+        """
+        return tuple(r.plan for r in self._store.active())
+
     def _request(
         self,
         plan: TradePlan,

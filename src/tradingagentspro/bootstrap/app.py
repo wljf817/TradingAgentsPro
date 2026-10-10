@@ -5,7 +5,8 @@
 add-session-patrol 的 design D12。启动对账有不一致、第一次健康判定是降级时，Discord 连上以后
 推送告警，见 add-close-reconciliation 的 design D10 和 add-health-monitoring 的 design D8。
 下单流程的部件在 DBOS launch 之前 install，/plan 的提交接口和确认按钮的回调接上下单流程，见
-add-order-flow 的 design D13。以后的流程从 TradingApp.lock 取锁。
+add-order-flow 的 design D13。盘中巡检的每一轮里有紧急退出，见 add-emergency-exit-flow 的
+design D10。以后的流程从 TradingApp.lock 取锁。
 """
 
 import logging
@@ -71,6 +72,7 @@ from tradingagentspro.modules.statestore import connect
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.ids import IdGenerator
 from tradingagentspro.shared.trading_calendar import TradingCalendar
+from tradingagentspro.workflows.emergency_flow import EmergencyFlow
 from tradingagentspro.workflows.health import HealthMonitor, degraded_text
 from tradingagentspro.workflows.order_flow import OrderFlow, OrderFlowConfig, TradeServices
 from tradingagentspro.workflows.order_workflow import OrderPlanIntake, deliver_decision, install
@@ -229,7 +231,8 @@ def _assemble(
         execution_config,
     )
     risk = RiskService(PostgresReservationStore(engine, clock), clock, calendar, risk_config)
-    emergency = EmergencyService(clock, calendar, EmergencyConfig())
+    emergency_config = EmergencyConfig()  # 紧急退出模块和紧急退出流程共用
+    emergency = EmergencyService(clock, calendar, emergency_config)
     health = HealthService(clock, calendar, HealthConfig())
     quotes = externals.opend(MoomooConfig())
     on_stop(stack, "OpenD 行情连接", quotes.close)
@@ -252,7 +255,15 @@ def _assemble(
         notifier=notifier,
         lock=lock,
         monitor=monitor,
-        patrol=SessionPatrol(execution, risk, notification, monitor, lock, PatrolConfig()),
+        patrol=SessionPatrol(
+            execution,
+            risk,
+            notification,
+            monitor,
+            lock,
+            PatrolConfig(),
+            emergency=EmergencyFlow(services, notification, clock, calendar, emergency_config),
+        ),
         flow=OrderFlow(services, notification, clock, calendar, OrderFlowConfig()),
     )
 

@@ -9,17 +9,21 @@ import logging
 import threading
 from collections.abc import Iterator
 from datetime import date, timedelta
+from decimal import Decimal
 
 import pytest
 
 from tests.fakes.broker import FakeBroker
+from tests.fakes.stops import FakeStopBroker
 from tests.modules.execution.builders import baseline_plan
 from tests.workflows.builders import World, at, p5
+from tests.workflows.emergency_builders import AAA_STOP_1, aaa_close, bbb_close, emergency_world
 from tradingagentspro.modules.execution import (
     BrokerOrder,
     BrokerOrderStatus,
     Order,
     OrderStatus,
+    StopOrder,
     WorkingOrder,
 )
 from tradingagentspro.modules.health import HealthMode
@@ -46,7 +50,13 @@ class _CountingPatrol(SessionPatrol):
 
     def __init__(self, world: World, config: PatrolConfig) -> None:
         super().__init__(
-            world.execution, world.risk, world.notification, world.monitor, world.lock, config
+            world.execution,
+            world.risk,
+            world.notification,
+            world.monitor,
+            world.lock,
+            config,
+            emergency=world.flow,
         )
         self.started = 0
         self.finished: list[threading.Event] = [threading.Event() for _ in range(3)]
@@ -250,6 +260,43 @@ def test_stopping_during_the_recovery_reconciliation(stop_later: list[SessionPat
     assert not stopper.is_alive()
     assert not world.health.status.degraded
     assert world.notifier.alerts[-1].startswith("降级模式结束")
+
+
+class _SlowStops(FakeStopBroker):
+    """slow_on 这张止损单的撤单请求停住，直到测试放行。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.slow_on: str | None = None
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def cancel(self, stop: StopOrder) -> None:
+        if stop.client_order_id == self.slow_on:
+            self.entered.set()
+            self.release.wait(WAIT)
+        super().cancel(stop)
+
+
+def test_stopping_during_an_emergency_exit(stop_later: list[SessionPatrol]) -> None:
+    """emergency-exit-flow spec「做某一项时停止」：AAA 这一项做完（含告警）才结束，不处理 BBB。"""
+    stops = _SlowStops()
+    world = emergency_world(stops=stops, config=LONG)
+    world.broker.equity = Decimal(9_300)  # 熔断
+    stops.slow_on = AAA_STOP_1
+    patrol = _start(_CountingPatrol(world, LONG), stop_later)
+    assert stops.entered.wait(WAIT)
+
+    stopper = _stop_in_background(patrol)
+    _pause(0.2)
+    assert stopper.is_alive()  # 还在等 AAA 这一项
+    stops.release.set()
+    stopper.join(WAIT)
+
+    assert not stopper.is_alive()
+    assert world.orders.get(aaa_close().plan_id) is not None
+    assert world.orders.get(bbb_close().plan_id) is None
+    assert world.notifier.alerts[-1].startswith("紧急退出 AAA：组合熔断。")
 
 
 # 一轮里的失败

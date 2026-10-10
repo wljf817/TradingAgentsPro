@@ -1,9 +1,9 @@
 """盘中巡检：每一轮跟进全部未结束的订单、按订单同步预留、对齐持仓的止损单，发现无保护仓位时告警，
-然后判定一次系统健康，最后在到期时做收盘对账。
+然后判定一次系统健康、做紧急退出，最后在到期时做收盘对账。
 
-见 session-patrol spec、health-monitoring spec「巡检里的健康判定」、close-reconciliation spec
-「巡检里的收盘对账」和 add-session-patrol 的 design。执行模块和风控里会改变状态的调用都拿着
-全程序共用的那把锁，一项一项地拿；推送告警时不拿锁。
+见 session-patrol spec、health-monitoring spec「巡检里的健康判定」、emergency-exit-flow spec
+「巡检里的紧急退出」、close-reconciliation spec「巡检里的收盘对账」和 add-session-patrol 的
+design。执行模块和风控里会改变状态的调用都拿着全程序共用的那把锁，一项一项地拿；推送告警时不拿锁。
 """
 
 import logging
@@ -26,6 +26,7 @@ from tradingagentspro.modules.execution import (
 )
 from tradingagentspro.modules.notification import NotificationService
 from tradingagentspro.modules.risk import RiskService
+from tradingagentspro.workflows.emergency_flow import EmergencyFlow, Judgement
 from tradingagentspro.workflows.health import HealthMonitor
 from tradingagentspro.workflows.names import ORDER_STATUSES, SIDES, STOP_STATUSES
 from tradingagentspro.workflows.reconciliation import close_reconcile_if_due
@@ -46,7 +47,8 @@ class SessionPatrol:
     """盘中巡检，见 session-patrol spec。
 
     run_round 做一轮，可以直接调用；start 在守护线程里循环，stop 停下并等线程结束。
-    lock 是全程序共用的那把锁，见 spec「执行模块和风控的调用串行」。
+    lock 是全程序共用的那把锁，见 spec「执行模块和风控的调用串行」。emergency 是每一轮里的紧急退出，
+    见 emergency-exit-flow spec。
     """
 
     def __init__(
@@ -57,8 +59,11 @@ class SessionPatrol:
         health: HealthMonitor,
         lock: threading.RLock,
         config: PatrolConfig,
+        *,
+        emergency: EmergencyFlow,
     ) -> None:
         self._execution = execution
+        self._emergency = emergency
         self._risk = risk
         self._notification = notification
         self._health = health
@@ -102,8 +107,8 @@ class SessionPatrol:
 
     def run_round(self) -> None:
         """做一轮：跟进订单、同步预留、对齐止损单，见 session-patrol spec「每一轮」；然后是健康
-        判定，见 health-monitoring spec「巡检里的健康判定」；最后是收盘对账，见 close-reconciliation
-        spec「巡检里的收盘对账」。
+        判定，见 health-monitoring spec「巡检里的健康判定」，和紧急退出，见 emergency-exit-flow
+        spec「巡检里的紧急退出」；最后是收盘对账，见 close-reconciliation spec「巡检里的收盘对账」。
 
         停止以后不再开始新的一项，直接返回。
         """
@@ -111,6 +116,7 @@ class SessionPatrol:
         self._sync_reservations()
         broker_connected = self._align_stops(tracked)
         self._judge_health(broker_connected)
+        self._emergency_exit()
         self._close_reconcile()
 
     def _track_orders(self) -> set[str]:
@@ -200,6 +206,29 @@ class SessionPatrol:
             return
         with self._item("健康判定"):
             self._health.judge(broker_connected)
+
+    def _emergency_exit(self) -> None:
+        """紧急退出：判定、熔断时撤买单、逐只股票清仓、报告结果，各是一项。
+
+        见 emergency-exit-flow spec「巡检里的紧急退出」和 add-emergency-exit-flow 的 design D1。
+        """
+        if self._stopping.is_set():
+            return
+        judgement: Judgement | None = None
+        with self._item("紧急退出的判定"):
+            judgement = self._emergency.judge()
+        if judgement is not None:
+            if judgement.breaker is not None and not self._stopping.is_set():
+                with self._item("熔断时撤掉全部买单"):
+                    self._emergency.cancel_buys(judgement)
+            for plan in judgement.exits:
+                if self._stopping.is_set():
+                    return
+                with self._item(f"紧急退出 {plan.symbol}"):
+                    self._emergency.advance(plan, judgement)
+        if not self._stopping.is_set():
+            with self._item("紧急退出的结果"):
+                self._emergency.report()
 
     def _close_reconcile(self) -> None:
         """最后一项：收盘对账到期就做，见 add-close-reconciliation 的 design D2。

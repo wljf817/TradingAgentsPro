@@ -293,6 +293,28 @@ def test_active_plan_ids_without_reservations() -> None:
     assert risk_service(InMemoryReservationStore()).active_plan_ids() == ()
 
 
+# 有效预留的方案本身：紧急退出按股票作废还没下单的方案（add-emergency-exit-flow 的 design D9）
+
+
+def test_active_plans_lists_only_active_reservations() -> None:
+    store = InMemoryReservationStore()
+    service = risk_service(store)
+    released, filled, partly, open_ = (_buy(s, 100, 45) for s in ("BBB", "CCC", "DDD", "EEE"))
+    for plan in (released, filled, partly, open_):
+        _check(service, plan)
+
+    service.release(released.plan_id)
+    service.record_fill(filled.plan_id, 100)
+    service.record_fill(partly.plan_id, 30)
+
+    assert {plan.plan_id for plan in service.active_plans()} == {partly.plan_id, open_.plan_id}
+    assert {plan.symbol for plan in service.active_plans()} == {"DDD", "EEE"}
+
+
+def test_active_plans_without_reservations() -> None:
+    assert risk_service(InMemoryReservationStore()).active_plans() == ()
+
+
 # 同一方案重复检查
 
 

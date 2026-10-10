@@ -16,7 +16,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field
 
 from tradingagentspro.contracts.risk import RiskDecision, RiskOutcome
-from tradingagentspro.contracts.trade_plan import TradeAction, TradePlan
+from tradingagentspro.contracts.trade_plan import TradePlan
 from tradingagentspro.modules.emergency import EmergencyService
 from tradingagentspro.modules.execution import (
     BrokerUnavailableError,
@@ -38,17 +38,12 @@ from tradingagentspro.modules.risk import RiskService
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.trading_calendar import OutsideSessionError, TradingCalendar
 from tradingagentspro.workflows.account_snapshot import read_snapshot
+from tradingagentspro.workflows.names import ACTIONS
 
 _log = logging.getLogger(__name__)
 
 ZERO = Decimal(0)
 
-_ACTIONS = {
-    TradeAction.BUY: "买入",
-    TradeAction.ADD: "加仓",
-    TradeAction.REDUCE: "减仓",
-    TradeAction.CLOSE: "清仓",
-}
 _OUTCOMES = {
     RiskOutcome.PASSED: "通过",
     RiskOutcome.ADJUSTED: "调整",
@@ -353,13 +348,13 @@ def error_text(
 
 def _trade(plan: TradePlan, quantity: int | None) -> str:
     """动作、股票和股数，比如「买入 BBB 20 股」；没有股数时不写。"""
-    text = f"{_ACTIONS[plan.action]} {plan.symbol}"
+    text = f"{ACTIONS[plan.action]} {plan.symbol}"
     return text if quantity is None else f"{text} {quantity} 股"
 
 
 def _head(plan: TradePlan) -> str:
     """日志的开头：下单流程、方案 ID、动作和股票。"""
-    return f"下单流程 {plan.plan_id}（{_ACTIONS[plan.action]} {plan.symbol}）"
+    return f"下单流程 {plan.plan_id}（{ACTIONS[plan.action]} {plan.symbol}）"
 
 
 def _result(decision: RiskDecision) -> str:

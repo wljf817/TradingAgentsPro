@@ -318,13 +318,60 @@ def test_next_round_places_the_stop_after_rejections() -> None:
 
 
 def test_round_without_positions_or_orders() -> None:
-    """spec「没有持仓也没有订单」：券商只收到一次读取全部持仓。"""
+    """spec「没有持仓也没有订单」：第 1 到 3 步券商只收到一次读取全部持仓。
+
+    之后的紧急退出（盘中）读一次账户，见 add-emergency-exit-flow 的 session-patrol delta。
+    """
     world = World()
 
     world.patrol.run_round()
 
-    assert world.broker.calls == [("all_positions", "*")]
+    assert world.broker.calls == [("all_positions", "*"), ("account", "*")]
     assert world.stops.calls == []
+
+
+def test_items_after_step_3() -> None:
+    """spec「第 3 步之后的项」：读全部持仓（第 3 步）以后，紧急退出才读账户。"""
+    world = World()
+    _hold_bbb(world)
+
+    world.patrol.run_round()
+
+    calls = world.broker.calls
+    assert calls.index(("all_positions", "*")) < calls.index(("account", "*"))
+
+
+def test_emergency_exit_comes_before_the_close_reconciliation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """emergency-exit-flow spec「巡检里的紧急退出」：对齐止损单之后、收盘对账之前。"""
+    world = World()
+    order: list[str] = []
+    judge = world.flow.judge
+
+    def judge_and_note() -> object:
+        order.append("紧急退出")
+        return judge()
+
+    monkeypatch.setattr(world.flow, "judge", judge_and_note)
+    monkeypatch.setattr(
+        "tradingagentspro.workflows.patrol.close_reconcile_if_due",
+        lambda *args: order.append("收盘对账"),
+    )
+
+    world.patrol.run_round()
+
+    assert order == ["紧急退出", "收盘对账"]
+
+
+def test_no_account_read_outside_the_session() -> None:
+    """emergency-exit-flow spec「盘外不判定」经过巡检：盘外一轮不读账户。"""
+    world = World()
+    world.clock.set(at(21))
+
+    world.patrol.run_round()
+
+    assert ("account", "*") not in world.broker.calls
 
 
 def test_stops_are_aligned_on_weekends() -> None:

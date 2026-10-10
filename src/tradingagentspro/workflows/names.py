@@ -1,6 +1,14 @@
-"""订单状态、买卖方向和止损单状态的中文名：巡检和对账的日志、告警共用。"""
+"""方案动作、订单状态、买卖方向和止损单状态的中文名：几个流程的日志和告警共用。"""
 
+from tradingagentspro.contracts.trade_plan import TradeAction
 from tradingagentspro.modules.execution import OrderSide, OrderStatus, StopStatus
+
+ACTIONS = {
+    TradeAction.BUY: "买入",
+    TradeAction.ADD: "加仓",
+    TradeAction.REDUCE: "减仓",
+    TradeAction.CLOSE: "清仓",
+}
 
 SIDES = {OrderSide.BUY: "买入", OrderSide.SELL: "卖出"}
 ORDER_STATUSES = {
