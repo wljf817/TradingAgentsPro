@@ -931,6 +931,16 @@ def _press_confirm(world: World) -> None:
     world.gateway.press(FakePress(USER_ID, button.custom_id, message.message_id))
 
 
+def _until_flow_ends(plan_id: UUID) -> None:
+    """等这个方案的下单流程记下结果：关闭 DBOS 和数据库以前，工作流线程已经不再写库。"""
+
+    def ended() -> bool:
+        status = DBOS.get_workflow_status(str(plan_id))
+        return status is not None and status.status == "SUCCESS"
+
+    _until(ended)
+
+
 def _bought(world: World) -> list[dict[str, Any]]:
     """Alpaca 收到的买入 BBB 的订单。"""
     return [o for o in world.alpaca.orders.values() if o["symbol"] == "BBB" and o["side"] == "buy"]
@@ -946,6 +956,7 @@ def test_enter_and_confirm_a_buy(log_stream: io.StringIO, database_url: str) -> 
         assert reply.startswith("风控通过：买入 BBB 20 股")
         _press_confirm(world)
         _until(lambda: bool(_bought(world)))
+        _until_flow_ends(UUID(int=1))
 
     [order] = _bought(world)
     assert (order["client_order_id"], order["qty"], order["limit_price"]) == (
@@ -978,6 +989,7 @@ def test_recover_a_plan_waiting_for_the_open(
     with ExitStack() as stack:
         start(environment(database_url), second.externals(), BootstrapConfig(), stack)
         _until(lambda: bool(_bought(second)))
+        _until_flow_ends(UUID(int=1))
 
     assert [s for s in second.gateway.sent if s.view is not None] == []
     assert _bought(second)[0]["client_order_id"] == str(UUID(int=1))
