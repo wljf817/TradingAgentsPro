@@ -5,7 +5,9 @@ D10、D11、D12。
 正常启动的测试先设置好 stop 再调用 run：启动完成以后立即停止，同步跑完，不用线程。
 """
 
+import asyncio
 import io
+import itertools
 import re
 import socket
 import threading
@@ -16,8 +18,10 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+import discord
 import httpx
 import pytest
+from dbos import DBOS
 from pydantic import SecretStr
 from sqlalchemy import Engine, create_engine, inspect, make_url, text
 
@@ -29,8 +33,12 @@ from tests.bootstrap.externals import (
     environment,
 )
 from tests.fakes.clock import FakeClock
+from tests.integrations.alpaca import payloads as alpaca_payloads
 from tests.integrations.alpaca.server import FakeAlpaca
-from tests.integrations.discord.gateway import FakeGateway
+from tests.integrations.discord.calls import FakeCall
+from tests.integrations.discord.gateway import FakeGateway, FakePress
+from tests.integrations.moomoo import payloads as moomoo_payloads
+from tests.modules.notification.builders import USER_ID
 from tradingagentspro.bootstrap import app as app_module
 from tradingagentspro.bootstrap.app import (
     BootstrapConfig,
@@ -44,6 +52,7 @@ from tradingagentspro.contracts.trade_plan import OrderType, TradeAction, TradeP
 from tradingagentspro.integrations.alpaca import AlpacaClient, AlpacaConfig
 from tradingagentspro.integrations.discord import DiscordConfig
 from tradingagentspro.integrations.discord.notifier import PressHandler
+from tradingagentspro.integrations.discord.plans import PlanEntry
 from tradingagentspro.modules.execution import (
     Order,
     OrderSide,
@@ -54,7 +63,7 @@ from tradingagentspro.modules.execution import (
     StopStatus,
 )
 from tradingagentspro.modules.health import HealthCheck, HealthMode
-from tradingagentspro.modules.notification import NotificationUnavailableError
+from tradingagentspro.modules.notification import NotificationConfig, NotificationUnavailableError
 from tradingagentspro.modules.risk import PostgresReservationStore, Reservation, RiskConfig
 from tradingagentspro.modules.statestore import connect
 from tradingagentspro.workflows.patrol import PatrolConfig, SessionPatrol
@@ -869,4 +878,155 @@ def test_stop_waits_for_the_patrol_item_in_progress(
             "已关闭：数据库连接",
             "已停止",
         ],
+    )
+
+
+# 下单流程的接线
+
+
+def _plan_world(clock_at: datetime = NOW) -> World:
+    """账户 10,000、OpenD 有 BBB 行情（最新价 50）的世界。"""
+    world = World(clock=FakeClock(clock_at))
+    world.alpaca.account = alpaca_payloads.account(
+        equity="10000", cash="10000", last_equity="10000"
+    )
+    world.opend_rows.append(
+        moomoo_payloads.row(
+            moomoo_payloads.SPY,
+            code="US.BBB",
+            name="BBB",
+            last_price=50.0,
+            prev_close_price=49.5,
+            volume=1000.0,
+        )
+    )
+    return world
+
+
+def _until(condition: Callable[[], bool]) -> None:
+    for _ in range(500):  # 最多等 10 秒
+        if condition():
+            return
+        threading.Event().wait(0.02)
+    raise AssertionError("等不到条件成立")
+
+
+def _buy_bbb(world: World) -> str:
+    """本人运行 /plan buy symbol:BBB sector:医疗 quantity:20 limit:50 stop:45，返回回复。"""
+    assert world.plans is not None
+    call = FakeCall(USER_ID)
+    entry = PlanEntry(TradeAction.BUY, "BBB", sector="医疗", quantity=20, limit="50", stop="45")
+    asyncio.run(world.plans.handle(call, entry))
+    [reply] = call.replies
+    return reply
+
+
+def _press_confirm(world: World) -> None:
+    """等确认消息发出来，按它的「确认」。"""
+    _until(lambda: any(s.view is not None for s in world.gateway.sent))
+    message = next(s for s in world.gateway.sent if s.view is not None)
+    button = message.view.children[0]  # type: ignore[union-attr]
+    assert isinstance(button, discord.ui.Button) and button.label == "确认"
+    assert button.custom_id is not None
+    world.gateway.press(FakePress(USER_ID, button.custom_id, message.message_id))
+
+
+def _bought(world: World) -> list[dict[str, Any]]:
+    """Alpaca 收到的买入 BBB 的订单。"""
+    return [o for o in world.alpaca.orders.values() if o["symbol"] == "BBB" and o["side"] == "buy"]
+
+
+def test_enter_and_confirm_a_buy(log_stream: io.StringIO, database_url: str) -> None:
+    """spec「录入并确认一个买入方案」：回复风控通过，按确认以后 Alpaca 收到买单。"""
+    world = _plan_world()
+
+    with ExitStack() as stack:
+        start(environment(database_url), world.externals(), BootstrapConfig(), stack)
+        reply = _buy_bbb(world)
+        assert reply.startswith("风控通过：买入 BBB 20 股")
+        _press_confirm(world)
+        _until(lambda: bool(_bought(world)))
+
+    [order] = _bought(world)
+    assert (order["client_order_id"], order["qty"], order["limit_price"]) == (
+        str(UUID(int=1)),
+        "20",
+        "50",
+    )
+    assert _messages(log_stream, "ERROR") == []
+
+
+@pytest.mark.parametrize("updated", [False, True], ids=["restart", "update"])
+def test_recover_a_plan_waiting_for_the_open(
+    log_stream: io.StringIO, database_url: str, updated: bool
+) -> None:
+    """spec「启动时恢复等开盘的方案」「程序更新以后恢复」：盘后确认，进程在等开盘时退出；
+    下一个交易日盘中启动以后下单，没有再请求确认。update 时两次启动之间多登记一个工作流。"""
+    first = _plan_world(datetime(2026, 10, 14, 21, tzinfo=UTC))
+    first.sleep.crash = True
+    with ExitStack() as stack:
+        start(environment(database_url), first.externals(), BootstrapConfig(), stack)
+        assert _buy_bbb(first).startswith("风控通过")
+        _press_confirm(first)
+        assert first.sleep.crashed.wait(10)
+    assert _bought(first) == []
+    if updated:
+        _register_another_workflow()
+
+    second = _plan_world(datetime(2026, 10, 15, 14, tzinfo=UTC))
+    second.sleep.hold = True
+    with ExitStack() as stack:
+        start(environment(database_url), second.externals(), BootstrapConfig(), stack)
+        _until(lambda: bool(_bought(second)))
+
+    assert [s for s in second.gateway.sent if s.view is not None] == []
+    assert _bought(second)[0]["client_order_id"] == str(UUID(int=1))
+
+
+_extra_workflows = itertools.count(1)
+
+
+def _register_another_workflow() -> None:
+    """程序更新：多登记一个工作流，工作流源码的哈希就变了。"""
+
+    def extra() -> None:
+        """测试「程序更新以后恢复」时多登记的工作流。"""
+
+    DBOS.workflow(name=f"bootstrap_test.extra.{next(_extra_workflows)}")(extra)
+
+
+def test_stop_while_a_plan_waits_for_confirmation(
+    log_stream: io.StringIO, database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """spec「停止时有方案在等确认」：按顺序关闭、写出已停止、退出码 0，不等截止时刻。
+
+    确认超时改成 2 秒，让留下的工作流线程在测试结束以前醒来、结束。
+    """
+    monkeypatch.setattr(
+        app_module,
+        "NotificationConfig",
+        lambda: NotificationConfig(confirmation_timeout=timedelta(seconds=2)),
+    )
+    world = _plan_world()
+    stop = threading.Event()
+    result: list[int] = []
+    runner = threading.Thread(
+        target=lambda: result.append(run(environment(database_url), stop, world.externals()))
+    )
+    runner.start()
+    _until(lambda: "启动完成" in _messages(log_stream))
+    assert _buy_bbb(world).startswith("风控通过")
+    _until(lambda: any(s.view is not None for s in world.gateway.sent))
+
+    stop.set()
+    runner.join(10)
+
+    assert not runner.is_alive() and result == [0]
+    assert _in_order(_messages(log_stream), ["收到停止信号", "已关闭：DBOS", "已停止"])
+    _until(
+        lambda: (
+            not any(
+                t.name.startswith("dbos-executor") and t.is_alive() for t in threading.enumerate()
+            )
+        )
     )

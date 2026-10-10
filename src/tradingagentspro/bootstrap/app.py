@@ -3,8 +3,8 @@
 见 bootstrap spec「启动顺序」「启动失败」「模拟盘的装配」「DBOS」「停止」，以及 add-bootstrap-wiring
 的 design D1、D5、D6、D8、D10、D11。DBOS launch 之后开始盘中巡检，停止时最先停它，见
 add-session-patrol 的 design D12。启动对账有不一致时，Discord 连上以后推送告警，见
-add-close-reconciliation 的 design D10。以后的流程变更在 start 里 DBOS launch 之前注册工作流，
-从 TradingApp.lock 取锁。
+add-close-reconciliation 的 design D10。下单流程的部件在 DBOS launch 之前 install，/plan 的提交接口
+和确认按钮的回调接上下单流程，见 add-order-flow 的 design D13。以后的流程从 TradingApp.lock 取锁。
 """
 
 import logging
@@ -21,7 +21,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Engine
 
 from tradingagentspro.bootstrap.database import migrate
-from tradingagentspro.bootstrap.order_flow import AccountPlanIntake, refuse_decision
 from tradingagentspro.bootstrap.settings import Settings, load_settings
 from tradingagentspro.bootstrap.startup import judge_health_at_startup, reconcile_at_startup
 from tradingagentspro.integrations.alpaca import (
@@ -71,6 +70,8 @@ from tradingagentspro.modules.statestore import connect
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.ids import IdGenerator
 from tradingagentspro.shared.trading_calendar import TradingCalendar
+from tradingagentspro.workflows.order_flow import OrderFlow, OrderFlowConfig, TradeServices
+from tradingagentspro.workflows.order_workflow import OrderPlanIntake, deliver_decision, install
 from tradingagentspro.workflows.patrol import PatrolConfig, SessionPatrol
 from tradingagentspro.workflows.reconciliation import startup_text
 
@@ -88,13 +89,17 @@ class QuoteContext(SnapshotContext, Protocol):
 
 @dataclass(frozen=True, slots=True)
 class Externals:
-    """程序和外界接触的地方。运行时用 SYSTEM_EXTERNALS，测试换成替身，其余照常装配。"""
+    """程序和外界接触的地方。运行时用 SYSTEM_EXTERNALS，测试换成替身，其余照常装配。
+
+    sleep 是下单流程等开盘、等重试用的持久化休眠，见 add-order-flow 的 design D13。
+    """
 
     clock: Clock
     ids: IdGenerator
     alpaca: Callable[[AlpacaConfig], AlpacaClient]
     opend: Callable[[MoomooConfig], QuoteContext]
     discord: Callable[[DiscordConfig, PlanCommand], Gateway]
+    sleep: Callable[[float], None]
 
 
 SYSTEM_EXTERNALS = Externals(
@@ -103,6 +108,7 @@ SYSTEM_EXTERNALS = Externals(
     alpaca=AlpacaClient,
     opend=open_quote_context,
     discord=DiscordGateway,
+    sleep=DBOS.sleep,
 )
 
 
@@ -193,6 +199,7 @@ class _Parts:
     notifier: DiscordNotifier
     lock: threading.RLock
     patrol: SessionPatrol
+    flow: OrderFlow
 
 
 def _assemble(
@@ -219,27 +226,29 @@ def _assemble(
         execution_config,
     )
     risk = RiskService(PostgresReservationStore(engine, clock), clock, calendar, risk_config)
+    emergency = EmergencyService(clock, calendar, EmergencyConfig())
+    health = HealthService(clock, calendar, HealthConfig())
     quotes = externals.opend(MoomooConfig())
     on_stop(stack, "OpenD 行情连接", quotes.close)
     market_data = MarketDataService(MoomooQuoteSource(quotes), MarketDataConfig())
-    plans = PlanCommand(
-        AccountPlanIntake(execution.account), externals.ids, calendar, settings.discord
-    )
-    gateway = externals.discord(settings.discord, plans)
-    notifier = DiscordNotifier(gateway, settings.discord, clock, refuse_decision)
-    notification = NotificationService(notifier, clock, NotificationConfig())
     lock = threading.RLock()
+    services = TradeServices(execution, risk, emergency, health, market_data, lock)
+    plans = PlanCommand(OrderPlanIntake(services), externals.ids, calendar, settings.discord)
+    gateway = externals.discord(settings.discord, plans)
+    notifier = DiscordNotifier(gateway, settings.discord, clock, deliver_decision)
+    notification = NotificationService(notifier, clock, NotificationConfig())
     return _Parts(
         alpaca=client,
         execution=execution,
         risk=risk,
-        emergency=EmergencyService(clock, calendar, EmergencyConfig()),
-        health=HealthService(clock, calendar, HealthConfig()),
+        emergency=emergency,
+        health=health,
         market_data=market_data,
         notification=notification,
         notifier=notifier,
         lock=lock,
         patrol=SessionPatrol(execution, risk, notification, lock, PatrolConfig()),
+        flow=OrderFlow(services, notification, clock, calendar, OrderFlowConfig()),
     )
 
 
@@ -280,8 +289,10 @@ def start(
         parts.notification.alert(startup_text(reconciliation))
     with step("启动 DBOS"):
         url = settings.database_url.get_secret_value()
-        DBOS(config={"name": APP_NAME, "system_database_url": url})
+        # enable_patching：程序更新以后照样恢复进行中的下单流程，见 add-order-flow 的 design D10
+        DBOS(config={"name": APP_NAME, "system_database_url": url, "enable_patching": True})
         on_stop(stack, "DBOS", DBOS.destroy)
+        install(parts.flow, externals.sleep)
         DBOS.launch()
         _log.info("DBOS 已启动")
     with step("开始盘中巡检"):

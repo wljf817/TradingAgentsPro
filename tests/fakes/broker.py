@@ -30,6 +30,7 @@ class FakeBroker:
     - placed：券商收到并受理的提交，按顺序记录提交时的订单
     - cancel_requests：被接受的撤单请求，按顺序记录客户端订单 ID。撤单只记下请求，不改变订单，
       由测试用 update 决定撤单什么时候生效
+    - raise_next：安排下一次某种调用抛给定的异常（比如券商回答 401），见它的说明
     """
 
     def __init__(self) -> None:
@@ -56,6 +57,7 @@ class FakeBroker:
             "account": [],
         }
         self._reject_next_place = False
+        self._errors: dict[str, list[BaseException]] = {}
         self._broker_ids = count(1)
 
     # 执行模块调用的操作
@@ -173,6 +175,13 @@ class FakeBroker:
         """
         self._failures[operation].append(after_effect)
 
+    def raise_next(self, operation: str, error: BaseException) -> None:
+        """下一次 operation 调用记下以后、生效以前抛 error（不是 BrokerUnavailableError 的错误）。
+
+        同一种调用安排多次时按顺序排队，每次调用用掉一个；先于 fail_next 安排的失败。
+        """
+        self._errors.setdefault(operation, []).append(error)
+
     def clear_failures(self) -> None:
         """取消还没发生的失败。"""
         for queued in self._failures.values():
@@ -210,6 +219,9 @@ class FakeBroker:
 
     def _record(self, operation: str, key: str) -> bool:
         self.calls.append((operation, key))
+        errors = self._errors.get(operation)
+        if errors:
+            raise errors.pop(0)
         failures = self._failures[operation]
         if not failures:
             return False

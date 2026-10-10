@@ -3,6 +3,7 @@
 见 add-bootstrap-wiring 的 design D12。除了这几样，装配、数据库、DBOS 都是真的。
 """
 
+import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -48,10 +49,12 @@ class FakeOpenD:
     快照只有 SPY 一行，更新时刻是现在的 10 秒前（按 OpenD 的写法，美东时间）。
     - error：设上以后取快照返回错误和这条信息（OpenD 没开）
     - close_error：设上以后 close 记下关闭再抛它
+    - rows：SPY 以外的股票的快照行（按 OpenD 的写法），更新时刻同 SPY
     """
 
-    def __init__(self, clock: FakeClock) -> None:
+    def __init__(self, clock: FakeClock, rows: list[dict[str, Any]] | None = None) -> None:
         self.clock = clock
+        self.rows = rows or []
         self.error: str | None = None
         self.close_error: Exception | None = None
         self.closed = False
@@ -61,7 +64,8 @@ class FakeOpenD:
             return RET_ERROR, self.error
         updated = (self.clock.now() - timedelta(seconds=10)).astimezone(NEW_YORK)
         text = updated.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        return RET_OK, payloads.snapshot(payloads.row(payloads.SPY, update_time=text))
+        rows = [payloads.row(row, update_time=text) for row in (payloads.SPY, *self.rows)]
+        return RET_OK, payloads.snapshot(*rows)
 
     def close(self) -> None:
         self.closed = True
@@ -73,8 +77,11 @@ class FakeOpenD:
 class World:
     """一次启动面对的外部世界。测试在调用 run 之前安排它们的情况。
 
-    - opend：装配时才建，没有装配时为 None；测试用 opend_error、opend_close_error 预先安排
+    - opend：装配时才建，没有装配时为 None；测试用 opend_error、opend_close_error、opend_rows
+      预先安排
     - configs：三个外部系统的工厂收到的配置，按顺序
+    - plans：装配时交给 Discord 的 /plan 处理，测试用它运行 /plan
+    - sleep：下单流程的持久化休眠，见 WorldSleep
     """
 
     alpaca: FakeAlpaca = field(default_factory=FakeAlpaca)
@@ -83,8 +90,14 @@ class World:
     ids: FakeIds = field(default_factory=FakeIds)
     opend_error: str | None = None
     opend_close_error: Exception | None = None
+    opend_rows: list[dict[str, Any]] = field(default_factory=list)
     opend: FakeOpenD | None = None
     configs: list[object] = field(default_factory=list)
+    plans: PlanCommand | None = None
+    sleep: "WorldSleep" = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.sleep = WorldSleep(self.clock)
 
     def externals(self) -> Externals:
         return Externals(
@@ -93,6 +106,7 @@ class World:
             alpaca=self._alpaca,
             opend=self._opend,
             discord=self._discord,
+            sleep=self.sleep,
         )
 
     def _alpaca(self, config: AlpacaConfig) -> AlpacaClient:
@@ -101,13 +115,14 @@ class World:
 
     def _opend(self, config: MoomooConfig) -> FakeOpenD:
         self.configs.append(config)
-        self.opend = FakeOpenD(self.clock)
+        self.opend = FakeOpenD(self.clock, self.opend_rows)
         self.opend.error = self.opend_error
         self.opend.close_error = self.opend_close_error
         return self.opend
 
     def _discord(self, config: DiscordConfig, plans: PlanCommand) -> Gateway:
         self.configs.append(config)
+        self.plans = plans
         return self.gateway
 
     def alpaca_writes(self) -> list[tuple[str, str]]:
@@ -116,3 +131,30 @@ class World:
 
     def alpaca_requests(self) -> list[tuple[str, str]]:
         return [(r.method, r.url.path) for r in self.alpaca.requests]
+
+
+class Crash(BaseException):
+    """模拟进程在这一刻退出：DBOS 只接 Exception，工作流保持 PENDING，下次启动时恢复。"""
+
+
+class WorldSleep:
+    """下单流程的持久化休眠的替身。
+
+    默认把时钟拨过要睡的秒数、立即返回；hold 时不拨钟、立即返回（重启以后重放的休眠，时钟已经
+    设到醒来以后）；crash 时抛 Crash，模拟进程在休眠时退出。calls 记下每次的秒数。
+    """
+
+    def __init__(self, clock: FakeClock) -> None:
+        self.clock = clock
+        self.calls: list[float] = []
+        self.hold = False
+        self.crash = False
+        self.crashed = threading.Event()
+
+    def __call__(self, seconds: float) -> None:
+        self.calls.append(seconds)
+        if self.crash:
+            self.crashed.set()
+            raise Crash
+        if not self.hold:
+            self.clock.advance(timedelta(seconds=seconds))

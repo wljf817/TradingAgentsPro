@@ -116,14 +116,14 @@ def order_plan(plan: TradePlan, decision: RiskDecision) -> PlanEnd:
     requested = _request_confirmation(plan, decision)
     if requested is None:
         DBOS.set_event(CONFIRMATION, Stage.UNSENT)
-        _settle(plan, Stage.UNSENT, None)
+        _settle(plan, decision, Stage.UNSENT, None)
         return PlanEnd.UNSENT
     choice = DBOS.recv(DECISION_TOPIC, timeout_seconds=requested.wait_seconds)
     stage = Stage.TIMED_OUT if choice is None else Stage(choice)
     DBOS.set_event(CONFIRMATION, stage)
-    _settle(plan, stage, requested.message_id)
+    _settle(plan, decision, stage, requested.message_id)
     if stage is not Stage.CONFIRMED:
-        return PlanEnd(stage)
+        return PlanEnd(stage.value)
     return _execute(plan, decision)
 
 
@@ -132,14 +132,13 @@ def _execute(plan: TradePlan, decision: RiskDecision) -> PlanEnd:
     failure: str | None = None  # 最近一次没能下单的原因
     alerted = False  # 这个方案出意外的错时已经告警过
     while True:
-        timing = _timing(decision)
+        timing = _timing(plan, decision)
         if timing.expired:
-            _void_expired(plan, failure)
-            return PlanEnd.VOIDED
+            return _void_expired(plan, decision, failure)
         if timing.wait_seconds > 0:
-            _sleep(timing.wait_seconds)
+            _parts().sleep(timing.wait_seconds)
             continue
-        attempt = _attempt(plan, alert_error=not alerted)
+        attempt = _attempt(plan, decision, not alerted)
         if attempt.kind is AttemptKind.SUBMITTED:
             return PlanEnd.SUBMITTED
         if attempt.kind is AttemptKind.VOIDED:
@@ -147,7 +146,7 @@ def _execute(plan: TradePlan, decision: RiskDecision) -> PlanEnd:
         failure = attempt.reason
         alerted = alerted or attempt.alerted
         if attempt.kind is AttemptKind.RETRY:
-            _sleep(_retry_seconds())
+            _parts().sleep(_parts().flow.config.retry_delay.total_seconds())
 ```
 
 `PlanEnd` 的值和 `Stage` 的超时、拒绝、发不出去三个值相同，另加 `SUBMITTED`、`VOIDED`。
@@ -160,14 +159,14 @@ def _execute(plan: TradePlan, decision: RiskDecision) -> PlanEnd:
 | `settle` | 已确认：写 INFO。已拒绝：拿锁释放，写 INFO。已超时：`finish_confirmation(TIMED_OUT)`，拿锁释放，写 INFO。发不出去：拿锁释放 | 只在释放时 | 无 |
 | `timing` | 读时钟，按 D4 | 否 | `Timing(expired, wait_seconds)`；要等时写「等到 X」的 INFO |
 | `attempt` | 再校验和提交，按 D5、D6 | 再校验和提交时 | `Attempt(kind, reason, alerted)` |
-| `void_expired` | 没有订单就拿锁释放；告警（D8） | 只在释放时 | 无 |
+| `void_expired` | 没有订单就拿锁释放、告警（D8），返回 `VOIDED`；已经有订单（意外的错发生在订单建立以后）时不释放、不告警，返回 `SUBMITTED` | 只在释放时 | `PlanEnd` |
 
 确定性：
 
 - 工作流函数只按 step、`recv` 的结果和常量分支，不读时钟、不读库、不调用模块；日志都在 step 里，恢复时重放的部分不重复写（spec「日志」）
 - 循环每一圈至少有一个记下结果的操作（`timing` 和 `attempt`），恢复时按记录走同样的路径
 - `failure`、`alerted` 是工作流函数里的局部变量，由 step 的结果推出来，恢复时重算出同样的值；`alert_error` 作为参数传进 `attempt`，第一次出错的告警在 step 里发，恢复时不重发
-- `_sleep` 是 install 进来的持久化休眠（D9），`_retry_seconds()` 读 install 进来的配置
+- `_parts()` 是 install 进来的部件（D9）：`sleep` 是持久化休眠，重试间隔取 `OrderFlow` 的配置
 - step 的结果都是模块级定义的冻结 dataclass 或 StrEnum，可以 pickle
 - step 不开 DBOS 的自动重试：每个 step 自己接住预料中的错误，变成结果；意料之外的错误按 D6 的最后一行
 
@@ -200,7 +199,7 @@ def deliver_decision(plan_id: UUID, outcome: ConfirmationOutcome) -> None:
 `timing` 这个 step：
 
 ```python
-def timing(self, decision: RiskDecision) -> Timing:
+def timing(self, plan: TradePlan, decision: RiskDecision) -> Timing:
     """确认以后、每次重试之前：到期、盘中还是要等，见 order-flow spec「等开盘」。"""
     now = self._clock.now()
     assert decision.expires_at is not None  # 通过或调整的结果都有生效的有效期
@@ -238,8 +237,8 @@ def timing(self, decision: RiskDecision) -> Timing:
 | --- | --- | --- |
 | `submit` 返回订单，不是已拒绝 | `SUBMITTED`，写 INFO（状态、委托股数） | 订单交给巡检；状态未知的也由巡检查清 |
 | `submit` 返回订单，已拒绝 | `SUBMITTED`，告警 | 预留由巡检的同步预留释放（session-patrol design D4） |
-| `NotReconciledError`、`OrderPausedError` | `RETRY`，写 INFO | 执行模块的说明：等一会儿再从再校验开始 |
-| `UnprotectedPositionError` | `RETRY`，写 INFO | 见下 |
+| `NotReconciledError`、`OrderPausedError` | `RETRY`，写 WARNING | 执行模块的说明：等一会儿再从再校验开始 |
+| `UnprotectedPositionError` | `RETRY`，写 WARNING | 见下 |
 | `OutsideSessionError`（再校验或提交） | `NEXT_OPEN` | 回到 D4 |
 | `ReconcileMismatchError` | 放开锁前释放预留；告警；`VOIDED` | 见下 |
 | 别的 `Exception`（读数据、再校验、提交） | 写 ERROR（带异常栈）；`alert_error` 时告警，`alerted=True`；`RETRY` | 认证错误、数据库出错、意外的异常：方案还在有效期里，先重试；下一次如果订单已经建立，第 1 步交给巡检 |
@@ -283,7 +282,7 @@ def price_of(position: HeldPosition, quote: Quote | None) -> Decimal:
 | --- | --- |
 | 作废 | `方案作废，不会下单：买入 BBB 20 股（方案 ID …）` 加一行原因：再校验拒绝的每条规则一行（规则名：说明）；到期的写「到了有效期 2026-10-14 20:00 UTC 还没下单」和最近一次没能下单的原因；对账不一致的写「最近一次对账有不一致，暂停开仓」 |
 | 券商拒绝 | `下单被券商拒绝：买入 BBB 20 股（方案 ID …）` |
-| 出错 | `下单出错：买入 BBB（方案 ID …）：<异常类型>: <信息>。每 30 秒重试一次，到有效期为止` |
+| 出错 | `下单出错：买入 BBB 20 股（方案 ID …）：<异常类型>: <信息>。每 30 秒重试一次，到有效期为止` |
 
 - 时刻写 UTC，和巡检的告警一致
 
@@ -385,14 +384,14 @@ class OrderFlowConfig(BaseModel):
 三层：
 
 - `tests/workflows/test_account_snapshot.py`：`price_of` 的三种取法，`account_snapshot` 的各项，`read_snapshot` 只取持仓股票、一次取完、没有持仓不取、行情不可用和缺一只时的 WARNING、读账户失败原样抛出。纯函数，不连库
-- `tests/workflows/test_order_flow.py`：不起 DBOS，直接调用 `check_plan`、`OrderPlanIntake.held_sector` 和 `OrderFlow` 的每个方法。用 `tests/fakes/` 的券商、止损单、订单、止损保护、交易记录、预留存储、通知通道、行情源，`FakeClock`，真实的 `ExecutionService`、`RiskService`（内存预留）、`EmergencyService`、`HealthService`、`MarketDataService`、`NotificationService` 和一把 `RLock`。基准数据放 `tests/workflows/order_builders.py`（按 spec 的基准数据：AAA 的开仓订单直接写进订单存储并标为全部成交，券商账户和持仓在 `FakeBroker` 上设好，行情在 `FakeQuoteSource` 上设好）。覆盖 spec「提交方案」「查持仓的板块」「风控用的账户数据」的全部场景，以及 `timing` 的三行、`attempt` 的每一种分类、`settle` 的四种结果、告警文字、锁的场景（另一个线程拿锁；通知替身阻塞时测试线程 `acquire(blocking=False)` 成功）。熔断用 `EmergencyService.check` 让它触发，降级用 `HealthService.check` 传异常的信号
+- `tests/workflows/test_order_flow.py`：不起 DBOS，直接调用 `check_plan`、`OrderPlanIntake.held_sector` 和 `OrderFlow` 的每个方法。用 `tests/fakes/` 的券商、止损单、订单、止损保护、交易记录、预留存储、通知通道、行情源，`FakeClock`，真实的 `ExecutionService`、`RiskService`（内存预留）、`EmergencyService`、`HealthService`、`MarketDataService`、`NotificationService` 和一把 `RLock`。基准数据放 `tests/workflows/order_builders.py`（按 spec 的基准数据：AAA 在 2026-10-12 经执行模块买入、全部成交、挂上止损单，券商账户和持仓在 `FakeBroker` 上设好，行情在 `FakeQuoteSource` 上设好），装好的一套下单流程放 `tests/workflows/order_desk.py`。覆盖 spec「提交方案」「查持仓的板块」「风控用的账户数据」的全部场景，以及 `timing` 的三行、`attempt` 的每一种分类、`settle` 的四种结果、告警文字、锁的场景（另一个线程拿锁；通知替身阻塞时测试线程 `acquire(blocking=False)` 成功）。熔断用 `EmergencyService.check` 让它触发，降级用 `HealthService.check` 传异常的信号
 - `tests/workflows/test_order_workflow.py`：真实 DBOS，连 testcontainers 的空数据库（`empty_database`，要开着 Docker）。每个测试：构造 DBOS（`enable_patching`）、`install(flow, sleep=拨钟的替身)`、launch，结束时 destroy。经 `OrderPlanIntake.submit` 启动，经 `deliver_decision` 按按钮，用有超时的轮询等工作流结束（`DBOS.get_workflow_status`）或等事件变为 `waiting`。确认超时的场景把 `NotificationConfig.confirmation_timeout` 设成 1 秒。覆盖 spec「请求人工确认」「确认的结果」「按钮的结果只送给在等确认的方案」「等开盘」「下单前再校验和提交」「提交的结果」「告警」「日志」里要走完整个流程的场景
 - 重启和恢复（spec「持久化和恢复」）：
   - 已经做完的步骤不重做：工作流跑完以后把它在 `dbos.workflow_status` 里的状态改回 `PENDING`，换一套新的替身 install，调用 `DBOS._recover_pending_workflows()`，检查替身没有收到第二次请求确认、券商没有第二次提交、没有新的告警和日志
   - 进程在某一步退出：替身在指定的调用里抛一个 `BaseException` 的子类（DBOS 只接 `Exception`，这一步不记结果，工作流保持 `PENDING`），然后 destroy、重新构造 DBOS、install 新的替身、launch，由恢复接着做。用它覆盖「停机超过确认的截止时刻」（在 `settle` 里退出）、「等开盘时重启」「停机期间过了开盘」（在拨钟的 sleep 里退出）、「提交以后、记下结果之前进程退出」（券商替身受理以后退出）
-  - 「等确认时重启，重启以后按确认」：工作流在 `recv` 里等的时候没有替身调用可以注入退出。这一条用 destroy、重新构造、install、launch 模拟重启，旧的线程留在 `recv` 里（DBOS 3.2 按执行的归属区分新旧两次，旧的那次取消息会失败）；然后 `deliver_decision`，检查只请求过一次确认、券商收到订单。apply 时先验证旧线程不会抢走消息；不成立就把这一条改为检查重启以后 `get_event` 仍是 `waiting`、`send` 成功、恢复的那一次取到确认并下单，旧线程用很短的确认超时让它先结束，不改 spec
+  - 「等确认时重启，重启以后按确认」：进程内没法打断 `recv` 里的旧线程（destroy 以后它还在等，库删掉以后还会一直重连，测试进程退不出去），所以让第一次运行在开始 `recv` 时退出（把 `DBOS.recv` 换成抛 `Crash` 的替身；这时确认消息已经发出、事件已经是 `waiting`），再重启，检查事件仍是 `waiting`、`deliver_decision` 送达、恢复的那一次取到确认并下单、只请求过一次确认
   - 「程序更新以后恢复」：在退出和重新 launch 之间多登记一个测试用的工作流（源码哈希因此变了），恢复照常；对照组不打开 patching 时不恢复，证明测试测到了版本
-- `tests/bootstrap/test_app.py`：「录入并确认一个买入方案」（经 `World` 的 `PlanCommand` 运行 `/plan`，经 `FakeGateway` 按按钮，`FakeAlpaca` 记下买单，`FakeOpenD` 加上 BBB 的行情）、「启动时恢复等开盘的方案」（第一次启动在盘后录入并确认，`World` 的休眠替身抛 `BaseException` 的子类模拟进程在等开盘时退出，停止；拨钟到下一个交易日盘中、换回普通的休眠替身再启动）、「停止时有方案在等确认」（`run` 不等工作流线程就返回 0；用 monkeypatch 把装配用的确认超时改成 1 秒，让留下的线程很快结束，`no_threads_left_behind` 照常通过）、正常启动不变
+- `tests/bootstrap/test_app.py`：「录入并确认一个买入方案」（经 `World` 的 `PlanCommand` 运行 `/plan`，经 `FakeGateway` 按按钮，`FakeAlpaca` 记下买单，`FakeOpenD` 加上 BBB 的行情）、「启动时恢复等开盘的方案」（第一次启动在盘后录入并确认，`World` 的休眠替身抛 `BaseException` 的子类模拟进程在等开盘时退出，停止；拨钟到下一个交易日盘中、换回普通的休眠替身再启动）、「停止时有方案在等确认」（`run` 不等工作流线程就返回 0；用 monkeypatch 把装配用的确认超时改成 2 秒，让留下的线程在测试结束以前醒来、结束，`no_threads_left_behind` 照常通过）、正常启动不变
 - `tests/bootstrap/test_cli.py`：`entry` 在 `main` 返回以后调用 `os._exit`，退出码就是 `main` 的返回值；`--version` 时不调用
 
 ## Risks / Trade-offs
@@ -402,7 +401,7 @@ class OrderFlowConfig(BaseModel):
 - [打开 patching 以后，改下单流程的步骤会让旧的流程在恢复时对不上] → Migration Plan 写明部署规则；DBOS 发现步骤名字对不上时报错，工作流进入 ERROR，写日志，不会悄悄走错路径；这种情况要人看日志处理预留
 - [下单流程长时间等重试，每 30 秒读一次账户和行情] → 每次几次 Alpaca 请求，远低于每分钟 200 次；只有被暂停的方案才这样
 - [一个方案作废和巡检同时改它的预留] → 都在锁里；作废只发生在没有订单的方案上，巡检只同步有订单的方案
-- [提交卖单（错开打开时还有买单）时 `submit` 会对齐这只股票的止损单，发出改单或撤单请求；巡检如果在几百毫秒之内又对齐同一只股票，Alpaca 那边旧单还在替换，第二次改单被拒，这只股票会被误标为无保护仓位并告警。巡检在一轮之内已经避开了同样的问题（session-patrol design D4），但下单流程的提交和巡检的一轮之间没有这样的间隔] → 下一轮巡检对齐时补挂成功，误报自己消失，止损单其实一直挂着；本变更不改执行模块的行为。10 个交易日的观察期里出现了，再单独开「修改」变更：执行模块在改单请求还没生效时不再改单
+- [提交卖单（错开打开时还有买单）时 `submit` 会对齐这只股票的止损单，发出改单或撤单请求；巡检在几百毫秒之内又对齐同一只股票时，Alpaca 那边旧单还在替换，第二次改单会被拒，这只股票会被误标为无保护仓位] → 已经由「改单未生效时不再改单」（update-stop-pending-modify）解决：改单请求还没生效时执行模块不再改单
 
 ## Migration Plan
 

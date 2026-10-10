@@ -6,6 +6,7 @@
 import logging
 import os
 import signal
+import sys
 import threading
 from collections.abc import Iterator, Mapping
 from importlib.metadata import version
@@ -99,3 +100,46 @@ def test_run_configures_logging(recorded: Recorded) -> None:
 
     assert logging.getLogger().level == logging.INFO
     assert logging.getLogger("httpx").level == logging.WARNING
+
+
+class _Exits:
+    """替代 os._exit 和 logging.shutdown：记下调用，不真的结束进程、不关日志。"""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.codes: list[int] = []
+        self.shutdowns = 0
+        monkeypatch.setattr(os, "_exit", self.codes.append)
+        monkeypatch.setattr(logging, "shutdown", self._shutdown)
+
+    def _shutdown(self) -> None:
+        self.shutdowns += 1
+
+
+@pytest.mark.parametrize("code", [0, 1])
+def test_entry_ends_the_process_after_main(
+    monkeypatch: pytest.MonkeyPatch, recorded: Recorded, code: int
+) -> None:
+    """spec「停止时有方案在等确认」：main 返回以后关掉日志、立即结束进程，退出码是 main 的返回值。
+
+    见 add-order-flow 的 design D11。
+    """
+    exits = _Exits(monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["tradingagentspro", "run"])
+    recorded.code = code
+
+    cli.entry()
+
+    assert exits.codes == [code]
+    assert exits.shutdowns == 1
+
+
+def test_entry_lets_argparse_exit(monkeypatch: pytest.MonkeyPatch, recorded: Recorded) -> None:
+    """--version 时 argparse 照常退出，不调用 os._exit。"""
+    exits = _Exits(monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["tradingagentspro", "--version"])
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli.entry()
+
+    assert exit_info.value.code == 0
+    assert exits.codes == []
