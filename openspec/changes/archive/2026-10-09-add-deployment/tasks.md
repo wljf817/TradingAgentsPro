@@ -45,5 +45,5 @@
 - [x] 8.7 【人】第 8 步，启动 OpenD 的服务，然后退出 Mac 上的 OpenD。验证：`systemctl status tradingagentspro-opend` 是 active，一分钟后还是同一个进程；只有一个 OpenD 进程、CPU 占用接近 0；`~/.com.moomoo.OpenD/Log` 里有以 moomoo ID 命名的 `GTWLog_<ID>_…` 文件（OpenD 的输出不进 journald）；`ss -ltn` 里 11111 和 22222 只在 127.0.0.1 上；经 `telnet 127.0.0.1 22222` 发 `help` 有回复。任何一项不符，停下来把现象告诉 Claude
 - [x] 8.8 【人】第 9 步，启用并启动主程序。验证：`sudo journalctl -u tradingagentspro` 依次有数据库已升级、Alpaca 账户设置完成、「启动对账：没有不一致」、Discord 已连接、DBOS 已启动、「启动完成」；在 Discord 里运行 `/plan close symbol:XYZ`，回复没有 XYZ 的持仓；`sudo ss -ltnp | grep python` 没有输出
 - [x] 8.9 【人】第 10 步，启用备份定时器，手动备份一次，做一次恢复演练。验证：`systemctl list-timers` 里有下一次 06:00 UTC 的备份；`/var/backups/tradingagentspro` 里有一个 `.dump`；恢复到临时数据库以后 `\dn` 列出 `public` 和 `dbos`，演练完删掉临时数据库
-- [ ] 8.10 【人】第 11 步，重启部署机器。验证：开机后不做任何操作，状态库、OpenD、主程序都在运行；这次开机的日志里有「启动完成」；`sudo journalctl -u tradingagentspro -b -1` 能看到重启前的日志
+- [x] 8.10 【人】第 11 步，重启部署机器。验证：开机后不做任何操作，状态库、OpenD、主程序都在运行；这次开机的日志里有「启动完成」；`sudo journalctl -u tradingagentspro -b -1` 能看到重启前的日志
 - [x] 8.11 【人】第 12 步，在 Mac 上开 SSH 隧道。验证：Mac 上没有 OpenD 进程；`uv run pytest -m moomoo_opend -k test_quotes_at_any_time` 经隧道通过（不是跳过）
