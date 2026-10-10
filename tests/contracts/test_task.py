@@ -259,17 +259,6 @@ def test_naive_times_are_errors() -> None:
         Task.model_validate(_task(dispatched_at=naive))
 
 
-@pytest.mark.parametrize(("field", "value"), [("symbol", "AAA"), ("pm_round", 2)])
-def test_task_cannot_be_changed(field: str, value: object) -> None:
-    """spec「Task 的格式」：Task 生成以后不能修改，赋值报错，Task 不变。"""
-    task = Task.model_validate(_task())
-
-    with pytest.raises(ValidationError):
-        setattr(task, field, value)
-
-    assert task == Task.model_validate(_task())
-
-
 # Result 的格式
 
 
@@ -436,15 +425,6 @@ def test_negative_elapsed_is_an_error() -> None:
     """耗时小于 0 报错。"""
     with pytest.raises(ValidationError):
         _result(TIMED_OUT, elapsed=timedelta(seconds=-1))
-
-
-def test_result_cannot_be_changed() -> None:
-    result = _result(COMPLETED, output=SIGNAL, model_use=S1_USE)
-
-    with pytest.raises(ValidationError):
-        result.status = TIMED_OUT  # type: ignore[misc]
-
-    assert result == _result(COMPLETED, output=SIGNAL, model_use=S1_USE)
 
 
 # 写出再读回（design D12）

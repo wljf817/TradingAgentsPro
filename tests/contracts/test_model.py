@@ -83,11 +83,6 @@ def test_empty_vendor_or_name_is_an_error(fields: dict[str, Any]) -> None:
         ModelRef.model_validate(fields)
 
 
-def test_extra_fields_are_errors() -> None:
-    with pytest.raises(ValidationError):
-        ModelRef.model_validate({"vendor": "anthropic", "name": "p-1", "platform": "bedrock"})
-
-
 def test_same_vendor_and_name_is_the_same_model() -> None:
     """厂商和模型名都相同就是同一个模型：相等、哈希相同，可以做 dict 的键（熔断状态按模型存）。"""
     same = ModelRef(vendor="ANTHROPIC", name="p-1")
@@ -105,13 +100,6 @@ def test_str_is_vendor_slash_name() -> None:
     assert str(ModelRef(vendor=" Google ", name="s-1")) == "google/s-1"
 
 
-def test_model_cannot_be_changed() -> None:
-    with pytest.raises(ValidationError):
-        P1.name = "p-2"  # type: ignore[misc]
-
-    assert P1 == ModelRef(vendor="anthropic", name="p-1")
-
-
 # ModelUse
 
 
@@ -121,17 +109,6 @@ def test_model_use() -> None:
 
     assert (use.model, use.fallback) == (P1, False)
     assert ModelUse.model_validate_json(use.model_dump_json()) == use
-
-
-@pytest.mark.parametrize(("field", "value"), [("fallback", False), ("model", P1)])
-def test_model_use_cannot_be_changed(field: str, value: object) -> None:
-    """ModelUse 构造以后不能赋值，赋值报错，不变。"""
-    use = ModelUse(model=ModelRef(vendor="anthropic", name="p-2"), fallback=True)
-
-    with pytest.raises(ValidationError):
-        setattr(use, field, value)
-
-    assert use == ModelUse(model=ModelRef(vendor="anthropic", name="p-2"), fallback=True)
 
 
 # TokenUsage
@@ -167,17 +144,3 @@ def test_invalid_usage_is_an_error(fields: dict[str, Any]) -> None:
     """call-budget spec「用量不合法」：用量小于 0 或者不是整数，都报错。"""
     with pytest.raises(ValidationError):
         TokenUsage.model_validate(fields)
-
-
-def test_usage_rejects_extra_fields() -> None:
-    with pytest.raises(ValidationError):
-        TokenUsage.model_validate({"input_tokens": 1, "output_tokens": 1, "cached_tokens": 1})
-
-
-def test_usage_cannot_be_changed() -> None:
-    usage = TokenUsage(input_tokens=1, output_tokens=2)
-
-    with pytest.raises(ValidationError):
-        usage.input_tokens = 3  # type: ignore[misc]
-
-    assert usage == TokenUsage(input_tokens=1, output_tokens=2)

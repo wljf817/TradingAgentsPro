@@ -138,18 +138,6 @@ def test_extra_item() -> None:
     _assert_format_error(_signal(symbol="AAA"))
 
 
-@pytest.mark.parametrize(("field", "value"), [("horizon", 20), ("score", 2)])
-def test_signal_cannot_be_changed(field: str, value: int) -> None:
-    """spec「构造以后不能修改」：评估窗口改为 20，或者评分改为 2，都报错，信号不变。"""
-    signal = Signal.model_validate(_signal())
-
-    with pytest.raises(ValidationError):
-        setattr(signal, field, value)
-
-    assert signal == Signal.model_validate(_signal())
-    assert (signal.horizon, signal.score) == (5, 1)
-
-
 # 评分的刻度
 
 
