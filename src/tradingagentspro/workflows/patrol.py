@@ -1,8 +1,9 @@
 """盘中巡检：每一轮跟进全部未结束的订单、按订单同步预留、对齐持仓的止损单，发现无保护仓位时告警，
-最后在到期时做收盘对账。
+然后判定一次系统健康，最后在到期时做收盘对账。
 
-见 session-patrol spec、close-reconciliation spec「巡检里的收盘对账」和 add-session-patrol 的
-design。执行模块和风控里会改变状态的调用都拿着全程序共用的那把锁，一项一项地拿；推送告警时不拿锁。
+见 session-patrol spec、health-monitoring spec「巡检里的健康判定」、close-reconciliation spec
+「巡检里的收盘对账」和 add-session-patrol 的 design。执行模块和风控里会改变状态的调用都拿着
+全程序共用的那把锁，一项一项地拿；推送告警时不拿锁。
 """
 
 import logging
@@ -25,6 +26,7 @@ from tradingagentspro.modules.execution import (
 )
 from tradingagentspro.modules.notification import NotificationService
 from tradingagentspro.modules.risk import RiskService
+from tradingagentspro.workflows.health import HealthMonitor
 from tradingagentspro.workflows.names import ORDER_STATUSES, SIDES, STOP_STATUSES
 from tradingagentspro.workflows.reconciliation import close_reconcile_if_due
 
@@ -52,12 +54,14 @@ class SessionPatrol:
         execution: ExecutionService,
         risk: RiskService,
         notification: NotificationService,
+        health: HealthMonitor,
         lock: threading.RLock,
         config: PatrolConfig,
     ) -> None:
         self._execution = execution
         self._risk = risk
         self._notification = notification
+        self._health = health
         self._lock = lock
         self._config = config
         self._stopping = threading.Event()
@@ -97,14 +101,16 @@ class SessionPatrol:
             self._stopping.wait(seconds)
 
     def run_round(self) -> None:
-        """做一轮：跟进订单、同步预留、对齐止损单，见 session-patrol spec「每一轮」；最后是收盘
-        对账，见 close-reconciliation spec「巡检里的收盘对账」。
+        """做一轮：跟进订单、同步预留、对齐止损单，见 session-patrol spec「每一轮」；然后是健康
+        判定，见 health-monitoring spec「巡检里的健康判定」；最后是收盘对账，见 close-reconciliation
+        spec「巡检里的收盘对账」。
 
         停止以后不再开始新的一项，直接返回。
         """
         tracked = self._track_orders()
         self._sync_reservations()
-        self._align_stops(tracked)
+        broker_connected = self._align_stops(tracked)
+        self._judge_health(broker_connected)
         self._close_reconcile()
 
     def _track_orders(self) -> set[str]:
@@ -149,25 +155,31 @@ class SessionPatrol:
         if order.status.is_terminal:
             self._risk.release(plan_id)
 
-    def _align_stops(self, tracked: set[str]) -> None:
+    def _align_stops(self, tracked: set[str]) -> bool | None:
         """第 3 步：要对齐的股票按代码顺序各处理一次，然后写止损单的日志、按无保护仓位告警。
 
         第 1 步跟进过的股票（tracked）只读止损保护，不再对齐，见 design D4；其余的对齐一次。
         读券商全部持仓失败时写 WARNING，这一轮不做这一步，见 design D5。
+
+        返回读券商全部持仓的结果，给健康判定当券商连接（add-health-monitoring 的 design D2）：
+        读到为 True；超时或断线为 False；停止了、或者出了别的错没有读到为 None。
         """
         if self._stopping.is_set():
-            return
+            return None
         symbols: tuple[str, ...] | None = None
+        connected: bool | None = None
         with self._item("列出要对齐止损单的股票"):
             try:
                 symbols = self._execution.symbols_to_protect()
+                connected = True
             except BrokerUnavailableError as error:
+                connected = False
                 _log.warning("盘中巡检：读取券商持仓失败（%s），这一轮没有对齐止损单", error)
         if symbols is None:
-            return  # 没有列出来：这一步跳过，告警记录也不动
+            return connected  # 没有列出来：这一步跳过，告警记录也不动
         for symbol in symbols:
             if self._stopping.is_set():
-                return
+                return connected
             with self._item(f"对齐 {symbol} 的止损单"):
                 with self._lock:
                     if symbol in tracked:
@@ -177,6 +189,17 @@ class SessionPatrol:
                 self._log_stop(symbol, protection)
                 self._alert(symbol, protection)
         self._forget(set(symbols))
+        return connected
+
+    def _judge_health(self, broker_connected: bool | None) -> None:
+        """第 3 步之后：判定一次系统健康，见 add-health-monitoring 的 design D1。
+
+        第 3 步没有读到券商的全部持仓（broker_connected 为 None）时这一轮不判定。
+        """
+        if self._stopping.is_set() or broker_connected is None:
+            return
+        with self._item("健康判定"):
+            self._health.judge(broker_connected)
 
     def _close_reconcile(self) -> None:
         """最后一项：收盘对账到期就做，见 add-close-reconciliation 的 design D2。

@@ -1,7 +1,8 @@
 """盘中巡检测试的数据：session-patrol spec 的基准数据，以及一套用替身装好的巡检。
 
 基准数据见 session-patrol spec「巡检的开始、间隔和停止」：order-lifecycle spec 的基准数据和
-stop-protection spec 的约定，券商没有 AAA 的持仓；执行配置和巡检配置都用默认值。
+stop-protection spec 的约定，券商没有 AAA 的持仓；执行配置和巡检配置都用默认值。健康监控用默认
+配置，行情源只有 SPY，更新时刻是时钟的现在之前 10 秒（health-monitoring spec 的基准数据）。
 """
 
 import threading
@@ -16,14 +17,18 @@ from tests.fakes.closes import InMemoryCloseReconciliationStore
 from tests.fakes.notifier import FakeNotifier
 from tests.fakes.orders import InMemoryOrderStore
 from tests.fakes.protections import InMemoryProtectionStore
+from tests.fakes.quotes import ClockQuoteSource
 from tests.fakes.reservations import InMemoryReservationStore
 from tests.fakes.stops import FakeStopBroker
 from tests.fakes.trades import InMemoryTradeStore
 from tests.modules.execution.builders import BASELINE_NOW, baseline_plan, decision
 from tradingagentspro.contracts.trade_plan import TradePlan
 from tradingagentspro.modules.execution import ExecutionConfig, ExecutionService, Order
+from tradingagentspro.modules.health import HealthConfig, HealthService
+from tradingagentspro.modules.marketdata import MarketDataConfig, MarketDataService
 from tradingagentspro.modules.notification import NotificationConfig, NotificationService
 from tradingagentspro.modules.risk import Reservation, RiskConfig, RiskService
+from tradingagentspro.workflows.health import HealthMonitor
 from tradingagentspro.workflows.patrol import PatrolConfig, SessionPatrol
 
 NYSE = sample_nyse_calendar()
@@ -43,9 +48,9 @@ def p5() -> TradePlan:
 
 @dataclass
 class World:
-    """一套巡检：执行模块、风控、通知和它们的替身、存储、测试时钟和一把锁。
+    """一套巡检：执行模块、风控、通知、行情、健康监控和它们的替身、存储、测试时钟和一把锁。
 
-    restart 用同一套存储和替身重新建执行模块、风控和巡检，相当于进程重启。
+    restart 用同一套存储和替身重新建执行模块、风控、健康监控和巡检，相当于进程重启。
     """
 
     clock: FakeClock = field(default_factory=lambda: FakeClock(BASELINE_NOW))
@@ -64,19 +69,27 @@ class World:
 
     def __post_init__(self) -> None:
         self.protections = InMemoryProtectionStore(self.clock)  # 带时钟：收盘对账要读历史
-        self.execution = self._execution()
-        self.risk = RiskService(self.reservations, self.clock, NYSE, RiskConfig())
+        self.quotes = ClockQuoteSource(self.clock)
+        self.market_data = MarketDataService(self.quotes, MarketDataConfig())
         self.notification = NotificationService(self.notifier, self.clock, NotificationConfig())
-        self.patrol = self._patrol()
+        self._build()
         self.execution.reconcile()  # 基准数据：执行模块已经完成一次对账
         self.forget_calls()
 
     def restart(self) -> None:
-        """进程重启：重新建执行模块（还没对过账）、风控和巡检，清掉之前的调用记录。"""
+        """进程重启：重新建执行模块（还没对过账）、风控、健康监控和巡检，清掉之前的调用记录。"""
+        self._build()
+        self.forget_calls()
+
+    def _build(self) -> None:
+        """建执行模块、风控、健康监控（状态是正常）、健康监控接线和巡检。"""
         self.execution = self._execution()
         self.risk = RiskService(self.reservations, self.clock, NYSE, RiskConfig())
+        self.health = HealthService(self.clock, NYSE, HealthConfig())
+        self.monitor = HealthMonitor(
+            self.health, self.execution, self.market_data, self.notification, self.lock, self.clock
+        )
         self.patrol = self._patrol()
-        self.forget_calls()
 
     def forget_calls(self) -> None:
         self.broker.calls.clear()
@@ -117,4 +130,6 @@ class World:
         )
 
     def _patrol(self) -> SessionPatrol:
-        return SessionPatrol(self.execution, self.risk, self.notification, self.lock, self.config)
+        return SessionPatrol(
+            self.execution, self.risk, self.notification, self.monitor, self.lock, self.config
+        )

@@ -48,21 +48,27 @@ class FakeOpenD:
 
     快照只有 SPY 一行，更新时刻是现在的 10 秒前（按 OpenD 的写法，美东时间）。
     - error：设上以后取快照返回错误和这条信息（OpenD 没开）
+    - updated_at：设上以后 SPY 的更新时刻停在这个时刻（行情一直没有更新）
     - close_error：设上以后 close 记下关闭再抛它
     - rows：SPY 以外的股票的快照行（按 OpenD 的写法），更新时刻同 SPY
+    - calls：取快照的次数，返回错误的也算
     """
 
     def __init__(self, clock: FakeClock, rows: list[dict[str, Any]] | None = None) -> None:
         self.clock = clock
         self.rows = rows or []
         self.error: str | None = None
+        self.updated_at: datetime | None = None
         self.close_error: Exception | None = None
         self.closed = False
+        self.calls = 0
 
     def get_market_snapshot(self, code_list: list[str]) -> tuple[int, Any]:
+        self.calls += 1
         if self.error is not None:
             return RET_ERROR, self.error
-        updated = (self.clock.now() - timedelta(seconds=10)).astimezone(NEW_YORK)
+        moment = self.updated_at or self.clock.now() - timedelta(seconds=10)
+        updated = moment.astimezone(NEW_YORK)
         text = updated.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         rows = [payloads.row(row, update_time=text) for row in (payloads.SPY, *self.rows)]
         return RET_OK, payloads.snapshot(*rows)
@@ -77,8 +83,8 @@ class FakeOpenD:
 class World:
     """一次启动面对的外部世界。测试在调用 run 之前安排它们的情况。
 
-    - opend：装配时才建，没有装配时为 None；测试用 opend_error、opend_close_error、opend_rows
-      预先安排
+    - opend：装配时才建，没有装配时为 None；测试用 opend_error、opend_updated_at、
+      opend_close_error、opend_rows 预先安排
     - configs：三个外部系统的工厂收到的配置，按顺序
     - plans：装配时交给 Discord 的 /plan 处理，测试用它运行 /plan
     - sleep：下单流程的持久化休眠，见 WorldSleep
@@ -89,6 +95,7 @@ class World:
     clock: FakeClock = field(default_factory=lambda: FakeClock(NOW))
     ids: FakeIds = field(default_factory=FakeIds)
     opend_error: str | None = None
+    opend_updated_at: datetime | None = None
     opend_close_error: Exception | None = None
     opend_rows: list[dict[str, Any]] = field(default_factory=list)
     opend: FakeOpenD | None = None
@@ -117,6 +124,7 @@ class World:
         self.configs.append(config)
         self.opend = FakeOpenD(self.clock, self.opend_rows)
         self.opend.error = self.opend_error
+        self.opend.updated_at = self.opend_updated_at
         self.opend.close_error = self.opend_close_error
         return self.opend
 

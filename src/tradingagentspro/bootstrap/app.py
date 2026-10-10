@@ -2,9 +2,10 @@
 
 见 bootstrap spec「启动顺序」「启动失败」「模拟盘的装配」「DBOS」「停止」，以及 add-bootstrap-wiring
 的 design D1、D5、D6、D8、D10、D11。DBOS launch 之后开始盘中巡检，停止时最先停它，见
-add-session-patrol 的 design D12。启动对账有不一致时，Discord 连上以后推送告警，见
-add-close-reconciliation 的 design D10。下单流程的部件在 DBOS launch 之前 install，/plan 的提交接口
-和确认按钮的回调接上下单流程，见 add-order-flow 的 design D13。以后的流程从 TradingApp.lock 取锁。
+add-session-patrol 的 design D12。启动对账有不一致、第一次健康判定是降级时，Discord 连上以后
+推送告警，见 add-close-reconciliation 的 design D10 和 add-health-monitoring 的 design D8。
+下单流程的部件在 DBOS launch 之前 install，/plan 的提交接口和确认按钮的回调接上下单流程，见
+add-order-flow 的 design D13。以后的流程从 TradingApp.lock 取锁。
 """
 
 import logging
@@ -70,6 +71,7 @@ from tradingagentspro.modules.statestore import connect
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.ids import IdGenerator
 from tradingagentspro.shared.trading_calendar import TradingCalendar
+from tradingagentspro.workflows.health import HealthMonitor, degraded_text
 from tradingagentspro.workflows.order_flow import OrderFlow, OrderFlowConfig, TradeServices
 from tradingagentspro.workflows.order_workflow import OrderPlanIntake, deliver_decision, install
 from tradingagentspro.workflows.patrol import PatrolConfig, SessionPatrol
@@ -198,6 +200,7 @@ class _Parts:
     notification: NotificationService
     notifier: DiscordNotifier
     lock: threading.RLock
+    monitor: HealthMonitor
     patrol: SessionPatrol
     flow: OrderFlow
 
@@ -237,6 +240,7 @@ def _assemble(
     gateway = externals.discord(settings.discord, plans)
     notifier = DiscordNotifier(gateway, settings.discord, clock, deliver_decision)
     notification = NotificationService(notifier, clock, NotificationConfig())
+    monitor = HealthMonitor(health, execution, market_data, notification, lock, clock)
     return _Parts(
         alpaca=client,
         execution=execution,
@@ -247,7 +251,8 @@ def _assemble(
         notification=notification,
         notifier=notifier,
         lock=lock,
-        patrol=SessionPatrol(execution, risk, notification, lock, PatrolConfig()),
+        monitor=monitor,
+        patrol=SessionPatrol(execution, risk, notification, monitor, lock, PatrolConfig()),
         flow=OrderFlow(services, notification, clock, calendar, OrderFlowConfig()),
     )
 
@@ -280,13 +285,15 @@ def start(
     with step("启动对账"):
         reconciliation = reconcile_at_startup(parts.execution)
     with step("第一次健康判定"):
-        judge_health_at_startup(parts.health, parts.market_data, clock)
+        health_status = judge_health_at_startup(parts.health, parts.monitor)
     with step("启动 Discord"):
         parts.notifier.start()
         on_stop(stack, "Discord", parts.notifier.close)
         _log.info("Discord 已连接")
     if not reconciliation.clean:  # 告警发不出去时只写错误日志，不算启动失败
         parts.notification.alert(startup_text(reconciliation))
+    if health_status.degraded:  # 同上；见 add-health-monitoring 的 design D8
+        parts.notification.alert(degraded_text(health_status, at_startup=True))
     with step("启动 DBOS"):
         url = settings.database_url.get_secret_value()
         # enable_patching：程序更新以后照样恢复进行中的下单流程，见 add-order-flow 的 design D10

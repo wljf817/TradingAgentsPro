@@ -77,6 +77,11 @@ def _round_at(world: World, moment: datetime) -> None:
     world.patrol.run_round()
 
 
+def _close_alerts(world: World) -> list[str]:
+    """推送里收盘对账的结果，不含健康判定的告警。"""
+    return [a for a in world.notifier.alerts if a.startswith("收盘对账")]
+
+
 def _logs(caplog: pytest.LogCaptureFixture, level: int) -> list[str]:
     return [r.getMessage() for r in caplog.records if r.name == LOGGER and r.levelno == level]
 
@@ -304,12 +309,13 @@ def test_positions_time_out_then_next_round(caplog: pytest.LogCaptureFixture) ->
     [warning] = _logs(caplog, logging.WARNING)
     assert "2026-10-14" in warning and "券商不可用" in warning
     assert world.closes.get(DAY) is None
-    assert world.notifier.alerts == []
+    # 没有收盘对账的推送；第 3 步读持仓超时另让健康判定推送进入降级，见 health-monitoring spec
+    assert _close_alerts(world) == []
 
     _round_at(world, at(20, 10, 15))
 
     assert world.closes.get(DAY) is not None
-    assert len(world.notifier.alerts) == 1
+    assert len(_close_alerts(world)) == 1
 
 
 def test_broker_down_until_the_open() -> None:

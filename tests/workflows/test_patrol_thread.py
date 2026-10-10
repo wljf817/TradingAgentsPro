@@ -22,6 +22,7 @@ from tradingagentspro.modules.execution import (
     OrderStatus,
     WorkingOrder,
 )
+from tradingagentspro.modules.health import HealthMode
 from tradingagentspro.workflows.patrol import PatrolConfig, SessionPatrol
 
 SHORT = PatrolConfig(interval=timedelta(seconds=0.3))
@@ -44,7 +45,9 @@ class _CountingPatrol(SessionPatrol):
     fail_first = False
 
     def __init__(self, world: World, config: PatrolConfig) -> None:
-        super().__init__(world.execution, world.risk, world.notification, world.lock, config)
+        super().__init__(
+            world.execution, world.risk, world.notification, world.monitor, world.lock, config
+        )
         self.started = 0
         self.finished: list[threading.Event] = [threading.Event() for _ in range(3)]
 
@@ -219,6 +222,34 @@ def test_stopping_during_the_close_reconciliation(stop_later: list[SessionPatrol
     assert not stopper.is_alive()
     assert world.closes.get(date(2026, 10, 14)) is not None
     assert len(world.notifier.alerts) == 1
+
+
+def test_stopping_during_the_recovery_reconciliation(stop_later: list[SessionPatrol]) -> None:
+    """health-monitoring spec「停止时正在恢复后的对账」：对账做完、回到正常、告警推送以后才结束。"""
+    broker = _SlowListing()
+    world = World(broker=broker, config=LONG)
+    world.broker.positions["BBB"] = 100
+    world.broker.fail_next("all_positions")
+    world.clock.set(at(15))
+    world.patrol.run_round()  # 券商断开，进入降级
+    world.clock.set(at(15, 0, 15))
+    world.patrol.run_round()  # 券商恢复，等待对账
+    assert world.health.status.mode is HealthMode.AWAITING_RECONCILIATION
+    world.clock.set(at(15, 0, 30))
+    broker.slow = True
+    patrol = _start(_CountingPatrol(world, LONG), stop_later)
+    assert broker.entered.wait(WAIT)
+
+    stopper = _stop_in_background(patrol)
+    _pause(0.2)
+    assert stopper.is_alive()  # 还在等健康判定这一项
+    assert len(world.notifier.alerts) == 1
+    broker.release.set()
+    stopper.join(WAIT)
+
+    assert not stopper.is_alive()
+    assert not world.health.status.degraded
+    assert world.notifier.alerts[-1].startswith("降级模式结束")
 
 
 # 一轮里的失败

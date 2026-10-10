@@ -19,7 +19,8 @@ from tradingagentspro.workflows.names import ORDER_STATUSES, SIDES
 
 _log = logging.getLogger(__name__)
 
-_PAUSED = "已暂停开仓，之后的对账没有不一致时恢复"
+# 有不一致时告警的最后一行；启动对账、收盘对账和降级恢复后的对账共用
+PAUSED = "已暂停开仓，之后的对账没有不一致时恢复"
 _RESUMED = "没有不一致，已恢复开仓"
 
 
@@ -61,7 +62,7 @@ def close_text(record: CloseReconciliation) -> str:
     else:
         lines = [f"收盘对账 {day}：没有差异，收盘时没有持仓，连续天数清零"]
     if not record.result.clean:
-        lines.append(_PAUSED)
+        lines.append(PAUSED)
     elif record.resumed:
         lines.append(_RESUMED)
     return "\n".join(lines)
@@ -69,7 +70,7 @@ def close_text(record: CloseReconciliation) -> str:
 
 def startup_text(result: Reconciliation) -> str:
     """启动对账有不一致时的告警，见 bootstrap spec「启动对账」。"""
-    return "\n".join(["启动对账有不一致：", *inconsistency_lines(result), _PAUSED])
+    return "\n".join(["启动对账有不一致：", *inconsistency_lines(result), PAUSED])
 
 
 def inconsistency_lines(result: Reconciliation) -> list[str]:

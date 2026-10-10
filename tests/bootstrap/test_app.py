@@ -487,8 +487,21 @@ def test_close_reconciliation_after_starting_past_the_close(
     assert _messages(log_stream, "ERROR") == []
 
 
+HEALTH_NOTICE = (
+    "已暂停开仓，已经确认、还没下单的开仓方案下单时作废；止损单照常保留。"
+    "各项恢复并和券商对账以后恢复开仓"
+)
+
+
+def _health_alerts(world: World) -> list[str]:
+    """Discord 收到的健康告警（进入降级模式、启动时处于降级模式、降级模式结束）。"""
+    return [a for a in _alerts(world) if "降级模式" in a.split("\n")[0]]
+
+
 def test_opend_down_in_session(log_stream: io.StringIO, database_url: str) -> None:
-    """spec「盘中 OpenD 没开」：写取不到行情和降级的 WARNING，照常启动完成。"""
+    """spec「盘中 OpenD 没开」：写取不到行情和降级的 WARNING；Discord 连上以后、DBOS 启动以前
+    推送启动时处于降级模式的告警；照常启动完成。
+    """
     world = World(opend_error="Connection refused")
 
     with ExitStack() as stack:
@@ -496,10 +509,98 @@ def test_opend_down_in_session(log_stream: io.StringIO, database_url: str) -> No
 
         assert app.health.status.mode is HealthMode.DEGRADED
         assert app.health.status.abnormal == {HealthCheck.DATA_DELAY}
+        [alert] = _health_alerts(world)
     warnings = _messages(log_stream, "WARNING")
     assert any("取不到行情" in w and "Connection refused" in w for w in warnings)
-    assert any("降级" in w and "data_delay" in w for w in warnings)
-    assert "DBOS 已启动" in _messages(log_stream)
+    assert any("降级" in w and "数据延迟" in w for w in warnings)
+    assert alert == (
+        f"启动时处于降级模式（2026-10-14 14:00 UTC 起），异常的检查：数据延迟\n{HEALTH_NOTICE}"
+    )
+    assert _in_order(
+        _messages(log_stream), ["Discord 已连接", "推送告警：启动时处于降级模式", "DBOS 已启动"]
+    )
+
+
+def test_opend_down_before_open(log_stream: io.StringIO, database_url: str) -> None:
+    """spec「盘外 OpenD 没开」：健康是正常，Discord 没有收到健康的告警。"""
+    world = World(
+        clock=FakeClock(datetime(2026, 10, 14, 12, tzinfo=UTC)), opend_error="Connection refused"
+    )
+
+    with ExitStack() as stack:
+        app = start(environment(database_url), world.externals(), BootstrapConfig(), stack)
+
+        assert app.health.status.mode is HealthMode.NORMAL
+        assert _health_alerts(world) == []
+    assert any("取不到行情" in w for w in _messages(log_stream, "WARNING"))
+
+
+def test_quote_stuck_at_previous_close(log_stream: io.StringIO, database_url: str) -> None:
+    """spec「开盘后行情一直没有更新」：进入降级模式，Discord 收到启动时处于降级模式的告警。"""
+    world = World(opend_updated_at=datetime(2026, 10, 13, 20, tzinfo=UTC))
+
+    with ExitStack() as stack:
+        app = start(environment(database_url), world.externals(), BootstrapConfig(), stack)
+
+        assert app.health.status.abnormal == {HealthCheck.DATA_DELAY}
+        [alert] = _health_alerts(world)
+    assert alert.startswith("启动时处于降级模式（2026-10-14 14:00 UTC 起），异常的检查：数据延迟")
+
+
+def test_reconciliation_and_health_alerts_in_order(
+    log_stream: io.StringIO, database_url: str
+) -> None:
+    """spec「启动对账和健康都要告警」：先启动对账的告警，再健康的告警，之后 DBOS 才启动。"""
+    world = World(opend_error="Connection refused")
+    world.alpaca.hold("CCC", "100")
+
+    with ExitStack() as stack:
+        start(environment(database_url), world.externals(), BootstrapConfig(), stack)
+
+        first, second = _alerts(world)[:2]
+    assert first.startswith("启动对账有不一致")
+    assert second.startswith("启动时处于降级模式")
+    assert _in_order(
+        _messages(log_stream),
+        [
+            "Discord 已连接",
+            "推送告警：启动对账有不一致",
+            "推送告警：启动时处于降级模式",
+            "DBOS 已启动",
+        ],
+    )
+
+
+def test_health_alert_that_cannot_be_sent(log_stream: io.StringIO, database_url: str) -> None:
+    """spec「健康的告警发不出去」：错误日志含告警的文字和原因，照常启动完成。"""
+    world = World(opend_error="Connection refused")
+    world.gateway.fail_next_send(NotificationUnavailableError("Discord：503 Service Unavailable"))
+
+    assert _run(environment(database_url), world) == 0
+
+    [error] = _messages(log_stream, "ERROR")
+    assert "启动时处于降级模式" in error and "503 Service Unavailable" in error
+    assert "启动完成" in _messages(log_stream)
+
+
+def test_no_second_health_alert_after_the_first_round(
+    log_stream: io.StringIO, database_url: str
+) -> None:
+    """spec「巡检第一轮仍是降级时不再告警」：巡检做完第一轮的健康判定，仍只有启动时的那一条。"""
+    world = World(opend_error="Connection refused")
+
+    with ExitStack() as stack:
+        app = start(environment(database_url), world.externals(), BootstrapConfig(), stack)
+        assert world.opend is not None
+        for _ in range(100):  # 最多等 10 秒：巡检第一轮的健康判定取了行情
+            if world.opend.calls >= 2:
+                break
+            threading.Event().wait(0.1)
+        assert world.opend.calls >= 2
+    # 停止时巡检做完正在做的那一项，健康判定已经做完
+
+    assert app.health.status.mode is HealthMode.DEGRADED
+    assert len(_health_alerts(world)) == 1
 
 
 # 启动失败
@@ -809,7 +910,7 @@ def test_patrol_and_later_flows_share_one_lock(
     class RecordingPatrol(SessionPatrol):
         def __init__(self, *args: Any) -> None:
             super().__init__(*args)
-            patrols.append((args[3], args[4]))
+            patrols.append((args[4], args[5]))  # 锁和巡检配置
 
     monkeypatch.setattr(app_module, "SessionPatrol", RecordingPatrol)
 

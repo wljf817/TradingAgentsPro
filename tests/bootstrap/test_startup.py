@@ -1,10 +1,12 @@
 """启动对账和第一次健康判定的测试。
 
 场景见 openspec 的 bootstrap spec「启动对账」「第一次健康判定」，做法见 add-bootstrap-wiring 的
-design D7。用假券商、内存存储、假行情源和测试时钟，不连外部系统。
+design D7 和 add-health-monitoring 的 design D8。用假券商、内存存储、假行情源和测试时钟，
+不连外部系统。告警在 Discord 连上以后由 app.py 推送，见 test_app.py。
 """
 
 import logging
+import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -14,6 +16,7 @@ import pytest
 from tests.fakes.broker import FakeBroker
 from tests.fakes.calendar import sample_nyse_calendar
 from tests.fakes.clock import FakeClock
+from tests.fakes.notifier import FakeNotifier
 from tests.fakes.orders import InMemoryOrderStore
 from tests.fakes.quotes import FakeQuoteSource
 from tests.fakes.stops import FakeStopBroker
@@ -29,10 +32,13 @@ from tradingagentspro.modules.health import (
     HealthStatus,
 )
 from tradingagentspro.modules.marketdata import MarketDataConfig, MarketDataService, Quote
+from tradingagentspro.modules.notification import NotificationConfig, NotificationService
+from tradingagentspro.workflows.health import HealthMonitor
 
 IN_SESSION = datetime(2026, 10, 14, 14, tzinfo=UTC)  # 美东 10:00，开盘后 30 分钟
 BEFORE_OPEN = datetime(2026, 10, 14, 12, tzinfo=UTC)  # 美东 8:00
 STARTUP = "tradingagentspro.bootstrap.startup"
+HEALTH = "tradingagentspro.workflows.health"
 
 
 @dataclass
@@ -130,11 +136,30 @@ def _spy(updated_at: datetime) -> Quote:
     )
 
 
-def _judge(now: datetime, source: FakeQuoteSource) -> tuple[HealthStatus, RecordingHealth]:
+def _monitor(now: datetime, source: FakeQuoteSource) -> tuple[HealthMonitor, RecordingHealth]:
     clock = FakeClock(now)
     health = RecordingHealth(clock)
-    market_data = MarketDataService(source, MarketDataConfig())
-    return judge_health_at_startup(health, market_data, clock), health
+    monitor = HealthMonitor(
+        health,
+        _Broker().service(),
+        MarketDataService(source, MarketDataConfig()),
+        NotificationService(FakeNotifier(), clock, NotificationConfig()),
+        threading.RLock(),
+        clock,
+    )
+    return monitor, health
+
+
+def _judge(now: datetime, source: FakeQuoteSource) -> tuple[HealthStatus, RecordingHealth]:
+    monitor, health = _monitor(now, source)
+    return judge_health_at_startup(health, monitor), health
+
+
+def _quote_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """取不到行情的 WARNING：由健康监控接线写，见 health-monitoring spec「健康信号」。"""
+    return [
+        r.getMessage() for r in caplog.records if r.name == HEALTH and r.levelno == logging.WARNING
+    ]
 
 
 def test_signals_follow_the_table() -> None:
@@ -176,10 +201,10 @@ def test_opend_down_in_session(caplog: pytest.LogCaptureFixture) -> None:
     assert health.signals[0].last_quote_at is None
     assert status.mode is HealthMode.DEGRADED
     assert status.abnormal == {HealthCheck.DATA_DELAY}
-    warnings = _records(caplog, logging.WARNING)
-    assert len(warnings) == 2
-    assert "取不到行情" in warnings[0] and "测试安排的失败" in warnings[0]
-    assert "降级" in warnings[1] and "data_delay" in warnings[1]
+    [quote_warning] = _quote_warnings(caplog)
+    assert "取不到行情" in quote_warning and "测试安排的失败" in quote_warning
+    [warning] = _records(caplog, logging.WARNING)
+    assert "降级" in warning and "数据延迟" in warning
 
 
 def test_opend_down_before_open(caplog: pytest.LogCaptureFixture) -> None:
@@ -191,8 +216,9 @@ def test_opend_down_before_open(caplog: pytest.LogCaptureFixture) -> None:
         status, _ = _judge(BEFORE_OPEN, source)
 
     assert status.mode is HealthMode.NORMAL
-    [warning] = _records(caplog, logging.WARNING)
+    [warning] = _quote_warnings(caplog)
     assert "取不到行情" in warning
+    assert _records(caplog, logging.WARNING) == []
 
 
 def test_quote_stuck_at_previous_close() -> None:
@@ -211,3 +237,16 @@ def test_reference_symbol_missing_counts_as_no_quote() -> None:
 
     assert health.signals[0].last_quote_at is None
     assert status.mode is HealthMode.DEGRADED
+
+
+def test_quote_time_is_kept_for_the_patrol() -> None:
+    """bootstrap spec「第一次健康判定」的行情一行：这次取到的时刻也算最近一次取到的，巡检接着用。"""
+    updated = IN_SESSION - timedelta(seconds=10)
+    source = FakeQuoteSource(_spy(updated))
+    monitor, health = _monitor(IN_SESSION, source)
+    judge_health_at_startup(health, monitor)
+
+    source.fail_next = True
+    signals = monitor.signals(broker_connected=True)
+
+    assert signals.last_quote_at == updated

@@ -7,7 +7,7 @@
 - `HealthService`（modules/health）：`check(signals)` 用时钟的现在、交易日历和配置判定一次，返回之后的状态；`reconciled()` 只在等待对账时回到正常；`status` 是属性，读内存。类的说明写明同一个实例一次只能有一个调用，由调用方保证。状态是 frozen dataclass `HealthStatus`（`mode`、`abnormal`、`degraded_since`、`degraded`），信号是 `HealthSignals`
 - `bootstrap/startup.py` 的 `judge_health_at_startup` 启动时判定一次，只写日志；模型、预算、心跳按正常，券商按连接，行情取 `market_data.last_update()`，取不到为 None。模块说明写着告警由「健康监控接线」补上
 - 盘中巡检（`workflows/patrol.py`，已归档）：守护线程每 15 秒一轮，`run_round` 依次跟进订单、同步预留、对齐止损单；第 3 步开始时 `execution.symbols_to_protect()` 读一次券商的全部持仓，`BrokerUnavailableError` 写 WARNING 并跳过这一步，别的异常由 `_item` 写 ERROR；每一项开始前看 `_stopping`。`TradingApp.lock` 是全程序一把 `RLock`
-- 收盘对账（add-close-reconciliation，正在 apply）在 `run_round` 最后加「收盘对账」一项；新增 `workflows/reconciliation.py`，其中 `close_text` 和 `startup_text` 共用一个给出三类不一致各行的函数；`start` 在 Discord 连上以后、DBOS 以前推送启动对账的告警
+- 收盘对账（add-close-reconciliation，已经 apply）在 `run_round` 最后加「收盘对账」一项；新增 `workflows/reconciliation.py`，其中 `close_text` 和 `startup_text` 共用一个给出三类不一致各行的函数；`start` 在 Discord 连上以后、DBOS 以前推送启动对账的告警
 - 下单流程（add-order-flow，正在 apply）：风控检查和再校验时读 `health.status.degraded`，不拿锁
 - `MarketDataService.last_update()`：每次向 OpenD 取一次参考股票（SPY）的快照，失败抛 `QuoteUnavailableError`；OpenD 没连上时等连接超时（默认 10 秒）
 - `ExecutionService.reconcile()`：第 1 步读券商全部挂单、止损单和持仓，超时或断线抛 `BrokerUnavailableError`、什么都不改；之后的跟进和对齐里的超时记为状态未知，对账照样完成
@@ -22,6 +22,7 @@ workflows/
   health.py   (新) HealthMonitor（signals、judge）、degraded_text、recovered_text、checks_text
   patrol.py   (改) 构造参数加 health: HealthMonitor；_align_stops 给出读全部持仓的结果；
                    run_round 在第 3 步之后加「健康判定」一项
+  reconciliation.py (改) 有不一致时的最后一行 _PAUSED 改名为公开的 PAUSED，文字不变
 bootstrap/
   startup.py  (改) judge_health_at_startup 改用 HealthMonitor.signals；日志用检查的中文名
   app.py      (改) 装配 HealthMonitor，交给巡检；Discord 连上以后按第一次健康判定的结果推送告警
@@ -243,13 +244,13 @@ def recovered_text(status: HealthStatus, result: Reconciliation) -> str:
 ```
 
 - 中文名 `_CHECK_NAMES`：模型 API、券商连接、数据延迟、调用预算、调度器心跳，和 degraded-mode spec 的表一致；按 `HealthCheck` 的定义顺序（就是表的顺序）列出，不按字母排序
-- 三类不一致的行和最后一行用收盘对账的写法：`workflows/reconciliation.py` 里 `close_text`、`startup_text` 共用的那个函数，启动对账、收盘对账、恢复对账的告警一样。它在收盘对账里如果是私有的，apply 时改为公开
+- 三类不一致的行和最后一行用收盘对账的写法：`workflows/reconciliation.py` 里 `close_text`、`startup_text` 共用的 `inconsistency_lines` 和最后一行 `PAUSED`（原来是私有的 `_PAUSED`，改为公开，文字不变），启动对账、收盘对账、恢复对账的告警一样
 - 时刻写 UTC、到分钟，和巡检的无保护告警、收盘对账一样；写进入降级模式的时刻（`degraded_since`）
 - 启动日志里 `judge_health_at_startup` 的 WARNING 也改用 `checks_text`，不再写英文的枚举值
 
 ### D8 bootstrap 接线
 
-- `_assemble`：建 `HealthMonitor(health, execution, market_data, notification, lock, clock)`，放进 `_Parts`，交给 `SessionPatrol(..., health=monitor)`
+- `_assemble`：建 `HealthMonitor(health, execution, market_data, notification, lock, clock)`，放进 `_Parts`，交给巡检：`SessionPatrol(execution, risk, notification, monitor, lock, PatrolConfig())`
 - `judge_health_at_startup(health, monitor)`：`health.check(monitor.signals(broker_connected=True))`，日志同现在；返回状态。取到的行情时刻由 `monitor` 记下，巡检接着用
 - `start`：「启动 Discord」以后、「启动 DBOS」以前，在启动对账的告警（收盘对账加的）之后：
 
@@ -271,7 +272,7 @@ def recovered_text(status: HealthStatus, result: Reconciliation) -> str:
   - 锁的场景：另一个线程拿锁时判定照样做完、对账等锁；通知替身阻塞时测试线程 `acquire(blocking=False)` 成功
   - 「券商断开」用 `FakeBroker.fail_next` 给读全部持仓、读挂单安排失败；401 和意外的错照 `test_patrol.py` 已有的写法替换替身的方法；SPY 的更新时刻在 `FakeQuoteSource` 上设
 - `tests/workflows/test_patrol_thread.py`：停止时正在做恢复后的对账（读全部挂单阻塞到测试放行）
-- `tests/workflows/test_patrol.py`：已有的场景不变；`World` 默认的 SPY 行情每次都是 10 秒前，健康判定不影响它们
+- `tests/workflows/test_patrol.py`、`test_reconciliation.py`：已有的场景不变；`World` 默认的 SPY 行情每次都是 10 秒前，健康判定不影响它们。第 3 步读持仓超时的那几个测试另有健康判定的降级告警和 WARNING，只数巡检和收盘对账自己的（close-reconciliation spec「读持仓超时，下一轮再做」里的「没有推送」指没有收盘对账的结果）
 - `tests/bootstrap/test_startup.py`：第一次健康判定的信号表和日志改用中文名；取到的行情时刻记在 `HealthMonitor` 里
 - `tests/bootstrap/test_app.py`：bootstrap spec「第一次健康判定」的场景，检查 `FakeGateway` 收到的告警和它在「Discord 已连接」之后、「DBOS 已启动」之前；和启动对账告警的先后；巡检第一轮仍是降级时只有一条健康告警（有超时地等巡检做完第一轮）
 

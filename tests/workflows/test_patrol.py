@@ -26,6 +26,7 @@ WORKING = BrokerOrderStatus.WORKING
 FILLED = BrokerOrderStatus.FILLED
 CANCELLED = BrokerOrderStatus.CANCELLED
 INTERVAL = timedelta(seconds=15)
+PATROL = "tradingagentspro.workflows.patrol"
 STOP_1, STOP_2, STOP_3 = "BBB-STOP-1", "BBB-STOP-2", "BBB-STOP-3"
 
 
@@ -547,7 +548,8 @@ def test_round_skips_alignment_when_positions_cannot_be_read(
     _next_round(world)
 
     assert len(world.stops.placed) == 1
-    [warning] = [r for r in caplog.records if r.levelno == logging.WARNING]
+    # 只看巡检自己的 WARNING：读持仓失败也让健康判定进入降级，见 health-monitoring spec
+    [warning] = [r for r in caplog.records if r.levelno == logging.WARNING and r.name == PATROL]
     assert "读取券商持仓失败" in warning.getMessage()
     assert "这一轮没有对齐止损单" in warning.getMessage()
 
@@ -675,7 +677,8 @@ def test_alert_records_survive_rounds_without_alignment(
         _next_round(world)
 
     assert "BBB 不再是无保护仓位" not in _info(caplog)
-    assert len(world.notifier.alerts) == 1
+    # 读持仓失败的那一轮健康判定另有降级的告警，见 health-monitoring spec
+    assert len([a for a in world.notifier.alerts if "无保护仓位" in a]) == 1
 
 
 def _raise() -> tuple[str, ...]:
