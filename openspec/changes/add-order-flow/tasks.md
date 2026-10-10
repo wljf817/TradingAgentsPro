@@ -2,8 +2,8 @@
 
 ## 1. 前置和 Proposal
 
-- [ ] 1.1 确认「盘中巡检」已经 apply：`bootstrap/app.py` 有 `TradingApp.lock` 和装配的 `RLock`，`ExecutionService` 有 `order(plan_id)`，`tests/workflows/` 已经存在。验证：`grep -n "def order\b\|lock" src/tradingagentspro/modules/execution/service.py src/tradingagentspro/bootstrap/app.py` 有这些；没有就停下，不开始本变更
-- [ ] 1.2 人对 proposal「需要人决定」第 1 条表态以后，改完整版 Proposal「订单生命周期」表的「每日对账」「止损单挂单失败」两行：同意就按推荐做法加那两句括号，不同意按人的决定改，并同步改 specs/order-flow/spec.md「提交的结果」和 design D6（简版不动）。验证：`git diff` 只有这两行（不同意时另有 spec 和 design 的对应改动）
+- [x] 1.1 确认「盘中巡检」已经 apply：`bootstrap/app.py` 有 `TradingApp.lock` 和装配的 `RLock`，`ExecutionService` 有 `order(plan_id)`，`tests/workflows/` 已经存在。验证：`grep -n "def order\b\|lock" src/tradingagentspro/modules/execution/service.py src/tradingagentspro/bootstrap/app.py` 有这些；没有就停下，不开始本变更
+- [x] 1.2 人对 proposal「需要人决定」第 1 条表态以后，改完整版 Proposal「订单生命周期」表的「每日对账」「止损单挂单失败」两行：同意就按推荐做法加那两句括号，不同意按人的决定改，并同步改 specs/order-flow/spec.md「提交的结果」和 design D6（简版不动）。验证：`git diff` 只有这两行（不同意时另有 spec 和 design 的对应改动）
 
 ## 2. 风控用的账户数据
 
