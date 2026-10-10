@@ -270,6 +270,29 @@ def test_plan_without_a_reservation() -> None:
     assert store.get(bbb.plan_id) is None
 
 
+# 有效预留的方案：盘中巡检用它同步预留（add-session-patrol 的 design D6）
+
+
+def test_active_plan_ids_lists_only_active_reservations() -> None:
+    store = InMemoryReservationStore()
+    service = risk_service(store)
+    released, filled, partly, open_ = (_buy(s, 100, 45) for s in ("BBB", "CCC", "DDD", "EEE"))
+    rejected = _buy("FFF", 100, 45)
+    for plan in (released, filled, partly, open_):
+        _check(service, plan)
+    _check(service, rejected, baseline_account(settled_cash=Decimal(50)))
+
+    service.release(released.plan_id)
+    service.record_fill(filled.plan_id, 100)
+    service.record_fill(partly.plan_id, 30)
+
+    assert set(service.active_plan_ids()) == {partly.plan_id, open_.plan_id}
+
+
+def test_active_plan_ids_without_reservations() -> None:
+    assert risk_service(InMemoryReservationStore()).active_plan_ids() == ()
+
+
 # 同一方案重复检查
 
 

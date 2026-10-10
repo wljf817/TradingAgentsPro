@@ -11,7 +11,7 @@
 ```
 src/tradingagentspro/
   bootstrap/      程序入口和装配：选 live / paper / replay，把实现注入各模块
-  workflows/      DBOS 工作流：把多个模块的用例串成流程（和 integrations 互相独立）
+  workflows/      流程：DBOS 工作流和盘中巡检，把多个模块的用例串起来（和 integrations 互相独立）
   integrations/   外部系统的适配器：实现各模块定义的接口
   modules/        业务模块：每个模块对应架构图里的一个节点
   contracts/      跨模块传递的 Pydantic 模型

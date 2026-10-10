@@ -13,6 +13,7 @@ from collections.abc import Callable, Iterator
 from contextlib import ExitStack
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
 import httpx
@@ -27,14 +28,19 @@ from tests.bootstrap.externals import (
     World,
     environment,
 )
+from tests.fakes.clock import FakeClock
+from tests.integrations.alpaca.server import FakeAlpaca
 from tests.integrations.discord.gateway import FakeGateway
+from tradingagentspro.bootstrap import app as app_module
 from tradingagentspro.bootstrap.app import (
     BootstrapConfig,
     paper_execution,
     run,
     start,
 )
-from tradingagentspro.contracts.trade_plan import OrderType
+from tradingagentspro.bootstrap.database import migrate
+from tradingagentspro.contracts.risk import RiskDecision, RiskOutcome
+from tradingagentspro.contracts.trade_plan import OrderType, TradeAction, TradePlan
 from tradingagentspro.integrations.alpaca import AlpacaClient, AlpacaConfig
 from tradingagentspro.integrations.discord import DiscordConfig
 from tradingagentspro.integrations.discord.notifier import PressHandler
@@ -48,8 +54,9 @@ from tradingagentspro.modules.execution import (
 )
 from tradingagentspro.modules.health import HealthCheck, HealthMode
 from tradingagentspro.modules.notification import NotificationUnavailableError
-from tradingagentspro.modules.risk import RiskConfig
+from tradingagentspro.modules.risk import PostgresReservationStore, Reservation, RiskConfig
 from tradingagentspro.modules.statestore import connect
+from tradingagentspro.workflows.patrol import PatrolConfig, SessionPatrol
 
 DB_PASSWORD = "db-pass-k3v9"  # 测试里建的数据库用户的密码，只用来检查它不外露
 _LINE = re.compile(r"^\S+ (?P<level>[A-Z]+) \[[^\]]*\] (?P<name>\S+): (?P<message>.*)$")
@@ -63,8 +70,10 @@ NORMAL_ORDER = [
     "健康：正常",
     "Discord 已连接",
     "DBOS 已启动",
+    "盘中巡检已开始，间隔 15 秒",
     "启动完成",
     "收到停止信号，开始停止",
+    "已关闭：盘中巡检",
     "已关闭：DBOS",
     "已关闭：Discord",
     "已关闭：OpenD 行情连接",
@@ -93,9 +102,10 @@ def database_url(postgres_url: str, empty_database: str) -> str:
 
 @pytest.fixture(autouse=True)
 def no_threads_left_behind() -> Iterator[None]:
-    """每个测试结束时，没有留下运行中的非守护线程（DBOS、Discord 都已经关闭）。"""
+    """每个测试结束时，没有留下运行中的非守护线程（DBOS、Discord 都已关闭），巡检也已停下。"""
     before = set(threading.enumerate())
     yield
+    assert [t for t in threading.enumerate() if t.name == "session-patrol"] == []
     left = [t for t in threading.enumerate() if t not in before and not t.daemon and t.is_alive()]
     for thread in left:
         thread.join(5)
@@ -593,3 +603,188 @@ def test_no_secrets_in_the_logs(log_stream: io.StringIO, database_url: str) -> N
     output = log_stream.getvalue()
     assert not _leaks(output)
     assert "postgresql+psycopg://trader:***@" in output
+
+
+# 盘中巡检（add-session-patrol）
+
+P1 = UUID("00000000-0000-4000-8000-000000000001")
+
+
+def _p1_plan() -> TradePlan:
+    """买入 BBB（医疗）100 股，限价 50，止损价 45。"""
+    return TradePlan(
+        plan_id=P1,
+        symbol="BBB",
+        sector="医疗",
+        action=TradeAction.BUY,
+        quantity=100,
+        order_type=OrderType.LIMIT,
+        limit_price=Decimal(50),
+        stop_price=Decimal(45),
+    )
+
+
+def _submitted_p1(url: str) -> None:
+    """停机前的状态库：P1 的买单已提交（券商订单号 O1），风控为它预留了 100 股。"""
+    engine = _connect(url)
+    try:
+        migrate(engine)
+        clock = FakeClock(NOW)
+        plan = _p1_plan()
+        decision = RiskDecision(
+            outcome=RiskOutcome.PASSED,
+            quantity=100,
+            emergency_threshold=Decimal("0.08"),
+            expires_at=NOW + timedelta(hours=6),
+            violations=(),
+        )
+        PostgresReservationStore(engine, clock).save(Reservation(plan=plan, decision=decision))
+        PostgresOrderStore(engine, clock).save(
+            Order(
+                plan_id=P1,
+                symbol="BBB",
+                sector="医疗",
+                side=OrderSide.BUY,
+                order_type=OrderType.LIMIT,
+                limit_price=Decimal(50),
+                quantity=100,
+                deadline=NOW + timedelta(hours=6),
+                created_at=NOW - timedelta(minutes=5),
+                stop_price=Decimal(45),
+                emergency_threshold=Decimal("0.08"),
+                status=OrderStatus.SUBMITTED,
+                broker_order_id="O1",
+            )
+        )
+    finally:
+        engine.dispose()
+
+
+def _reservation_active(url: str) -> bool:
+    engine = _connect(url)
+    try:
+        reservation = PostgresReservationStore(engine, FakeClock(NOW)).get(P1)
+        return reservation is not None and reservation.is_active
+    finally:
+        engine.dispose()
+
+
+def _p1_status(url: str) -> OrderStatus:
+    engine = _connect(url)
+    try:
+        order = PostgresOrderStore(engine, FakeClock(NOW)).get(P1)
+        assert order is not None
+        return order.status
+    finally:
+        engine.dispose()
+
+
+def test_patrol_reports_fills_of_orders_submitted_before_the_restart(
+    log_stream: io.StringIO, database_url: str
+) -> None:
+    """spec「启动以后巡检跟进停机前提交的订单」：启动对账跟进 P1、挂上止损单，第一轮上报成交。"""
+    _submitted_p1(database_url)
+    world = World()
+    world.alpaca.add_order(
+        id="O1",
+        client_order_id=str(P1),
+        symbol="BBB",
+        qty="100",
+        status="filled",
+        filled_qty="100",
+        filled_avg_price="49.95",
+    )
+    world.alpaca.hold("BBB", "100", "49.95")
+
+    with ExitStack() as stack:
+        start(environment(database_url), world.externals(), BootstrapConfig(), stack)
+        assert any(o["client_order_id"] == "BBB-STOP-1" for o in world.alpaca.orders.values())
+        for _ in range(100):  # 最多等 10 秒
+            if not _reservation_active(database_url):
+                break
+            threading.Event().wait(0.1)
+
+    assert _p1_status(database_url) is OrderStatus.FILLED
+    assert not _reservation_active(database_url)
+    assert _messages(log_stream, "ERROR") == []
+
+
+def test_patrol_and_later_flows_share_one_lock(
+    log_stream: io.StringIO, database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """spec「巡检和以后的流程共用一把锁」：间隔 15 秒；TradingApp.lock 就是巡检用的那一把。"""
+    patrols: list[tuple[object, PatrolConfig]] = []
+
+    class RecordingPatrol(SessionPatrol):
+        def __init__(self, *args: Any) -> None:
+            super().__init__(*args)
+            patrols.append((args[3], args[4]))
+
+    monkeypatch.setattr(app_module, "SessionPatrol", RecordingPatrol)
+
+    with ExitStack() as stack:
+        app = start(environment(database_url), World().externals(), BootstrapConfig(), stack)
+
+    [(lock, config)] = patrols
+    assert lock is app.lock
+    assert config.interval == timedelta(seconds=15)
+
+
+class _SlowAlpaca(FakeAlpaca):
+    """按 P1 第 nth 次查询时停住，直到测试放行。"""
+
+    def __init__(self, nth: int) -> None:
+        super().__init__()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self._left = nth
+
+    def _handle(self, request: httpx.Request) -> httpx.Response:
+        if request.url.params.get("client_order_id") == str(P1):
+            self._left -= 1
+            if self._left == 0:
+                self.entered.set()
+                self.release.wait(10)
+        return super()._handle(request)
+
+
+def test_stop_waits_for_the_patrol_item_in_progress(
+    log_stream: io.StringIO, database_url: str
+) -> None:
+    """spec「停止时巡检正在跟进订单」：这笔订单保存以后才写已关闭盘中巡检，之后才关 DBOS 等。"""
+    _submitted_p1(database_url)
+    alpaca = _SlowAlpaca(nth=2)  # 第 1 次是启动对账，第 2 次是巡检的第一轮
+    alpaca.add_order(id="O1", client_order_id=str(P1), symbol="BBB", qty="100", status="new")
+    world = World(alpaca=alpaca)
+    stop = threading.Event()
+    result: list[int] = []
+    runner = threading.Thread(
+        target=lambda: result.append(run(environment(database_url), stop, world.externals()))
+    )
+    runner.start()
+
+    try:
+        assert alpaca.entered.wait(30)
+        stop.set()
+        threading.Event().wait(0.3)
+        assert "已关闭：盘中巡检" not in _messages(log_stream)
+        alpaca.orders["O1"] |= {"status": "partially_filled", "filled_qty": "30"}
+    finally:
+        stop.set()
+        alpaca.release.set()
+        runner.join(60)
+
+    assert result == [0]
+    assert _p1_status(database_url) is OrderStatus.PARTIALLY_FILLED
+    assert _in_order(
+        _messages(log_stream),
+        [
+            "收到停止信号",
+            "已关闭：盘中巡检",
+            "已关闭：DBOS",
+            "已关闭：Discord",
+            "已关闭：OpenD 行情连接",
+            "已关闭：数据库连接",
+            "已停止",
+        ],
+    )

@@ -1,8 +1,9 @@
 """装配和生命周期：按固定的顺序启动交易侧程序（模拟盘），收到停止信号时按相反的顺序关闭。
 
 见 bootstrap spec「启动顺序」「启动失败」「模拟盘的装配」「DBOS」「停止」，以及 add-bootstrap-wiring
-的 design D1、D5、D6、D8、D10、D11。以后的流程变更在 start 里加几行：DBOS launch 之前注册工作流，
-launch 之后开始盘中巡检。
+的 design D1、D5、D6、D8、D10、D11。DBOS launch 之后开始盘中巡检，停止时最先停它，见
+add-session-patrol 的 design D12。以后的流程变更在 start 里 DBOS launch 之前注册工作流，
+从 TradingApp.lock 取锁。
 """
 
 import logging
@@ -68,6 +69,7 @@ from tradingagentspro.modules.statestore import connect
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.ids import IdGenerator
 from tradingagentspro.shared.trading_calendar import TradingCalendar
+from tradingagentspro.workflows.patrol import PatrolConfig, SessionPatrol
 
 _log = logging.getLogger(__name__)
 
@@ -129,6 +131,7 @@ class TradingApp:
     market_data: MarketDataService
     notification: NotificationService
     reconciliation: Reconciliation  # 启动对账的结果
+    lock: threading.RLock  # 执行模块和风控的调用串行用的锁，见 session-patrol spec
 
 
 class StartupError(RuntimeError):
@@ -185,6 +188,8 @@ class _Parts:
     market_data: MarketDataService
     notification: NotificationService
     notifier: DiscordNotifier
+    lock: threading.RLock
+    patrol: SessionPatrol
 
 
 def _assemble(
@@ -218,6 +223,8 @@ def _assemble(
     )
     gateway = externals.discord(settings.discord, plans)
     notifier = DiscordNotifier(gateway, settings.discord, clock, refuse_decision)
+    notification = NotificationService(notifier, clock, NotificationConfig())
+    lock = threading.RLock()
     return _Parts(
         alpaca=client,
         execution=execution,
@@ -225,8 +232,10 @@ def _assemble(
         emergency=EmergencyService(clock, calendar, EmergencyConfig()),
         health=HealthService(clock, calendar, HealthConfig()),
         market_data=market_data,
-        notification=NotificationService(notifier, clock, NotificationConfig()),
+        notification=notification,
         notifier=notifier,
+        lock=lock,
+        patrol=SessionPatrol(execution, risk, notification, lock, PatrolConfig()),
     )
 
 
@@ -269,6 +278,9 @@ def start(
         on_stop(stack, "DBOS", DBOS.destroy)
         DBOS.launch()
         _log.info("DBOS 已启动")
+    with step("开始盘中巡检"):
+        parts.patrol.start()
+        on_stop(stack, "盘中巡检", parts.patrol.stop)
     return TradingApp(
         clock=clock,
         ids=externals.ids,
@@ -280,6 +292,7 @@ def start(
         market_data=parts.market_data,
         notification=parts.notification,
         reconciliation=reconciliation,
+        lock=parts.lock,
     )
 
 

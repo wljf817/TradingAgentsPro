@@ -24,11 +24,11 @@
   - 每一轮依次：
     1. 跟进每一笔未结束的订单（`execution.track`），订单有变化时写一条日志
     2. 同步预留：每个有有效预留、已经有订单的方案，把订单的累计成交报给 `risk.record_fill`，订单到了终态再 `risk.release`。在别处结束的订单（提交时被拒、紧急撤单、对账、停机期间）也一样补上
-    3. 对齐止损单（`execution.protect`）：券商有持仓的股票，加上当前止损单还没结束、或者是无保护仓位的股票。止损单被券商撤销或过期后重挂、挂单失败后的重试，都由每一轮的对齐完成；止损单有变化时写一条日志
+    3. 对齐止损单（`execution.protect`）：券商有持仓的股票，加上当前止损单还没结束、或者是无保护仓位的股票；第 1 步跟进过订单的股票跟进时已经对齐过，不再对齐（同一轮连续改两次单会被 Alpaca 拒绝）。止损单被券商撤销或过期后重挂、挂单失败后的重试，都由每一轮的对齐完成；止损单有变化时写一条日志
     4. 对齐以后是无保护仓位的股票推送告警，同一段无保护期间只告警一次；解除时只写日志
   - 一轮里任何一项出错（券商、数据库、意外的异常）：写日志，跳过这一项，接着做下一项；下一轮再来，巡检线程不会因此停下
 - 进程内的锁：bootstrap 建一把可重入锁，全程序共用。执行模块和风控里会改变状态的调用都拿着它进行，巡检一项一项地拿，不整轮拿着；推送告警时不拿锁。以后的 `/plan` 提交、下单工作流、紧急退出都用同一把锁
-- 执行模块和风控各加几个只读的查询（不改变任何行为）：未结束的订单、一个方案的订单、需要对齐止损单的股票；有有效预留的方案
+- 执行模块和风控各加几个只读的查询（不改变任何行为）：未结束的订单、一个方案的订单、一只股票的止损保护、需要对齐止损单的股票；有有效预留的方案
 - bootstrap：启动顺序在 DBOS 之后加一步「开始盘中巡检」；停止时最先停巡检，再关 DBOS、Discord、OpenD、数据库；`TradingApp` 带上这把锁，给以后的流程变更用
 - `workflows/` 的说明和 README 的目录说明改为「流程：DBOS 工作流和盘中巡检这样的进程内循环」
 
@@ -58,13 +58,13 @@
 
 - **代码**：
   - 新增 `src/tradingagentspro/workflows/patrol.py`（`PatrolConfig`、`SessionPatrol`）；`workflows/__init__.py` 只改说明
-  - `modules/execution/service.py` 加只读的 `open_orders`、`order`、`symbols_to_protect`；`modules/risk/service.py` 加只读的 `active_plan_ids`。包根导出不变（都是已经导出的类的方法）
+  - `modules/execution/service.py` 加只读的 `open_orders`、`order`、`protection`、`symbols_to_protect`；`modules/risk/service.py` 加只读的 `active_plan_ids`。包根导出不变（都是已经导出的类的方法）
   - `bootstrap/app.py`：建锁和巡检，启动和停止巡检，`TradingApp` 加 `lock`
   - contracts、shared、integrations 不改
 - **测试**：新增 `tests/workflows/test_patrol.py`、`tests/workflows/test_patrol_thread.py`；`tests/modules/execution/`、`tests/modules/risk/` 补只读查询的测试；`tests/bootstrap/test_app.py` 补启动顺序和停止顺序
 - **依赖**：无
 - **文档**：README 目录说明一行；`docs/实现路线.md` 的进度；人同意「需要人决定」以后改完整版 Proposal 一句话
-- **券商请求**：每一轮大约 1 + 2 ×（要对齐的股票数）+ 3 ×（未结束的订单数）次 Alpaca 请求，8 只持仓、2 笔订单时约 23 次，按 15 秒的间隔每分钟约 92 次，不到 Alpaca 每分钟 200 次的一半（design D7）
+- **券商请求**：每一轮不超过 1 + 2 ×（要对齐的股票数）+ 3 ×（未结束的订单数）次 Alpaca 请求，8 只持仓、2 笔订单时约 23 次，按 15 秒的间隔每分钟约 92 次，不到 Alpaca 每分钟 200 次的一半（design D7）
 - **对后续变更的影响**：
   - 「下单流程」：工作流到 `execution.submit` 就结束，之后的跟进、成交上报和释放预留都由巡检做；方案在下单以前结束（作废、人工拒绝、确认超时、再校验拒绝）时由工作流自己释放预留。风控的检查、再校验和执行模块的提交都要拿 `TradingApp.lock`；读账户数据（`held_sector`）不用拿
   - 「紧急退出流程」：取行情、紧急退出的判断和本地备用止损加进巡检的每一轮，撤单和清仓卖单拿同一把锁

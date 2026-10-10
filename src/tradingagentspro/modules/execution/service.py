@@ -222,6 +222,30 @@ class ExecutionService:
         self._last = Reconciliation(stray, extra, unexplained)
         return self._last
 
+    def open_orders(self) -> tuple[Order, ...]:
+        """全部没有进入终态的订单，按创建的先后；只读状态库，不调用券商。
+
+        给盘中巡检用，见 add-session-patrol 的 design D6。
+        """
+        return tuple(sorted(self._store.open_orders(), key=lambda o: o.created_at))
+
+    def order(self, plan_id: UUID) -> Order | None:
+        """这个方案的订单，包括已经结束的；没有订单时为 None。只读状态库，不调用券商。"""
+        return self._store.get(plan_id)
+
+    def protection(self, symbol: str) -> Protection | None:
+        """这只股票的止损保护；没有记录时为 None。只读状态库，不调用券商。"""
+        return self._protections.get(symbol)
+
+    def symbols_to_protect(self) -> tuple[str, ...]:
+        """需要对齐止损单的股票，按代码排序：券商那边有持仓的，加上止损保护需要对齐的。
+
+        和 reconcile 第 4 步的范围相同，见 add-session-patrol 的 design D5。只读券商的全部持仓，
+        超时或断线时抛 BrokerUnavailableError。
+        """
+        positions = self._broker.all_positions()
+        return tuple(sorted(set(positions) | {p.symbol for p in self._protections.active()}))
+
     def account(self) -> Account:
         """账户数据：券商账户加上本系统的记录，见 trade-records spec「账户数据」和 design D7。
 

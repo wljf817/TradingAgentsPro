@@ -118,6 +118,13 @@ class RiskService:
         if reservation is not None:
             self._store.save(reservation.release())
 
+    def active_plan_ids(self) -> tuple[UUID, ...]:
+        """有有效预留的方案：没有释放、剩余股数大于 0。只读存储。
+
+        给盘中巡检同步预留用，见 add-session-patrol 的 design D6。
+        """
+        return tuple(r.plan.plan_id for r in self._store.active())
+
     def _request(
         self,
         plan: TradePlan,
