@@ -12,6 +12,7 @@ from decimal import Decimal
 from tests.fakes.broker import FakeBroker
 from tests.fakes.calendar import sample_nyse_calendar
 from tests.fakes.clock import FakeClock
+from tests.fakes.closes import InMemoryCloseReconciliationStore
 from tests.fakes.notifier import FakeNotifier
 from tests.fakes.orders import InMemoryOrderStore
 from tests.fakes.protections import InMemoryProtectionStore
@@ -51,14 +52,18 @@ class World:
     broker: FakeBroker = field(default_factory=FakeBroker)
     stops: FakeStopBroker = field(default_factory=FakeStopBroker)
     orders: InMemoryOrderStore = field(default_factory=InMemoryOrderStore)
-    protections: InMemoryProtectionStore = field(default_factory=InMemoryProtectionStore)
+    protections: InMemoryProtectionStore = field(init=False)
     trades: InMemoryTradeStore = field(default_factory=InMemoryTradeStore)
+    closes: InMemoryCloseReconciliationStore = field(
+        default_factory=InMemoryCloseReconciliationStore
+    )
     reservations: InMemoryReservationStore = field(default_factory=InMemoryReservationStore)
     notifier: FakeNotifier = field(default_factory=FakeNotifier)
     lock: threading.RLock = field(default_factory=threading.RLock)
     config: PatrolConfig = field(default_factory=PatrolConfig)
 
     def __post_init__(self) -> None:
+        self.protections = InMemoryProtectionStore(self.clock)  # 带时钟：收盘对账要读历史
         self.execution = self._execution()
         self.risk = RiskService(self.reservations, self.clock, NYSE, RiskConfig())
         self.notification = NotificationService(self.notifier, self.clock, NotificationConfig())
@@ -105,6 +110,7 @@ class World:
             store=self.orders,
             protections=self.protections,
             trades=self.trades,
+            closes=self.closes,
             clock=self.clock,
             calendar=NYSE,
             config=ExecutionConfig(),

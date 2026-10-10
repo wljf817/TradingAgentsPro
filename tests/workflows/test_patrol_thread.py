@@ -8,14 +8,20 @@
 import logging
 import threading
 from collections.abc import Iterator
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pytest
 
 from tests.fakes.broker import FakeBroker
 from tests.modules.execution.builders import baseline_plan
-from tests.workflows.builders import World, p5
-from tradingagentspro.modules.execution import BrokerOrder, BrokerOrderStatus, Order, OrderStatus
+from tests.workflows.builders import World, at, p5
+from tradingagentspro.modules.execution import (
+    BrokerOrder,
+    BrokerOrderStatus,
+    Order,
+    OrderStatus,
+    WorkingOrder,
+)
 from tradingagentspro.workflows.patrol import PatrolConfig, SessionPatrol
 
 SHORT = PatrolConfig(interval=timedelta(seconds=0.3))
@@ -171,6 +177,48 @@ def test_stopping_during_an_item_finishes_that_item(stop_later: list[SessionPatr
     assert ("find", str(plan5.plan_id)) not in world.broker.calls
     assert ("all_positions", "*") not in world.broker.calls
     assert world.remaining(p1) == 100  # 没有同步预留
+
+
+class _SlowListing(FakeBroker):
+    """slow 为真时，读取全部挂单停住，直到测试放行。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.slow = False
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def working_orders(self) -> tuple[WorkingOrder, ...]:
+        if self.slow:
+            self.entered.set()
+            self.release.wait(WAIT)
+        return super().working_orders()
+
+
+def test_stopping_during_the_close_reconciliation(stop_later: list[SessionPatrol]) -> None:
+    """close-reconciliation spec「停止时正在收盘对账」：对账做完、记录保存、结果推送以后才结束。"""
+    broker = _SlowListing()
+    world = World(broker=broker, config=LONG)
+    p1 = baseline_plan()
+    world.submit(p1)
+    world.broker.update(str(p1.plan_id), BrokerOrderStatus.FILLED, 100, "50")
+    world.broker.positions["BBB"] = 100
+    world.execution.track(p1.plan_id)
+    world.clock.set(at(20, 10))
+    broker.slow = True
+    patrol = _start(_CountingPatrol(world, LONG), stop_later)
+    assert broker.entered.wait(WAIT)
+
+    stopper = _stop_in_background(patrol)
+    _pause(0.2)
+    assert stopper.is_alive()  # 还在等收盘对账这一项
+    assert world.closes.get(date(2026, 10, 14)) is None
+    broker.release.set()
+    stopper.join(WAIT)
+
+    assert not stopper.is_alive()
+    assert world.closes.get(date(2026, 10, 14)) is not None
+    assert len(world.notifier.alerts) == 1
 
 
 # 一轮里的失败

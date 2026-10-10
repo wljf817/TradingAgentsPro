@@ -47,7 +47,7 @@ def _version_columns(key: str, key_type: str) -> dict[str, tuple[str, bool]]:
 
 def test_upgrading_an_empty_database_creates_the_tables(engine: Engine) -> None:
     """spec「空数据库升级到最新版本」：表的列和主键见 add-state-store 和 add-trade-records 的
-    design D1。
+    design D1、add-close-reconciliation 的 design D6。
     """
     migrate(engine)
 
@@ -57,6 +57,7 @@ def test_upgrading_an_empty_database_creates_the_tables(engine: Engine) -> None:
         "execution_orders",
         "execution_protections",
         "execution_trades",
+        "execution_close_reconciliations",
     }
     assert _columns(engine, "risk_reservations") == _version_columns("plan_id", "UUID") | {
         "active": ("BOOLEAN", False)
@@ -71,6 +72,7 @@ def test_upgrading_an_empty_database_creates_the_tables(engine: Engine) -> None:
     assert _columns(engine, "execution_trades") == _version_columns(
         "client_order_id", "VARCHAR"
     ) | {"traded": ("BOOLEAN", False)}
+    assert _columns(engine, "execution_close_reconciliations") == _version_columns("day", "DATE")
     keys = {
         table: inspect(engine).get_pk_constraint(table)["constrained_columns"]
         for table in _tables(engine) - {"alembic_version"}
@@ -80,6 +82,7 @@ def test_upgrading_an_empty_database_creates_the_tables(engine: Engine) -> None:
         "execution_orders": ["plan_id", "version"],
         "execution_protections": ["symbol", "version"],
         "execution_trades": ["client_order_id", "version"],
+        "execution_close_reconciliations": ["day", "version"],
     }
     with engine.connect() as connection:
         timestamp: str = connection.execute(
@@ -138,4 +141,5 @@ def test_table_names_start_with_their_module(engine: Engine) -> None:
         "execution_orders": ["execution"],
         "execution_protections": ["execution"],
         "execution_trades": ["execution"],
+        "execution_close_reconciliations": ["execution"],
     }

@@ -1,7 +1,8 @@
-"""盘中巡检：每一轮跟进全部未结束的订单、按订单同步预留、对齐持仓的止损单，发现无保护仓位时告警。
+"""盘中巡检：每一轮跟进全部未结束的订单、按订单同步预留、对齐持仓的止损单，发现无保护仓位时告警，
+最后在到期时做收盘对账。
 
-见 session-patrol spec 和 add-session-patrol 的 design。执行模块和风控里会改变状态的调用都拿着
-全程序共用的那把锁，一项一项地拿；推送告警时不拿锁。
+见 session-patrol spec、close-reconciliation spec「巡检里的收盘对账」和 add-session-patrol 的
+design。执行模块和风控里会改变状态的调用都拿着全程序共用的那把锁，一项一项地拿；推送告警时不拿锁。
 """
 
 import logging
@@ -18,34 +19,16 @@ from tradingagentspro.modules.execution import (
     BrokerUnavailableError,
     ExecutionService,
     Order,
-    OrderSide,
-    OrderStatus,
     Protection,
     StopOrder,
     StopStatus,
 )
 from tradingagentspro.modules.notification import NotificationService
 from tradingagentspro.modules.risk import RiskService
+from tradingagentspro.workflows.names import ORDER_STATUSES, SIDES, STOP_STATUSES
+from tradingagentspro.workflows.reconciliation import close_reconcile_if_due
 
 _log = logging.getLogger(__name__)
-
-_SIDES = {OrderSide.BUY: "买入", OrderSide.SELL: "卖出"}
-_ORDER_STATUSES = {
-    OrderStatus.PENDING: "待提交",
-    OrderStatus.SUBMITTED: "已提交",
-    OrderStatus.PARTIALLY_FILLED: "部分成交",
-    OrderStatus.FILLED: "全部成交",
-    OrderStatus.CANCELLED: "已撤销",
-    OrderStatus.EXPIRED: "已过期",
-    OrderStatus.REJECTED: "已拒绝",
-    OrderStatus.UNKNOWN: "状态未知",
-}
-_STOP_STATUSES = {
-    StopStatus.PENDING: "还没挂出去",
-    StopStatus.WORKING: "挂着",
-    StopStatus.UNKNOWN: "状态未知",
-    StopStatus.ENDED: "已经结束",
-}
 
 
 class PatrolConfig(BaseModel):
@@ -114,13 +97,15 @@ class SessionPatrol:
             self._stopping.wait(seconds)
 
     def run_round(self) -> None:
-        """做一轮：跟进订单、同步预留、对齐止损单，见 session-patrol spec「每一轮」。
+        """做一轮：跟进订单、同步预留、对齐止损单，见 session-patrol spec「每一轮」；最后是收盘
+        对账，见 close-reconciliation spec「巡检里的收盘对账」。
 
         停止以后不再开始新的一项，直接返回。
         """
         tracked = self._track_orders()
         self._sync_reservations()
         self._align_stops(tracked)
+        self._close_reconcile()
 
     def _track_orders(self) -> set[str]:
         """第 1 步：每一笔未结束的订单按创建的先后各跟进一次，有变化时写日志。
@@ -193,6 +178,16 @@ class SessionPatrol:
                 self._alert(symbol, protection)
         self._forget(set(symbols))
 
+    def _close_reconcile(self) -> None:
+        """最后一项：收盘对账到期就做，见 add-close-reconciliation 的 design D2。
+
+        放在对齐止损单之后：同一轮刚跟进、对齐过，收盘对账补上的才算差异。
+        """
+        if self._stopping.is_set():
+            return
+        with self._item("收盘对账"):
+            close_reconcile_if_due(self._execution, self._notification, self._lock)
+
     def _log_stop(self, symbol: str, protection: Protection | None) -> None:
         """当前止损单和上次看到的不同时写一条 INFO，第一次看到的也写，见 design D9。"""
         stop = protection.stop if protection else None
@@ -248,7 +243,7 @@ def unprotected_text(symbol: str, since: datetime) -> str:
 def _describe_stop(stop: StopOrder) -> str:
     """止损单的日志内容：股票、客户端订单 ID、状态、股数、止损价。"""
     return (
-        f"{stop.symbol} {stop.client_order_id}：{_STOP_STATUSES[stop.status]}，"
+        f"{stop.symbol} {stop.client_order_id}：{STOP_STATUSES[stop.status]}，"
         f"{stop.quantity} 股，止损价 {stop.stop_price}"
     )
 
@@ -260,10 +255,10 @@ def _log_order(before: Order, after: Order) -> None:
     _log.info(
         "订单 %s %s %s：%s → %s，累计成交 %d / %d",
         after.symbol,
-        _SIDES[after.side],
+        SIDES[after.side],
         after.plan_id,
-        _ORDER_STATUSES[before.status],
-        _ORDER_STATUSES[after.status],
+        ORDER_STATUSES[before.status],
+        ORDER_STATUSES[after.status],
         after.filled,
         after.quantity,
     )

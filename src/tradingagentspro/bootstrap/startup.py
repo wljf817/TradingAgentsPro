@@ -1,7 +1,8 @@
-"""启动对账和第一次健康判定：启动时、Discord 和 DBOS 之前各做一次，只写日志、不发告警。
+"""启动对账和第一次健康判定：启动时、Discord 和 DBOS 之前各做一次，这里只写日志。
 
 见 bootstrap spec「启动对账」「第一次健康判定」和 add-bootstrap-wiring 的 design D7。
-告警由「收盘对账」「健康监控接线」在 Discord 启动以后补上。
+启动对账有不一致时的告警由 app.py 在 Discord 连上以后发出（add-close-reconciliation 的
+design D10）；健康的告警由「健康监控接线」补上。
 """
 
 import logging

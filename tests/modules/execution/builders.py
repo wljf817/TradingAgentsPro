@@ -11,12 +11,14 @@ from uuid import UUID
 
 from tests.fakes.broker import FakeBroker
 from tests.fakes.calendar import sample_nyse_calendar
+from tests.fakes.closes import InMemoryCloseReconciliationStore
 from tests.fakes.protections import InMemoryProtectionStore
 from tests.fakes.stops import FakeStopBroker
 from tests.fakes.trades import InMemoryTradeStore
 from tradingagentspro.contracts.risk import RiskDecision, RiskOutcome
 from tradingagentspro.contracts.trade_plan import OrderType, TradeAction, TradePlan
 from tradingagentspro.modules.execution import (
+    CloseReconciliationStore,
     ExecutionConfig,
     ExecutionService,
     OrderStore,
@@ -160,10 +162,11 @@ def execution_service(
     protections: ProtectionStore | None = None,
     trades: TradeStore | None = None,
     *,
+    closes: CloseReconciliationStore | None = None,
     reconciled: bool = True,
 ) -> ExecutionService:
-    """执行用例：纽交所样例日历；没有指定的配置用默认配置，止损单接口、止损保护存储和交易记录存储
-    用新的替身。
+    """执行用例：纽交所样例日历；没有指定的配置用默认配置，止损单接口、止损保护存储、交易记录存储
+    和收盘对账记录存储用新的替身。
 
     reconciled 为真时，新建以后先对账一次，再去掉这次对账留在替身里的调用记录，相当于各个 spec
     基准数据里的"执行模块已经完成一次没有不一致的对账"。重启的场景传 False。
@@ -175,6 +178,7 @@ def execution_service(
         store=store,
         protections=protections or InMemoryProtectionStore(),
         trades=trades or InMemoryTradeStore(),
+        closes=closes or InMemoryCloseReconciliationStore(),
         clock=clock,
         calendar=NYSE,
         config=config or ExecutionConfig(),

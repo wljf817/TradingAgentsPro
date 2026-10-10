@@ -1,10 +1,12 @@
 """只追加的版本表：状态库所有表共用的写法，见 add-state-store 的 design D1、D2、D4、D5。
 
-每张表按键保存记录的各个版本：内容有变化时写入一个新版本，读取时取最新版本。
+每张表按键保存记录的各个版本：内容有变化时写入一个新版本，读取时取最新版本；需要时也能读出
+一段时间里用过的版本。
 记录整份存成 JSONB；筛选列在保存时从记录算出，列出记录时按最新版本筛选。
 """
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 
 from pydantic import TypeAdapter
@@ -19,6 +21,7 @@ from sqlalchemy import (
     create_engine,
     insert,
     select,
+    union_all,
 )
 from sqlalchemy.dialects.postgresql import JSONB, distinct_on
 
@@ -115,6 +118,27 @@ class VersionedStore[T]:
             .where(*(newest.c[name] == value for name, value in where.items()))
             .order_by(newest.c[self._key.name])
         )
+        with self._engine.connect() as connection:
+            rows: Sequence[Any] = connection.execute(query).scalars().all()
+        return tuple(self._adapter.validate_python(data) for data in rows)
+
+    def history(self, since: datetime) -> tuple[T, ...]:
+        """since 以来用过的版本：每个键在 since 时的版本，加上写入时刻不早于 since 的全部版本。
+
+        每个键在 since 时的版本是写入时刻早于 since 的最新版本。结果按键、版本号排序。
+        见 state-store spec「读取一段时间里的版本」。
+        """
+        table = self._table
+        at_since = (
+            select(self._key, table.c.version, table.c.data)
+            .where(table.c.recorded_at < since)
+            .ext(distinct_on(self._key))
+            .order_by(self._key, table.c.version.desc())
+            .subquery()
+        )
+        later = select(self._key, table.c.version, table.c.data).where(table.c.recorded_at >= since)
+        used = union_all(select(at_since), later).subquery()
+        query = select(used.c.data).order_by(used.c[self._key.name], used.c.version)
         with self._engine.connect() as connection:
             rows: Sequence[Any] = connection.execute(query).scalars().all()
         return tuple(self._adapter.validate_python(data) for data in rows)

@@ -1,4 +1,6 @@
-"""执行模块的阈值和默认值，含义见 order-lifecycle spec「执行配置」。"""
+"""执行模块的阈值和默认值，含义见 order-lifecycle spec「执行配置」和 close-reconciliation spec
+「收盘对账配置」。
+"""
 
 from datetime import timedelta
 
@@ -17,3 +19,5 @@ class ExecutionConfig(BaseModel):
     # 同一只股票的买单和券商端止损单不同时挂着，见 stop-protection spec「买单和止损单错开」；
     # 给不允许两者同时挂着的券商打开，比如 Alpaca
     stagger_buys_and_stops: bool = False
+    # 收盘对账在收盘以后等这么久才做：收盘截止的订单要先由巡检撤掉、结束
+    close_reconcile_delay: timedelta = Field(default=timedelta(minutes=10), gt=timedelta(0))

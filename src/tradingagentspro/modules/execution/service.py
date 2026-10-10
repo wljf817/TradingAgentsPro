@@ -1,10 +1,13 @@
-"""执行模块的用例：提交订单，跟进订单到终态，提前撤单，对齐止损单，和券商对账，记交易记录。
+"""执行模块的用例：提交订单，跟进订单到终态，提前撤单，对齐止损单，和券商对账，记交易记录，
+每个交易日收盘后对账一次并记下结果。
 
-见 order-lifecycle spec、stop-protection spec、reconciliation spec 和 trade-records spec。
+见 order-lifecycle spec、stop-protection spec、reconciliation spec、trade-records spec 和
+close-reconciliation spec。
 """
 
 from collections.abc import Iterable
-from datetime import datetime
+from dataclasses import replace
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -12,6 +15,15 @@ from tradingagentspro.contracts.risk import RiskDecision
 from tradingagentspro.contracts.trade_plan import TradePlan
 from tradingagentspro.modules.execution.config import ExecutionConfig
 from tradingagentspro.modules.execution.domain.account import Account, account_of
+from tradingagentspro.modules.execution.domain.close import (
+    CloseReconciliation,
+    close_day,
+    close_streak,
+    close_window_start,
+    leftover_orders,
+    new_stops,
+    unprotected_spells,
+)
 from tradingagentspro.modules.execution.domain.order import (
     Order,
     OrderPausedError,
@@ -48,6 +60,7 @@ from tradingagentspro.modules.execution.domain.trade import trade_of_order, trad
 from tradingagentspro.modules.execution.ports import (
     Broker,
     BrokerUnavailableError,
+    CloseReconciliationStore,
     OrderRejectedError,
     OrderStore,
     ProtectionStore,
@@ -72,6 +85,7 @@ class ExecutionService:
         store: OrderStore,
         protections: ProtectionStore,
         trades: TradeStore,
+        closes: CloseReconciliationStore,
         clock: Clock,
         calendar: TradingCalendar,
         config: ExecutionConfig,
@@ -81,6 +95,7 @@ class ExecutionService:
         self._store = store
         self._protections = protections
         self._trades = trades
+        self._closes = closes
         self._clock = clock
         self._calendar = calendar
         self._config = config
@@ -221,6 +236,50 @@ class ExecutionService:
         )
         self._last = Reconciliation(stray, extra, unexplained)
         return self._last
+
+    def close_due(self) -> date | None:
+        """现在该做收盘对账的交易日；不到时候、或者这个交易日已经有记录时为 None。
+
+        只读交易日历和收盘对账记录，不调用券商，见 close-reconciliation spec「收盘对账的时机」。
+        """
+        day = close_day(self._calendar, self._clock.now(), self._config.close_reconcile_delay)
+        if day is None or self._closes.get(day) is not None:
+            return None
+        return day
+
+    def close_reconcile(self, day: date) -> CloseReconciliation:
+        """做 day 的收盘对账并保存记录，见 close-reconciliation spec「收盘对账的步骤」和
+        add-close-reconciliation 的 design D4。
+
+        这一天已经有记录时直接返回它，不调用券商。读券商的全部持仓、对账第 1 步的读取超时或
+        断线时抛 BrokerUnavailableError，什么都没改，不保存记录。调用方拿着锁，对账以前记下的
+        情况和对账以后的才可以比较。
+        """
+        done = self._closes.get(day)
+        if done is not None:
+            return done
+        holdings = len(self._broker.all_positions())
+        before = self._store.open_orders()
+        used = {p.symbol: p.used for p in self._protections.all()}
+        paused = self._last is not None and not self._last.clean
+        result = self.reconcile()
+        after = {o.plan_id: self._store.get(o.plan_id) or o for o in before}
+        since = close_window_start(self._calendar, day, self._config.close_reconcile_delay)
+        record = CloseReconciliation(
+            day=day,
+            finished_at=self._clock.now(),
+            result=result,
+            leftover_orders=leftover_orders(before, after),
+            new_stops=new_stops(used, self._protections.all()),
+            unprotected=unprotected_spells(self._protections.history(since)),
+            holdings=holdings,
+            resumed=paused and result.clean,
+            streak=0,
+        )
+        previous = self._closes.get(self._calendar.previous_session(day).day)
+        record = replace(record, streak=close_streak(record, previous))
+        self._closes.save(record)
+        return record
 
     def open_orders(self) -> tuple[Order, ...]:
         """全部没有进入终态的订单，按创建的先后；只读状态库，不调用券商。

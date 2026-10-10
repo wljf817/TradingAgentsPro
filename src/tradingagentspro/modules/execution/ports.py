@@ -1,11 +1,15 @@
-"""执行模块需要的外部接口：券商、券商的止损单、订单存储、止损保护存储和交易记录存储。"""
+"""执行模块需要的外部接口：券商、券商的止损单、订单存储、止损保护存储、交易记录存储和收盘对账
+记录的存储。
+"""
 
 from collections.abc import Mapping
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
 
 from tradingagentspro.modules.execution.domain.account import BrokerAccount
+from tradingagentspro.modules.execution.domain.close import CloseReconciliation
 from tradingagentspro.modules.execution.domain.order import BrokerOrder, Order
 from tradingagentspro.modules.execution.domain.protection import Protection, StopOrder, StopReport
 from tradingagentspro.modules.execution.domain.reconciliation import WorkingOrder
@@ -137,6 +141,17 @@ class ProtectionStore(Protocol):
         """需要对齐的记录：Protection.is_active 为真的那些。"""
         ...
 
+    def all(self) -> tuple[Protection, ...]:
+        """全部股票的最新记录，按代码排序。"""
+        ...
+
+    def history(self, since: datetime) -> tuple[Protection, ...]:
+        """since 以来用过的记录：每只股票在 since 时的记录，加上 since 以后保存的全部版本。
+
+        按代码、保存的先后排序，见 state-store spec「读取一段时间里的版本」。
+        """
+        ...
+
     def save(self, protection: Protection) -> None:
         """保存这只股票的最新记录。"""
         ...
@@ -159,4 +174,19 @@ class TradeStore(Protocol):
 
     def save(self, trade: Trade) -> None:
         """保存这条交易记录的最新状态。"""
+        ...
+
+
+class CloseReconciliationStore(Protocol):
+    """收盘对账记录的存储：按交易日保存。
+
+    数据库实现只追加不覆盖，见 state-store spec 和 close-reconciliation spec「收盘对账记录」。
+    """
+
+    def get(self, day: date) -> CloseReconciliation | None:
+        """这个交易日的记录；没有时为 None。"""
+        ...
+
+    def save(self, record: CloseReconciliation) -> None:
+        """保存这个交易日的记录。"""
         ...

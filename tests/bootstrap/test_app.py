@@ -48,6 +48,7 @@ from tradingagentspro.modules.execution import (
     Order,
     OrderSide,
     OrderStatus,
+    PostgresCloseReconciliationStore,
     PostgresOrderStore,
     StopOrder,
     StopStatus,
@@ -243,13 +244,14 @@ def test_empty_database(log_stream: io.StringIO, database_url: str) -> None:
         "execution_orders",
         "execution_protections",
         "execution_trades",
+        "execution_close_reconciliations",
     }
     assert "dbos" in _schemas(database_url)
     engine = _connect(database_url)
     try:
         with engine.connect() as connection:
             revision = connection.execute(text("select version_num from alembic_version"))
-            assert revision.scalar_one() == "0002"
+            assert revision.scalar_one() == "0003"
             dbos_tables = inspect(engine).get_table_names(schema="dbos")
     finally:
         engine.dispose()
@@ -383,8 +385,26 @@ def test_paper_fees_use_the_risk_commission(commission: Decimal | None) -> None:
     assert stop_report is not None and stop_report.fees == expected
 
 
+def _alerts(world: World) -> list[str]:
+    """Discord 收到的消息的文字，去掉开头 @ 用户的部分。"""
+    return [sent.content.split(" ", 1)[1] for sent in world.gateway.sent]
+
+
+def test_no_alert_without_mismatch(log_stream: io.StringIO, database_url: str) -> None:
+    """spec「没有不一致」：Discord 没有收到告警。"""
+    world = World()
+
+    with ExitStack() as stack:
+        start(environment(database_url), world.externals(), BootstrapConfig(), stack)
+
+        assert world.gateway.sent == []
+    assert "启动对账：没有不一致" in _messages(log_stream)
+
+
 def test_unexplained_position_at_startup(log_stream: io.StringIO, database_url: str) -> None:
-    """spec「来历不明的持仓」：启动完成，WARNING 写明 CCC 100 股，结果保留下来。"""
+    """spec「来历不明的持仓」：启动完成，WARNING 写明 CCC 100 股，结果保留下来；
+    Discord 连上以后、DBOS 启动以前推送告警。
+    """
     world = World()
     world.alpaca.hold("CCC", "100")
 
@@ -392,8 +412,70 @@ def test_unexplained_position_at_startup(log_stream: io.StringIO, database_url: 
         app = start(environment(database_url), world.externals(), BootstrapConfig(), stack)
 
         assert app.reconciliation.unexplained == (("CCC", 100),)
+        [alert] = _alerts(world)
     [warning] = _messages(log_stream, "WARNING")
     assert "启动对账有不一致" in warning and "CCC" in warning
+    assert alert.split("\n") == [
+        "启动对账有不一致：",
+        "- 来历不明的持仓：CCC 100 股",
+        "已暂停开仓，之后的对账没有不一致时恢复",
+    ]
+    assert _in_order(
+        _messages(log_stream), ["Discord 已连接", "推送告警：启动对账有不一致", "DBOS 已启动"]
+    )
+
+
+def test_stray_order_at_startup(log_stream: io.StringIO, database_url: str) -> None:
+    """spec「不认得的挂单」：告警写明 DDD、X1，挂单没有被撤销。"""
+    world = World()
+    world.alpaca.add_order(id="O9", client_order_id="X1", symbol="DDD", status="new")
+
+    with ExitStack() as stack:
+        start(environment(database_url), world.externals(), BootstrapConfig(), stack)
+
+        [alert] = _alerts(world)
+    assert "- 不认得的挂单：DDD，客户端订单 ID X1，券商订单号 O9" in alert.split("\n")
+    assert ("DELETE", "/v2/orders/O9") not in world.alpaca_requests()
+
+
+def test_startup_alert_that_cannot_be_sent(log_stream: io.StringIO, database_url: str) -> None:
+    """spec「告警发不出去」：错误日志含告警的文字和原因，照常启动完成。"""
+    world = World()
+    world.alpaca.hold("CCC", "100")
+    world.gateway.fail_next_send(NotificationUnavailableError("Discord：503 Service Unavailable"))
+
+    assert _run(environment(database_url), world) == 0
+
+    [error] = _messages(log_stream, "ERROR")
+    assert "启动对账有不一致" in error and "503 Service Unavailable" in error
+    assert "启动完成" in _messages(log_stream)
+
+
+def test_close_reconciliation_after_starting_past_the_close(
+    log_stream: io.StringIO, database_url: str
+) -> None:
+    """close-reconciliation spec「开盘以前重启时补做」：收盘加延迟以后启动，巡检的第一轮做这一天的
+    收盘对账，记录存进状态库，Discord 收到结果。
+    """
+    world = World(clock=FakeClock(datetime(2026, 10, 14, 20, 15, tzinfo=UTC)))
+    day = date(2026, 10, 14)
+
+    with ExitStack() as stack:
+        start(environment(database_url), world.externals(), BootstrapConfig(), stack)
+        for _ in range(100):  # 最多等 10 秒
+            if world.gateway.sent:
+                break
+            threading.Event().wait(0.1)
+
+    engine = _connect(database_url)
+    try:
+        record = PostgresCloseReconciliationStore(engine, world.clock).get(day)
+    finally:
+        engine.dispose()
+    assert record is not None
+    assert (record.clean, record.holdings, record.streak) == (True, 0, 0)
+    assert _alerts(world) == ["收盘对账 2026-10-14：没有差异，收盘时没有持仓，连续天数清零"]
+    assert _messages(log_stream, "ERROR") == []
 
 
 def test_opend_down_in_session(log_stream: io.StringIO, database_url: str) -> None:

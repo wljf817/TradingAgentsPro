@@ -150,17 +150,17 @@ def close_reconcile(self, day: date) -> CloseReconciliation:
     if done is not None:
         return done
     holdings = len(self._broker.all_positions())
-    orders = self._store.open_orders()
+    before = self._store.open_orders()
     used = {p.symbol: p.used for p in self._protections.all()}
     paused = self._last is not None and not self._last.clean
     result = self.reconcile()
-    after = {o.plan_id: self._store.get(o.plan_id) for o in orders}
+    after = {o.plan_id: self._store.get(o.plan_id) or o for o in before}
     since = close_window_start(self._calendar, day, self._config.close_reconcile_delay)
     record = CloseReconciliation(
         day=day,
         finished_at=self._clock.now(),
         result=result,
-        leftover_orders=leftover_orders(orders, after),
+        leftover_orders=leftover_orders(before, after),
         new_stops=new_stops(used, self._protections.all()),
         unprotected=unprotected_spells(self._protections.history(since)),
         holdings=holdings,
@@ -172,8 +172,6 @@ def close_reconcile(self, day: date) -> CloseReconciliation:
     self._closes.save(record)
     return record
 ```
-
-（示意；`after` 的值类型在实现里按 `Order` 处理，订单不会被删除。）
 
 - 读持仓、记下订单和止损保护、看暂停状态都在对账以前：对账以前出错时什么都没改，下一轮可以原样重做
 - 收盘时没结束的订单：对账以前还没结束的每一笔，不论对账有没有结束它。不只记「券商查不到而结束的」，原因有两个：`end_missing` 的结果和券商回报撤销的结果分不出来；而且巡检每 30 秒把查不到的订单重新记为状态未知，收盘对账在一轮的最后，这样的订单总是没满等待时长，对账不会结束它，只看「对账结束的」就会漏掉它。收盘加 10 分钟以后，截止时刻不晚于收盘的订单正常都已经结束，还没结束就说明这一天的订单没有了结，算差异合理。这比已定的「因为券商查不到而结束的订单」宽，包含它

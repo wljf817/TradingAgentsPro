@@ -1,13 +1,13 @@
-"""订单存储、止损保护存储和交易记录存储的测试：state-store spec「读取最新版本」里订单表和
-止损保护表那两行，以及「记录原样读回」和「重启后读到同样的状态」；trade-records spec
-「保存交易记录」。
+"""订单存储、止损保护存储、交易记录存储和收盘对账记录存储的测试：state-store spec「读取最新版本」
+里订单表和止损保护表那两行，「读取一段时间里的版本」，以及「记录原样读回」和「重启后读到同样的
+状态」；trade-records spec「保存交易记录」；close-reconciliation spec「收盘对账记录」。
 
 列出记录的场景同时测内存实现和数据库实现，原样读回和重启只测数据库实现。
 数据库实现的用例需要开着 Docker，内存实现的不需要。
 """
 
 from dataclasses import replace
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -16,6 +16,7 @@ import pytest
 from sqlalchemy import Engine, text
 
 from tests.fakes.clock import FakeClock
+from tests.fakes.closes import InMemoryCloseReconciliationStore
 from tests.fakes.orders import InMemoryOrderStore
 from tests.fakes.protections import InMemoryProtectionStore
 from tests.fakes.trades import InMemoryTradeStore
@@ -27,19 +28,28 @@ from tests.modules.execution.builders import (
     decision,
 )
 from tradingagentspro.modules.execution import (
+    CloseReconciliation,
+    CloseReconciliationStore,
+    LeftoverOrder,
+    NewStop,
     Order,
+    OrderSide,
     OrderStatus,
     OrderStore,
+    PostgresCloseReconciliationStore,
     PostgresOrderStore,
     PostgresProtectionStore,
     PostgresTradeStore,
     Protection,
     ProtectionStore,
+    Reconciliation,
     StopOrder,
     StopStatus,
     Trade,
     TradeKind,
     TradeStore,
+    UnprotectedSpell,
+    WorkingOrder,
     new_order,
 )
 from tradingagentspro.modules.statestore import connect
@@ -366,5 +376,149 @@ def test_a_new_trade_store_reads_the_same_trades_after_a_restart(database: Engin
     try:
         store = PostgresTradeStore(restarted, clock)
         assert store.traded() == (_trade("P1", OrderStatus.FILLED, 100),)
+    finally:
+        restarted.dispose()
+
+
+# 止损保护表：全部记录和历史，收盘对账用，见 add-close-reconciliation 的 design D7
+
+
+def _day(day: int, hour: int, minute: int = 0) -> datetime:
+    return datetime(2026, 10, day, hour, minute, tzinfo=UTC)
+
+
+@pytest.fixture(params=["memory", "postgres"])
+def timed_protections(request: pytest.FixtureRequest) -> tuple[ProtectionStore, FakeClock]:
+    """带测试时钟的止损保护存储：保存的时刻由时钟决定，内存实现和数据库实现都测。"""
+    clock = FakeClock(BASELINE_NOW)
+    if request.param == "memory":
+        return InMemoryProtectionStore(clock), clock
+    database: Engine = request.getfixturevalue("database")
+    return PostgresProtectionStore(database, clock), clock
+
+
+def test_all_protections(protections: ProtectionStore) -> None:
+    """全部股票的最新记录，包括不需要对齐的，按代码排序。"""
+    ended = Protection("BBB", used=1, stop=_stop("BBB", 1, StopStatus.ENDED))
+    aaa = Protection("AAA", used=1, stop=_stop("AAA", 1, StopStatus.WORKING))
+    protections.save(Protection("BBB", used=1, stop=_stop("BBB", 1, StopStatus.WORKING)))
+    protections.save(ended)
+    protections.save(aaa)
+
+    assert protections.all() == (aaa, ended)
+
+
+def test_protection_history(timed_protections: tuple[ProtectionStore, FakeClock]) -> None:
+    """state-store spec「按时刻读历史」，用止损保护表。"""
+    store, clock = timed_protections
+    versions = [
+        (_day(13, 15), Protection("BBB", used=1)),
+        (_day(13, 19), Protection("BBB", used=2)),
+        (_day(14, 15), Protection("BBB", used=3, unprotected_since=_day(14, 15))),
+        (_day(14, 16), Protection("CCC", used=1)),
+        (_day(12, 15), Protection("DDD", used=1)),
+    ]
+    for at, protection in versions:
+        clock.set(at)
+        store.save(protection)
+
+    assert store.history(_day(13, 20, 10)) == (
+        Protection("BBB", used=2),
+        Protection("BBB", used=3, unprotected_since=_day(14, 15)),
+        Protection("CCC", used=1),
+        Protection("DDD", used=1),
+    )
+
+
+def test_protection_history_skips_unchanged_saves(
+    timed_protections: tuple[ProtectionStore, FakeClock],
+) -> None:
+    """内容没变的保存不写新版本（state-store spec「内容没变时不写入」），历史里也没有它。"""
+    store, clock = timed_protections
+    store.save(Protection("BBB", used=1))
+    clock.set(_day(14, 20, 30))
+    store.save(Protection("BBB", used=1))
+
+    assert store.history(_day(14, 20, 10)) == (Protection("BBB", used=1),)
+
+
+def test_protection_history_of_an_empty_table(
+    timed_protections: tuple[ProtectionStore, FakeClock],
+) -> None:
+    """state-store spec「空表」。"""
+    store, _ = timed_protections
+
+    assert store.history(_day(14, 20, 10)) == ()
+
+
+# 收盘对账表
+
+
+def _close(day: date = date(2026, 10, 14), **changes: Any) -> CloseReconciliation:
+    """一条没有差异的收盘对账记录：1 只持仓，连续天数 1。"""
+    record = CloseReconciliation(
+        day=day,
+        finished_at=datetime.combine(day, datetime.min.time(), UTC).replace(hour=20, minute=10),
+        result=Reconciliation(),
+        leftover_orders=(),
+        new_stops=(),
+        unprotected=(),
+        holdings=1,
+        resumed=False,
+        streak=1,
+    )
+    return replace(record, **changes)
+
+
+@pytest.fixture(params=["memory", "postgres"])
+def closes(request: pytest.FixtureRequest) -> CloseReconciliationStore:
+    """同一组场景同时测内存实现和数据库实现。"""
+    if request.param == "memory":
+        return InMemoryCloseReconciliationStore()
+    database: Engine = request.getfixturevalue("database")
+    return PostgresCloseReconciliationStore(database, FakeClock(BASELINE_NOW))
+
+
+def test_close_records_by_day(closes: CloseReconciliationStore) -> None:
+    """close-reconciliation spec「收盘对账记录」：按交易日保存和读取；没有记录的交易日为空。"""
+    closes.save(_close(date(2026, 10, 13)))
+    closes.save(_close(date(2026, 10, 14), streak=2))
+
+    assert closes.get(date(2026, 10, 14)) == _close(date(2026, 10, 14), streak=2)
+    assert closes.get(date(2026, 10, 13)) == _close(date(2026, 10, 13))
+    assert closes.get(date(2026, 10, 15)) is None
+
+
+def test_close_record_reads_back_unchanged(database: Engine) -> None:
+    """close-reconciliation spec「记录原样读回」。"""
+    record = _close(
+        result=Reconciliation(
+            stray_orders=(WorkingOrder("DDD", "X1", "B9"),),
+            extra_stops=(WorkingOrder("EEE", "X2", "S9"),),
+            unexplained=(("CCC", 100),),
+        ),
+        leftover_orders=(LeftoverOrder(UUID(int=1), "BBB", OrderSide.BUY, OrderStatus.UNKNOWN),),
+        new_stops=(NewStop("BBB", "BBB-STOP-2"),),
+        unprotected=(UnprotectedSpell("BBB", _day(14, 15)),),
+        holdings=2,
+        resumed=True,
+        streak=0,
+    )
+    store = PostgresCloseReconciliationStore(database, FakeClock(BASELINE_NOW))
+    store.save(record)
+
+    assert store.get(date(2026, 10, 14)) == record
+
+
+def test_a_new_close_store_reads_the_same_records_after_a_restart(database: Engine) -> None:
+    """close-reconciliation spec「收盘对账记录」：重启以后读到之前保存的记录。"""
+    clock = FakeClock(BASELINE_NOW)
+    PostgresCloseReconciliationStore(database, clock).save(_close())
+
+    restarted = connect(database.url.render_as_string(hide_password=False))
+    try:
+        assert PostgresCloseReconciliationStore(restarted, clock).get(date(2026, 10, 14)) == (
+            _close()
+        )
     finally:
         restarted.dispose()

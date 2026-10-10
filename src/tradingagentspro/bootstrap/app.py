@@ -2,7 +2,8 @@
 
 见 bootstrap spec「启动顺序」「启动失败」「模拟盘的装配」「DBOS」「停止」，以及 add-bootstrap-wiring
 的 design D1、D5、D6、D8、D10、D11。DBOS launch 之后开始盘中巡检，停止时最先停它，见
-add-session-patrol 的 design D12。以后的流程变更在 start 里 DBOS launch 之前注册工作流，
+add-session-patrol 的 design D12。启动对账有不一致时，Discord 连上以后推送告警，见
+add-close-reconciliation 的 design D10。以后的流程变更在 start 里 DBOS launch 之前注册工作流，
 从 TradingApp.lock 取锁。
 """
 
@@ -55,6 +56,7 @@ from tradingagentspro.modules.execution import (
     Broker,
     ExecutionConfig,
     ExecutionService,
+    PostgresCloseReconciliationStore,
     PostgresOrderStore,
     PostgresProtectionStore,
     PostgresTradeStore,
@@ -70,6 +72,7 @@ from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.ids import IdGenerator
 from tradingagentspro.shared.trading_calendar import TradingCalendar
 from tradingagentspro.workflows.patrol import PatrolConfig, SessionPatrol
+from tradingagentspro.workflows.reconciliation import startup_text
 
 _log = logging.getLogger(__name__)
 
@@ -210,6 +213,7 @@ def _assemble(
         PostgresOrderStore(engine, clock),
         PostgresProtectionStore(engine, clock),
         PostgresTradeStore(engine, clock),
+        PostgresCloseReconciliationStore(engine, clock),
         clock,
         calendar,
         execution_config,
@@ -272,6 +276,8 @@ def start(
         parts.notifier.start()
         on_stop(stack, "Discord", parts.notifier.close)
         _log.info("Discord 已连接")
+    if not reconciliation.clean:  # 告警发不出去时只写错误日志，不算启动失败
+        parts.notification.alert(startup_text(reconciliation))
     with step("启动 DBOS"):
         url = settings.database_url.get_secret_value()
         DBOS(config={"name": APP_NAME, "system_database_url": url})

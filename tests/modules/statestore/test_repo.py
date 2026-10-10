@@ -239,6 +239,61 @@ def test_listing_is_sorted_by_key(engine: Engine, clock: FakeClock) -> None:
     assert [note.key for note in store.latest()] == ["P1", "P2", "P3"]
 
 
+# 读取一段时间里的版本
+
+
+def _save_at(store: VersionedStore[Note], clock: FakeClock, at: datetime, note: Note) -> None:
+    clock.set(at)
+    _save(store, note)
+
+
+def _day(day: int, hour: int, minute: int = 0) -> datetime:
+    return datetime(2026, 10, day, hour, minute, tzinfo=UTC)
+
+
+def test_history_since_a_moment(engine: Engine, clock: FakeClock) -> None:
+    """spec「按时刻读历史」：每个键在 T 时的版本加上 T 以后的全部版本，更早的旧版本不给出。"""
+    store = _store(engine, clock)
+    _save_at(store, clock, _day(13, 15), Note("BBB", "v1"))
+    _save_at(store, clock, _day(13, 19), Note("BBB", "v2"))
+    _save_at(store, clock, _day(14, 15), Note("BBB", "v3"))
+    _save_at(store, clock, _day(14, 16), Note("CCC", "v1"))
+    _save_at(store, clock, _day(12, 15), Note("DDD", "v1"))
+
+    history = store.history(_day(13, 20, 10))
+
+    assert history == (
+        Note("BBB", "v2"),
+        Note("BBB", "v3"),
+        Note("CCC", "v1"),
+        Note("DDD", "v1"),
+    )
+
+
+def test_history_without_later_versions(engine: Engine, clock: FakeClock) -> None:
+    """spec「T 以后没有新版本」：读到的就是每个键的最新版本。"""
+    store = _store(engine, clock)
+    _save_at(store, clock, _day(14, 15), Note("BBB", "v1"))
+    _save_at(store, clock, _day(14, 16), Note("BBB", "v2"))
+    _save_at(store, clock, _day(14, 17), Note("CCC", "v1"))
+
+    assert store.history(_day(14, 20, 10)) == (Note("BBB", "v2"), Note("CCC", "v1"))
+
+
+def test_history_includes_a_version_written_at_the_moment(engine: Engine, clock: FakeClock) -> None:
+    """spec「写入时刻正好是 T」：写入时刻等于 T 的版本算 T 以后的版本。"""
+    store = _store(engine, clock)
+    _save_at(store, clock, _day(14, 15), Note("BBB", "v1"))
+    _save_at(store, clock, _day(14, 20, 10), Note("BBB", "v2"))
+
+    assert store.history(_day(14, 20, 10)) == (Note("BBB", "v1"), Note("BBB", "v2"))
+
+
+def test_history_of_an_empty_table(engine: Engine, clock: FakeClock) -> None:
+    """spec「空表」。"""
+    assert _store(engine, clock).history(_day(14, 20, 10)) == ()
+
+
 # 记录原样读回
 
 

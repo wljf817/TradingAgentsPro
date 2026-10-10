@@ -2,7 +2,8 @@
 
 下单权限只在这个模块里。订单的状态和处理见 openspec 的 order-lifecycle spec。
 订单和止损保护存在状态库里，见 state-store spec。每笔买单、卖单和止损单记一条交易记录，并据此给出
-账户数据，见 trade-records spec。模块之外的代码只能 import 这里导出的名字。
+账户数据，见 trade-records spec。每个交易日收盘后和券商全量对账一次，记下差异和连续没有差异的
+交易日数，见 close-reconciliation spec。模块之外的代码只能 import 这里导出的名字。
 """
 
 from tradingagentspro.modules.execution.config import ExecutionConfig
@@ -15,6 +16,18 @@ from tradingagentspro.modules.execution.domain.account import (
     held_position,
     last_trade_days,
     unsettled_proceeds,
+)
+from tradingagentspro.modules.execution.domain.close import (
+    CloseReconciliation,
+    LeftoverOrder,
+    NewStop,
+    UnprotectedSpell,
+    close_day,
+    close_streak,
+    close_window_start,
+    leftover_orders,
+    new_stops,
+    unprotected_spells,
 )
 from tradingagentspro.modules.execution.domain.order import (
     BrokerOrder,
@@ -60,6 +73,7 @@ from tradingagentspro.modules.execution.domain.trade import (
 from tradingagentspro.modules.execution.ports import (
     Broker,
     BrokerUnavailableError,
+    CloseReconciliationStore,
     OrderRejectedError,
     OrderStore,
     ProtectionStore,
@@ -67,6 +81,7 @@ from tradingagentspro.modules.execution.ports import (
     TradeStore,
 )
 from tradingagentspro.modules.execution.repo import (
+    PostgresCloseReconciliationStore,
     PostgresOrderStore,
     PostgresProtectionStore,
     PostgresTradeStore,
@@ -81,10 +96,14 @@ __all__ = [
     "BrokerOrderStatus",
     "BrokerPosition",
     "BrokerUnavailableError",
+    "CloseReconciliation",
+    "CloseReconciliationStore",
     "ExecutionConfig",
     "ExecutionService",
     "HeldPosition",
+    "LeftoverOrder",
     "Listing",
+    "NewStop",
     "NotReconciledError",
     "Order",
     "OrderPausedError",
@@ -92,6 +111,7 @@ __all__ = [
     "OrderSide",
     "OrderStatus",
     "OrderStore",
+    "PostgresCloseReconciliationStore",
     "PostgresOrderStore",
     "PostgresProtectionStore",
     "PostgresTradeStore",
@@ -109,13 +129,19 @@ __all__ = [
     "TradeKind",
     "TradeStore",
     "UnprotectedPositionError",
+    "UnprotectedSpell",
     "WorkingOrder",
     "account_of",
     "backup_stop_due",
+    "close_day",
+    "close_streak",
+    "close_window_start",
     "extra_stops",
     "held_position",
     "last_trade_days",
+    "leftover_orders",
     "new_order",
+    "new_stops",
     "next_action",
     "opening_order",
     "position_explained",
@@ -126,5 +152,6 @@ __all__ = [
     "stray_orders",
     "trade_of_order",
     "trade_of_stop",
+    "unprotected_spells",
     "unsettled_proceeds",
 ]
