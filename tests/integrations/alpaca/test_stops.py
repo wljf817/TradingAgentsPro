@@ -246,6 +246,17 @@ def test_cancel_a_stop() -> None:
     assert server.count("DELETE", "/v2/orders/O2") == 1
 
 
+def test_cancel_a_stop_while_it_is_being_replaced() -> None:
+    """spec「撤单」：撤不了时正常返回。Alpaca 文档：pending_replace 的订单拒绝撤单（422）。"""
+    server = FakeAlpaca()
+    _stop_at_alpaca(server, "O2", status="pending_replace")
+
+    _stops(server).cancel(_accepted("O2"))
+
+    assert server.count("DELETE", "/v2/orders/O2") == 1
+    assert server.orders["O2"]["status"] == "pending_replace"
+
+
 # 全部挂着的止损单
 
 

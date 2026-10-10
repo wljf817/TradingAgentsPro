@@ -7,7 +7,7 @@
 """
 
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -245,6 +245,7 @@ def test_protection_reads_back_unchanged(database: Engine) -> None:
         status=StopStatus.WORKING,
         broker_order_id="S2",
         requested=100,
+        requested_at=BASELINE_NOW,
         filled=70,
         average_price=Decimal("45.0533333333"),
         fees=Decimal("2.15"),
@@ -279,6 +280,23 @@ def test_an_old_protection_record_is_not_staggered(database: Engine) -> None:
         connection.execute(text("update execution_protections set data = data - 'staggered'"))
 
     assert store.get("BBB") == protection
+
+
+def test_an_old_protection_record_has_no_modify_request_time(database: Engine) -> None:
+    """update-stop-pending-modify 的 design D6：之前写入的记录没有 requested_at，读成 None，
+    改单请求不在等待生效。
+    """
+    stop = replace(_stop("BBB", 1, StopStatus.WORKING), requested=100, requested_at=BASELINE_NOW)
+    store = PostgresProtectionStore(database, FakeClock(BASELINE_NOW))
+    store.save(Protection("BBB", used=1, stop=stop))
+    drop = "update execution_protections set data = data #- '{stop,requested_at}'"
+    with database.begin() as connection:
+        connection.execute(text(drop))
+
+    read = store.get("BBB")
+    assert read is not None and read.stop is not None
+    assert (read.stop.requested, read.stop.requested_at) == (100, None)
+    assert not read.stop.awaits_modify(BASELINE_NOW, timedelta(seconds=30))
 
 
 def test_a_new_order_store_continues_after_a_restart(database: Engine) -> None:

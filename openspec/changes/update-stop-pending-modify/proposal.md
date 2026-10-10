@@ -34,7 +34,7 @@ Alpaca 改单（`PATCH /v2/orders/{id}`）时生成一笔新订单替换旧单�
 ## Non-goals
 
 - 盘中巡检的绕开（第 3 步不再对齐第 1 步跟进过的股票）保留，不改 session-patrol spec
-- 不改 Alpaca 适配器、FakeAlpaca 和 alpaca-broker spec；不在券商回报里加"正在改单"的状态（见 design D1）
+- 不改 Alpaca 适配器和 alpaca-broker spec；不在券商回报里加"正在改单"的状态（见 design D1）。测试用的 FakeAlpaca 只改一处：正在改单（pending_replace）的订单撤单时返回 422，和 Alpaca 文档一致
 - 不改 order-lifecycle spec「执行配置」：复用状态未知的等待时长，不新增配置项（见 design D3）
 - 不改下单流程、收盘对账的文档：它们 design 里记下的这个风险，在本变更落地以后不再出现
 - 撤单请求还没生效时又要改单、新挂的止损单还没路由出去时就要改单：Alpaca 同样不接受，但只在目标几秒内连续变化时出现，见 design 的省略清单
@@ -66,10 +66,11 @@ Alpaca 改单（`PATCH /v2/orders/{id}`）时生成一笔新订单替换旧单�
   - `tests/modules/execution/test_protection_service.py`：spec 的场景；止损保护状态机增加一条性质
   - `tests/modules/execution/test_reconciliation_service.py`：对账时跟进订单改了单，第 4 步不再改单
   - `tests/modules/execution/test_repo.py`：改单请求的时刻存取，旧记录读出来没有时刻
+  - `tests/integrations/alpaca/server.py`：FakeAlpaca 对正在改单的订单撤单返回 422；`tests/integrations/alpaca/test_stops.py` 加对应的测试
 - **存储**：止损保护的记录多一个字段，旧记录读出来没有请求时刻（当作已经满等待时长，和现在的行为一样），不用迁移
 - **依赖**：无
 - **文档**：无
-- **实施时机**：「下单流程」「收盘对账」正在别的 worktree 里实施，后者改 `modules/execution/service.py`、`ports.py`、`repo.py`。本变更等它们落到 main 以后再 apply
+- **实施时机**：「收盘对账」改 `modules/execution/service.py`、`ports.py`、`repo.py`，本变更等它落到 main 以后再 apply（已落地）。「下单流程」只改 `workflows/` 和 `bootstrap/`，不用等
 - **对后续变更的影响**：
   - 「下单流程」「收盘对账」：提交卖单后巡检马上对齐、收盘对账紧跟巡检对齐，不再误标无保护
   - 「紧急退出流程」：清仓时碰上改单请求在等待生效，撤止损单和提交卖单要等改单生效（Alpaca 上通常不到一秒，最多等待时长）

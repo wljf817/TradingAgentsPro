@@ -1,7 +1,8 @@
 """止损保护：每只股票一张券商端止损单，以及它怎样对齐到止损目标。
 
 见 stop-protection spec。止损单的股数和止损价只来自券商回报，改单、撤单只是请求，
-是否生效以之后查询到的回报为准。
+是否生效以之后查询到的回报为准。改单请求还没生效、又没满等待时长时，对齐不再改单或撤单，
+见 update-stop-pending-modify 的 design D1 到 D4。
 """
 
 from collections.abc import Iterable
@@ -72,6 +73,8 @@ class StopOrder:
     - broker_order_id：券商订单号；券商受理过才有
     - unknown_since：变为状态未知的时刻；不是状态未知时为 None
     - requested：最近一次改单请求的股数，券商回报的股数等于它时清掉；没有请求在路上时为 None
+    - requested_at：最近一次改单请求的时刻，和 requested 一起记下、一起清掉；本变更之前保存的
+      记录没有它，当作已经满等待时长
     - filled、average_price、fees：券商回报的累计成交股数、成交均价和累计费用
     - filled_at：最近一次发现累计成交增加的时刻；还没有成交时为 None。交易记录按它算成交日
 
@@ -87,6 +90,7 @@ class StopOrder:
     broker_order_id: str | None = None
     unknown_since: datetime | None = None
     requested: int | None = None
+    requested_at: datetime | None = None
     filled: int = 0
     average_price: Decimal | None = None
     fees: Decimal = Decimal(0)
@@ -99,13 +103,27 @@ class StopOrder:
         assert self.unknown_since is not None  # 状态未知时总会记下时刻
         return now >= self.unknown_since + delay
 
+    def awaits_modify(self, now: datetime, wait: timedelta) -> bool:
+        """改单请求在等待生效：挂着，最近一次改单请求还没生效，从请求的时刻起还没满 wait。
+
+        这时对齐不改单、不撤单，见 stop-protection spec「对齐止损单」。
+        """
+        return (
+            self.status is StopStatus.WORKING
+            and self.requested is not None
+            and self.requested_at is not None
+            and now < self.requested_at + wait
+        )
+
     def apply(self, report: StopReport, now: datetime) -> Self:
         """按券商回报更新，见 stop-protection spec「对齐止损单」第一张表。
 
-        挂着和结束时记下累计成交、成交均价和费用；结果未知时这些都不变。
+        挂着和结束时记下累计成交、成交均价和费用；结果未知时这些都不变。回报的股数等于改单请求
+        的股数时，这次请求已经生效，请求的股数和时刻一起清掉；止损单结束时也清掉。
         """
         match report.status:
             case BrokerOrderStatus.WORKING:
+                effective = report.quantity == self.requested
                 return replace(
                     self._with_fills(report, now),
                     status=StopStatus.WORKING,
@@ -113,7 +131,8 @@ class StopOrder:
                     quantity=report.quantity,
                     stop_price=report.stop_price,
                     unknown_since=None,
-                    requested=None if report.quantity == self.requested else self.requested,
+                    requested=None if effective else self.requested,
+                    requested_at=None if effective else self.requested_at,
                 )
             case BrokerOrderStatus.UNKNOWN:
                 return replace(
@@ -130,6 +149,7 @@ class StopOrder:
                     quantity=report.quantity,
                     unknown_since=None,
                     requested=None,
+                    requested_at=None,
                 )
 
     def _with_fills(self, report: StopReport, now: datetime) -> Self:
@@ -152,9 +172,9 @@ class StopOrder:
         """券商调用超时或断线；再次失败时重新计时。"""
         return replace(self, status=StopStatus.UNKNOWN, unknown_since=now)
 
-    def request(self, quantity: int) -> Self:
-        """记下改单请求的股数；券商回报的股数和止损价不变，等之后的查询。"""
-        return replace(self, requested=quantity)
+    def request(self, quantity: int, now: datetime) -> Self:
+        """在 now 记下改单请求的股数；券商回报的股数和止损价不变，等之后的查询。"""
+        return replace(self, requested=quantity, requested_at=now)
 
     def aim(self, target: StopTarget) -> Self:
         """还没挂出去的止损单按目标挂：改成目标的股数和止损价。"""
@@ -268,8 +288,16 @@ def is_aligned(stop: StopOrder | None, target: StopTarget) -> bool:
     )
 
 
-def next_action(protection: Protection, target: StopTarget) -> StopAction:
-    """对齐时怎样处理当前这张止损单。状态未知的止损单不处理，由调用方先查清。"""
+def next_action(
+    protection: Protection, target: StopTarget, now: datetime, wait: timedelta
+) -> StopAction:
+    """对齐时怎样处理当前这张止损单。状态未知的止损单不处理，由调用方先查清。
+
+    改单请求在等待生效（awaits_modify）时不改单、不撤单，不管目标是什么：有的券商在改单完成
+    以前不接受再改单或撤单，比如 Alpaca。见 update-stop-pending-modify 的 design D4。
+    """
+    if protection.stop is not None and protection.stop.awaits_modify(now, wait):
+        return StopAction.NONE
     status = protection.stop.status if protection.stop else StopStatus.ENDED
     if target.quantity == 0:
         if status is StopStatus.WORKING:

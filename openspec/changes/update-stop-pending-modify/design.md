@@ -16,7 +16,7 @@ Alpaca（2026-10-09 查阅文档）：
 - "Order cannot be replaced when the status is accepted, pending_new, pending_cancel or pending_replace"
 - `pending_replace`："The order will reject cancel request while in this state"。撤单接口只写了 204 和 422（"The order status is not cancelable"）
 - 适配器：改单的 4xx（401 除外）报拒绝受理；撤单的 404、422 正常返回；查询时旧单还没指向新单，现在这一笔就是旧单，回报旧股数（alpaca-broker spec「改单产生的替换」）
-- FakeAlpaca 的改单立即完成，`pending_replace` 只在测试手工设置时出现，所以已有的测试碰不到这个问题
+- FakeAlpaca 的改单立即完成，`pending_replace` 只在测试手工设置时出现，所以已有的测试碰不到这个问题；它还接受对 `pending_replace` 订单的撤单（把状态改成 `pending_cancel`），和文档不一致
 
 动机见 proposal.md 的 Why，要求见 specs/stop-protection/spec.md。
 
@@ -45,7 +45,7 @@ modules/execution
 **Non-Goals:**
 
 - 巡检第 3 步跳过第 1 步跟进过的股票：本变更以后已经不需要，保留不删（session-patrol spec 不改）
-- 不改 Alpaca 适配器、FakeAlpaca
+- 不改 Alpaca 适配器。FakeAlpaca 只把对 `pending_replace` 订单的撤单改成返回 422（和文档一致），改单仍然立即完成
 
 按「编程风格」省略的情况：
 
@@ -140,11 +140,12 @@ def next_action(
 - `tests/modules/execution/test_protection_service.py`：spec 新增和改写的场景。已有的测试里，「改单的结果以查询为准」「改大的请求还没生效时不提交卖单」按新场景改写，「减仓时先改小止损单」加上时刻和"没有再改单"的断言，其余不改
 - `tests/modules/execution/test_reconciliation_service.py`：spec 场景「对账时跟进订单改了单，对齐这只股票时不再改单」
 - `tests/modules/execution/test_repo.py`：有改单请求和时刻的止损保护存取不变；数据库里没有 `requested_at` 的旧记录读出来是 `None`（连数据库的部分要开 Docker）
+- `tests/integrations/alpaca/test_stops.py`：止损单正在改单时撤单，Alpaca 返回 422，适配器正常返回，订单仍是 `pending_replace`（FakeAlpaca 随之改成这样）
 - 止损保护的两个状态机加一条规则"不拨时间、不让请求生效，接着对齐两次"：第一次有被券商接受的改单请求时，第二次没有改单和撤单的调用。两次之间目标不变，所以不管第一次的请求算不算生效，第二次都不该调用。已有的性质（止损单和卖单合计不超过持仓、最终对齐、不是无保护仓位）照常检查
 
 ## Risks / Trade-offs
 
-- [收盘以后的改单在 Alpaca 上多久生效，文档没写] → 收盘对账里第二次对齐不再改单，正是本变更处理的情况。如果替换要到第二天开盘才完成，开盘后第一次对齐时请求已经满等待时长，再改单会被拒、标记无保护并告警，下一轮巡检替换已经完成就补上。值得在模拟盘上看一次收盘后改单的状态变化
+- [收盘以后的改单在 Alpaca 上多久生效，文档没写] → 收盘对账里第二次对齐不再改单，正是本变更处理的情况。如果替换要到第二天开盘才完成，开盘后第一次对齐时请求已经满等待时长，再改单会被拒、标记无保护并告警，下一轮巡检替换已经完成就补上。等交易侧流程都部署以后，在部署机器上观察一次收盘后改单的状态变化（不写进 tasks）
 - [卖单、清仓多等一会儿] → 改单生效以前本来就不能提交卖单（「卖单先让出股数」）；本变更只让这段时间不再发重复的改单和撤单，多等的只是撤单那一步，Alpaca 上替换通常不到一秒
 - [等待时长内请求其实已经失败（券商没收到、被拒），止损单晚 30 秒才改] → 这段时间券商止损单是改之前的样子，仍挂着；卖单不会因此提前提交，安全性不受影响
-- [实施和别的变更冲突] → 「下单流程」「收盘对账」正在改 `service.py`；本变更等它们落到 main 以后再 apply，改动集中在 `domain/protection.py`，`service.py` 只动 `_act` 和 `_modify_stop` 两处
+- [实施和别的变更冲突] → 「收盘对账」改过 `service.py`，本变更在它落到 main 以后 apply；改动集中在 `domain/protection.py`，`service.py` 只动 `_act` 和 `_modify_stop` 两处

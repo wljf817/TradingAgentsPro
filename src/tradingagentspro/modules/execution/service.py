@@ -412,9 +412,10 @@ class ExecutionService:
     def _act(self, protection: Protection, target: StopTarget, now: datetime) -> Protection:
         """按对齐时的处理调用券商。改单、撤单只是请求，不改变记录里的止损单。
 
-        挂单、改单被拒时立即重试，都被拒就标记无保护仓位，见 design D6。
+        挂单、改单被拒时立即重试，都被拒就标记无保护仓位，见 design D6。改单请求在等待生效时
+        不改单、不撤单，等待时长用状态未知的等待时长，见 update-stop-pending-modify 的 design D3。
         """
-        action = next_action(protection, target)
+        action = next_action(protection, target, now, self._config.unknown_lookup_delay)
         if action is StopAction.PLACE:
             return self._place_stop(protection, target, now)
         stop = protection.stop
@@ -453,9 +454,10 @@ class ExecutionService:
         return protection.with_stop(stop.end()).mark_unprotected(now)
 
     def _modify_stop(self, protection: Protection, target: StopTarget, now: datetime) -> Protection:
-        """请求改单为目标，记下请求的股数；被拒的改单不改变券商那边的止损单。
+        """请求改单为目标，记下请求的股数和时刻；被拒的改单不改变券商那边的止损单，也不动之前
+        记下的请求。
 
-        超时或断线时请求可能已经生效，所以也记下请求的股数，再记为状态未知。
+        超时或断线时请求可能已经生效，所以也记下请求的股数和时刻，再记为状态未知。
         """
         stop = protection.stop
         assert stop is not None and target.stop_price is not None
@@ -465,8 +467,8 @@ class ExecutionService:
             except OrderRejectedError:
                 continue
             except BrokerUnavailableError:
-                return protection.with_stop(stop.request(target.quantity).mark_unknown(now))
-            return protection.with_stop(stop.request(target.quantity))
+                return protection.with_stop(stop.request(target.quantity, now).mark_unknown(now))
+            return protection.with_stop(stop.request(target.quantity, now))
         return protection.mark_unprotected(now)
 
     @property

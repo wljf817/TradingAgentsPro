@@ -240,6 +240,30 @@ def test_reconciling_twice() -> None:
     assert len(env.stops.placed) == 1
 
 
+def test_a_modify_while_tracking_is_not_repeated_when_aligning() -> None:
+    """stop-protection spec「对账时跟进订单改了单，对齐这只股票时不再改单」：第 3 步跟进 P3 时
+    改单，第 4 步对齐 BBB 时券商还没完成这次改单。
+    """
+    env = _env()
+    env.hold_100()
+    p3 = reduce_bbb()
+    env.submit(p3)
+    env.stops.settle()  # BBB-STOP-1 已经改为 40 股
+    assert env.track(p3, env.clock.now()).status is OrderStatus.SUBMITTED
+    env.report(p3, CANCELLED, 20, "50")  # 收盘失效
+    env.broker.positions["BBB"] = 80
+    env.stops.calls.clear()
+
+    result = env.reconcile(at=_at(20, 0, 5))
+
+    assert env.order(p3).status is OrderStatus.EXPIRED
+    assert env.stop_calls().count("modify") == 1
+    assert env.stops.modify_requests == [(STOP_1, 80, Decimal(45))]
+    protection = env.protections.get("BBB")
+    assert protection is not None and protection.unprotected_since is None
+    assert result.clean
+
+
 # 不认得的挂单
 
 

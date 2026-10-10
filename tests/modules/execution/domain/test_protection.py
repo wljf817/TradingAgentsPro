@@ -264,11 +264,14 @@ def test_working_report_replaces_the_recorded_quantity_and_price() -> None:
 
 
 def test_a_modify_request_is_recorded_until_the_broker_shows_it() -> None:
-    requested = _stop(quantity=30).request(100)
+    requested = _stop(quantity=30).request(100, _at(15))
 
-    assert requested.requested == 100
-    assert requested.apply(_report(BrokerOrderStatus.WORKING, 30), BASELINE_NOW).requested == 100
-    assert requested.apply(_report(BrokerOrderStatus.WORKING, 100), BASELINE_NOW).requested is None
+    assert (requested.requested, requested.requested_at) == (100, _at(15))
+    assert (requested.quantity, requested.stop_price) == (30, Decimal(45))
+    pending = requested.apply(_report(BrokerOrderStatus.WORKING, 30), _at(15, 0, 5))
+    assert (pending.requested, pending.requested_at) == (100, _at(15))
+    effective = requested.apply(_report(BrokerOrderStatus.WORKING, 100), _at(15, 0, 5))
+    assert (effective.requested, effective.requested_at) == (None, None)
 
 
 @pytest.mark.parametrize(
@@ -277,6 +280,18 @@ def test_a_modify_request_is_recorded_until_the_broker_shows_it() -> None:
 )
 def test_filled_cancelled_or_rejected_report_ends_the_stop(status: BrokerOrderStatus) -> None:
     assert _stop().apply(_report(status, 0), BASELINE_NOW).status is StopStatus.ENDED
+
+
+@pytest.mark.parametrize(
+    "status",
+    [BrokerOrderStatus.FILLED, BrokerOrderStatus.CANCELLED, BrokerOrderStatus.REJECTED],
+)
+def test_an_ended_stop_drops_its_modify_request(status: BrokerOrderStatus) -> None:
+    requested = _stop(quantity=30).request(100, _at(15))
+
+    ended = requested.apply(_report(status, 0), _at(15, 0, 5))
+
+    assert (ended.requested, ended.requested_at) == (None, None)
 
 
 def test_working_report_records_fills_fees_and_when_they_were_seen() -> None:
@@ -479,19 +494,24 @@ def _with(stop: StopOrder | None) -> Protection:
     return Protection("BBB", used=1, stop=stop)
 
 
+def _next(protection: Protection, target: StopTarget, now: datetime = BASELINE_NOW) -> StopAction:
+    """等待时长是默认的 30 秒时，now 这次对齐的处理。"""
+    return next_action(protection, target, now, DELAY)
+
+
 @pytest.mark.parametrize("stop", [None, _stop(status=StopStatus.ENDED)], ids=["none", "ended"])
 def test_place_when_there_is_no_live_stop(stop: StopOrder | None) -> None:
-    assert next_action(_with(stop), TARGET) is StopAction.PLACE
+    assert _next(_with(stop), TARGET) is StopAction.PLACE
 
 
 def test_place_a_stop_that_never_went_out() -> None:
     pending = _stop(status=StopStatus.PENDING, broker_order_id=None)
 
-    assert next_action(_with(pending), TARGET) is StopAction.PLACE
+    assert _next(_with(pending), TARGET) is StopAction.PLACE
 
 
 def test_leave_an_aligned_stop_alone() -> None:
-    assert next_action(_with(_stop()), TARGET) is StopAction.NONE
+    assert _next(_with(_stop()), TARGET) is StopAction.NONE
 
 
 @pytest.mark.parametrize(
@@ -500,41 +520,97 @@ def test_leave_an_aligned_stop_alone() -> None:
     ids=["quantity", "stop-price"],
 )
 def test_modify_when_the_quantity_or_stop_price_differs(stop: StopOrder) -> None:
-    assert next_action(_with(stop), TARGET) is StopAction.MODIFY
+    assert _next(_with(stop), TARGET) is StopAction.MODIFY
 
 
 def test_modify_again_when_a_pending_request_differs_from_the_target() -> None:
     """spec「改大的请求还没生效时不提交卖单」：按目标再请求一次，覆盖之前的请求。"""
-    stale = _stop(quantity=30, requested=100)
+    stale = _stop(quantity=30, requested=100, requested_at=_at(15))
 
-    assert next_action(_with(stale), StopTarget(30, Decimal(45))) is StopAction.MODIFY
+    assert _next(_with(stale), StopTarget(30, Decimal(45)), _at(15, 0, 30)) is StopAction.MODIFY
 
 
 def test_cancel_when_the_target_is_zero() -> None:
-    assert next_action(_with(_stop()), StopTarget(0, Decimal(45))) is StopAction.CANCEL
+    assert _next(_with(_stop()), StopTarget(0, Decimal(45))) is StopAction.CANCEL
 
 
 def test_drop_a_stop_that_never_went_out_when_the_target_is_zero() -> None:
     """spec「还没挂出去的止损单在目标为 0 时放弃」。"""
     pending = _stop(status=StopStatus.PENDING, broker_order_id=None)
 
-    assert next_action(_with(pending), StopTarget(0, Decimal(45))) is StopAction.DROP
+    assert _next(_with(pending), StopTarget(0, Decimal(45))) is StopAction.DROP
 
 
 @pytest.mark.parametrize("stop", [None, _stop(status=StopStatus.ENDED)], ids=["none", "ended"])
 def test_nothing_to_do_without_a_stop_or_shares(stop: StopOrder | None) -> None:
-    assert next_action(_with(stop), StopTarget(0, Decimal(45))) is StopAction.NONE
+    assert _next(_with(stop), StopTarget(0, Decimal(45))) is StopAction.NONE
 
 
 @pytest.mark.parametrize("stop", [None, _stop(quantity=30)], ids=["none", "working"])
 def test_nothing_to_do_without_a_stop_price(stop: StopOrder | None) -> None:
-    assert next_action(_with(stop), StopTarget(100, None)) is StopAction.NONE
+    assert _next(_with(stop), StopTarget(100, None)) is StopAction.NONE
 
 
 def test_nothing_to_do_while_the_stop_is_unknown() -> None:
     unknown = _stop(status=StopStatus.UNKNOWN, unknown_since=_at(15), quantity=30)
 
-    assert next_action(_with(unknown), TARGET) is StopAction.NONE
+    assert _next(_with(unknown), TARGET) is StopAction.NONE
+
+
+# 改单请求在等待生效（spec「对齐止损单」）
+
+REQUESTED = _stop(quantity=30).request(100, _at(15))  # 15:00Z 请求改为 100 股，券商还是 30 股
+
+
+def test_a_modify_request_awaits_until_the_wait_is_over() -> None:
+    assert REQUESTED.awaits_modify(_at(15), DELAY)
+    assert REQUESTED.awaits_modify(_at(15, 0, 29), DELAY)
+    assert not REQUESTED.awaits_modify(_at(15, 0, 30), DELAY)
+
+
+def test_nothing_awaits_without_a_modify_request() -> None:
+    assert not _stop().awaits_modify(_at(15), DELAY)
+
+
+def test_an_old_record_without_the_request_time_does_not_wait() -> None:
+    """本变更之前保存的记录只有请求的股数，当作已经满等待时长。"""
+    assert not _stop(quantity=30, requested=100).awaits_modify(_at(15), DELAY)
+
+
+@pytest.mark.parametrize(
+    "stop",
+    [
+        replace(REQUESTED, status=StopStatus.UNKNOWN, unknown_since=_at(15)),
+        replace(REQUESTED, status=StopStatus.ENDED),
+    ],
+    ids=["unknown", "ended"],
+)
+def test_only_a_working_stop_awaits_a_modify(stop: StopOrder) -> None:
+    assert not stop.awaits_modify(_at(15, 0, 1), DELAY)
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        TARGET,
+        StopTarget(30, Decimal(45)),
+        StopTarget(0, Decimal(45)),
+        StopTarget(100, None),
+    ],
+    ids=["quantity-differs", "only-request-differs", "zero", "no-stop-price"],
+)
+def test_leave_the_stop_alone_while_a_modify_awaits(target: StopTarget) -> None:
+    """spec「改单的结果以查询为准」「清仓时改单请求还没生效，先不撤止损单」：不改单，也不撤单。"""
+    assert _next(_with(REQUESTED), target, _at(15, 0, 29)) is StopAction.NONE
+
+
+def test_modify_again_once_the_wait_is_over() -> None:
+    """spec「改单请求满等待时长还没生效，再改一次」。"""
+    assert _next(_with(REQUESTED), TARGET, _at(15, 0, 30)) is StopAction.MODIFY
+
+
+def test_cancel_once_the_wait_is_over() -> None:
+    assert _next(_with(REQUESTED), StopTarget(0, Decimal(45)), _at(15, 0, 30)) is StopAction.CANCEL
 
 
 # 卖单先让出股数

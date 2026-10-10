@@ -169,7 +169,8 @@ class FakeAlpaca:
         order = self.orders.get(order_id)
         if order is None:
             return _not_found()
-        if order["status"] in ENDED:
+        if order["status"] in ENDED or order["status"] == "pending_replace":
+            # Alpaca 文档：正在改单（pending_replace）的订单拒绝撤单
             return _error(422, "order is not cancelable")
         order["status"] = "pending_cancel"
         return httpx.Response(204)

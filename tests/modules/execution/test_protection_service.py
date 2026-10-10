@@ -136,6 +136,16 @@ class _Env:
         assert self.stops.stop(STOP_1).quantity == 100
         return p1
 
+    def requested_100(self) -> TradePlan:
+        """P1 部分成交 30、BBB-STOP-1 挂着 30 股；P1 全部成交、券商持仓 100 股，15:00Z 跟进 P1 时
+        请求了改单：100 股，止损价 45，券商还没生效。
+        """
+        p1 = self.bought_30()
+        self.report(p1, FILLED, 100, position=100)
+        self.track(p1, at=_at(15))
+        assert self.stops.modify_requests == [(STOP_1, 100, Decimal(45))]
+        return p1
+
 
 def _env(now: datetime = BASELINE_NOW, config: ExecutionConfig | None = None) -> _Env:
     store, broker, clock = InMemoryOrderStore(), FakeBroker(), FakeClock(now)
@@ -245,19 +255,50 @@ def test_an_aligned_stop_is_left_alone() -> None:
 
 
 def test_the_modify_result_comes_from_the_next_lookup() -> None:
-    """spec「改单的结果以查询为准」。"""
+    """spec「改单的结果以查询为准」：请求还没生效时不再改单，生效以后也不再改。"""
     env = _env()
-    p1 = env.bought_30()
-    env.report(p1, FILLED, 100, position=100)
-    env.track(p1)
+    env.requested_100()
+    env.stops.calls.clear()
 
-    env.protect()  # 券商回报仍是 30 股
-    assert env.stops.modify_requests == [(STOP_1, 100, Decimal(45))] * 2
+    env.protect(at=_at(15, 0, 1))  # 券商回报仍是 30 股
+
+    assert env.stops.calls == [("find", STOP_1)]
+    assert env.protection().unprotected_since is None
 
     env.stops.update(STOP_1, WORKING, quantity=100)
-    env.protect()
+    env.protect(at=_at(15, 0, 15))
+
+    assert len(env.stops.modify_requests) == 1
+    assert (env.stop().status, env.stop().quantity) == (StopStatus.WORKING, 100)
+    assert env.stop().requested is None
+
+
+def test_a_modify_not_effective_after_the_wait_is_requested_again() -> None:
+    """spec「改单请求满等待时长还没生效，再改一次」。"""
+    env = _env()
+    env.requested_100()
+
+    env.protect(at=_at(15, 0, 29))
+    assert len(env.stops.modify_requests) == 1
+
+    env.protect(at=_at(15, 0, 30))
+    assert env.stops.modify_requests == [(STOP_1, 100, Decimal(45))] * 2
+
+    env.protect(at=_at(15, 0, 45))  # 从 15:00:30Z 重新等待
     assert len(env.stops.modify_requests) == 2
-    assert env.stop().quantity == 100
+
+
+def test_a_stuck_modify_rejected_again_marks_unprotected() -> None:
+    """spec「券商一直没完成改单，再改单被拒时标记无保护」。"""
+    env = _env()
+    env.requested_100()
+    env.stops.reject_next("modify", 2)
+
+    env.protect(at=_at(15, 0, 30))
+
+    assert env.stops.calls_for(STOP_1)[-2:] == ["modify", "modify"]
+    assert len(env.stops.modify_requests) == 1
+    assert env.protection().unprotected_since == _at(15, 0, 30)
 
 
 def test_no_new_stop_after_the_stop_fills() -> None:
@@ -371,11 +412,12 @@ def test_a_reduce_waits_until_the_broker_shows_the_smaller_stop() -> None:
     assert env.broker.order_count(str(p3.plan_id)) == 0
     assert order.status is OrderStatus.PENDING
 
-    env.track(p3)  # 券商回报仍是 100 股
+    env.track(p3, at=_at(15, 0, 15))  # 券商回报仍是 100 股
+    assert env.stops.modify_requests == [(STOP_1, 40, Decimal(45))]
     assert env.broker.order_count(str(p3.plan_id)) == 0
 
     env.stops.update(STOP_1, WORKING, quantity=40)
-    env.track(p3)
+    env.track(p3, at=_at(15, 0, 20))
     placed = env.broker.placed[-1]
     assert (placed.plan_id, placed.side, placed.quantity) == (p3.plan_id, OrderSide.SELL, 60)
     assert placed.order_type is OrderType.MARKET
@@ -415,21 +457,51 @@ def test_no_sell_when_the_stop_fires_while_waiting() -> None:
 
 
 def test_no_sell_while_a_larger_stop_request_is_pending() -> None:
-    """spec「改大的请求还没生效时不提交卖单」。"""
+    """spec「改大的请求还没生效时不提交卖单」：等改大的请求生效，再改小，生效后才提交。"""
     env = _env()
-    p1 = env.bought_30()
-    env.report(p1, FILLED, 100, position=100)
-    env.track(p1)  # 请求改单为 100 股，券商还没生效
+    env.requested_100()
     reduce = reduce_bbb(70)
+    env.clock.set(_at(15, 0, 5))
 
     env.submit(reduce, decision(70))
 
-    assert env.stops.modify_requests[-1] == (STOP_1, 30, Decimal(45))
+    assert env.stops.modify_requests == [(STOP_1, 100, Decimal(45))]
+    assert env.stops.cancel_requests == []
     assert env.broker.order_count(str(reduce.plan_id)) == 0
 
-    env.stops.settle()  # 券商按顺序处理完两次改单：先 100 股，再 30 股
-    env.track(reduce)
+    env.stops.settle()  # 券商回报变为 100 股
+    env.track(reduce, at=_at(15, 0, 20))
+    assert env.stops.modify_requests == [(STOP_1, 30, Decimal(45))]
+    assert env.broker.order_count(str(reduce.plan_id)) == 0
+
+    env.stops.settle()  # 券商回报变为 30 股
+    env.track(reduce, at=_at(15, 0, 35))
     assert env.broker.order_count(str(reduce.plan_id)) == 1
+
+
+def test_a_close_waits_for_a_pending_modify_before_cancelling_the_stop() -> None:
+    """spec「清仓时改单请求还没生效，先不撤止损单」。"""
+    env = _env()
+    env.requested_100()
+    p4 = close_bbb()
+    env.clock.set(_at(15, 0, 5))
+
+    order = env.submit(p4)
+
+    assert env.stops.cancel_requests == []
+    assert len(env.stops.modify_requests) == 1
+    assert env.broker.order_count(str(p4.plan_id)) == 0
+    assert order.status is OrderStatus.PENDING
+
+    env.stops.settle()  # 券商回报变为 100 股
+    env.track(p4, at=_at(15, 0, 20))
+    assert env.stops.cancel_requests == [STOP_1]
+    assert env.broker.order_count(str(p4.plan_id)) == 0
+
+    env.stops.update(STOP_1, CANCELLED)
+    env.track(p4, at=_at(15, 0, 35))
+    placed = env.broker.placed[-1]
+    assert (placed.plan_id, placed.side, placed.quantity) == (p4.plan_id, OrderSide.SELL, 100)
 
 
 def test_no_sell_while_the_stop_is_unknown() -> None:
@@ -711,6 +783,24 @@ def test_modify_times_out() -> None:
     assert len(env.stops.modify_requests) == 1
 
 
+def test_modify_times_out_and_the_broker_never_got_it() -> None:
+    """spec「改单超时，券商没有收到」：满等待时长查清以后，请求也不再等，这次对齐就再改。"""
+    env = _env()
+    p1 = env.bought_30()
+    env.stops.fail_next("modify")
+    env.report(p1, FILLED, 100, position=100)
+
+    env.track(p1, at=_at(15))
+
+    assert (env.stop().status, env.stop().quantity) == (StopStatus.UNKNOWN, 30)
+    assert env.stops.modify_requests == []
+
+    env.protect(at=_at(15, 0, 30))  # 券商回报仍是 30 股
+
+    assert (env.stop().status, env.stop().quantity) == (StopStatus.WORKING, 30)
+    assert env.stops.modify_requests == [(STOP_1, 100, Decimal(45))]
+
+
 def test_an_accepted_stop_that_cannot_be_found() -> None:
     """spec「受理过的止损单查不到」。"""
     env = _env()
@@ -771,6 +861,19 @@ def test_aligning_continues_after_a_restart() -> None:
 
     assert env.stops.modify_requests == [(STOP_1, 100, Decimal(45))]
     assert len(env.stops.placed) == 1
+
+
+def test_a_modify_still_awaits_after_a_restart() -> None:
+    """spec「重启后改单请求仍在等待生效」。"""
+    env = _env()
+    env.requested_100()
+    env.restart()
+
+    env.protect(at=_at(15, 0, 10))  # 券商回报仍是 30 股
+    assert len(env.stops.modify_requests) == 1
+
+    env.protect(at=_at(15, 0, 30))
+    assert env.stops.modify_requests == [(STOP_1, 100, Decimal(45))] * 2
 
 
 def test_process_exited_after_placing_before_saving() -> None:
@@ -961,6 +1064,21 @@ class StopProtectionMachine(RuleBasedStateMachine):
                 if not plan.action.is_opening and order.unsent and self._working_at_broker(plan):
                     event("卖单提交给券商")
         self.env.protect()
+
+    @rule()
+    def align_twice_right_away(self) -> None:
+        """不拨时间、不让请求生效，接着对齐两次：第一次有被券商接受的改单请求时，第二次不再改单、
+        也不撤单（update-stop-pending-modify 的 design D7）。两次之间目标不变。
+        """
+        requested = len(self.env.stops.modify_requests)
+        self.env.protect()
+        if len(self.env.stops.modify_requests) == requested:
+            return
+        event("第一次对齐有改单请求")
+        seen = len(self.env.stops.calls)
+        self.env.protect()
+        again = [op for op, _ in self.env.stops.calls[seen:] if op in ("modify", "cancel")]
+        assert again == []
 
     @invariant()
     def at_most_one_working_stop(self) -> None:
