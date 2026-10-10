@@ -159,15 +159,17 @@
 | 7 第一次健康判定 | 见「第一次健康判定」 | 不会失败；OpenD 连不上、处于降级模式都照常继续 |
 | 8 Discord | 登录、注册 `/plan`、连接、核对频道（discord-notification spec、manual-plans spec） | 启动失败 |
 | 9 DBOS | 见「DBOS」 | 启动失败 |
+| 10 盘中巡检 | 开始盘中巡检（session-patrol spec「巡检的开始、间隔和停止」）；第一轮在巡检自己的线程里进行，启动不等它做完 | 启动失败 |
 
 - 对账和健康判定 SHALL 在 Discord 和 DBOS 之前完成：`/plan`、按钮和 DBOS 恢复的工作流是新订单仅有的入口
 - Alpaca 账户设置 SHALL 在对账之前：对账可能补挂止损单，补挂之前账户要已经是不做空的
 - Discord SHALL 在 DBOS 之前：DBOS 恢复的工作流可能马上要请求确认
+- 盘中巡检 SHALL 最后开始：它要调用券商、风控和 Discord，这些都要已经就绪，启动对账也要已经做完；停止时它最先停（见「停止」）
 
 #### Scenario: 正常启动的顺序
 
 - **WHEN** 正常启动
-- **THEN** 日志依次写出：程序启动、数据库已升级、交易日历的范围、Alpaca 账户设置完成、启动对账没有不一致、健康正常、Discord 已连接、DBOS 已启动、启动完成
+- **THEN** 日志依次写出：程序启动、数据库已升级、交易日历的范围、Alpaca 账户设置完成、启动对账没有不一致、健康正常、Discord 已连接、DBOS 已启动、盘中巡检已开始（写明间隔）、启动完成
 - **AND** Alpaca 先收到账户设置，再收到读取挂单和持仓的请求
 
 #### Scenario: 空数据库启动不改动券商
@@ -176,6 +178,13 @@
 - **WHEN** 正常启动
 - **THEN** Alpaca 收到的写请求只有账户设置一个，其余都是读取
 - **AND** 启动完成
+
+#### Scenario: 启动以后巡检跟进停机前提交的订单
+
+- **GIVEN** 状态库里有一笔已提交的买单 P1（买入 BBB 100 股，止损价 45），风控为它预留了 100 股；停机期间 Alpaca 那边 P1 全部成交，持仓 BBB 100 股
+- **WHEN** 正常启动
+- **THEN** 启动对账跟进 P1，P1 全部成交，挂上 BBB 的止损单
+- **AND** 巡检的第一轮把 P1 的累计成交报给风控，P1 没有有效预留
 
 ### Requirement: 启动失败
 
@@ -293,6 +302,8 @@ OpenD 没有运行或没有登录 SHALL NOT 算启动失败，见「第一次健
 | 行情 | 行情源是 OpenD（默认 127.0.0.1:11111）；行情配置用默认值（参考股票 SPY） |
 | 通知 | 通知通道是 Discord 机器人，配置来自环境变量；通知配置用默认值（确认超时 30 分钟） |
 | `/plan` | 方案 ID 用随机 UUID；提交接口和按钮回调见「下单流程接上之前」 |
+| 锁 | 全程序一把进程内的锁（session-patrol spec「执行模块和风控的调用串行」）；巡检和以后的流程用的是同一把 |
+| 盘中巡检 | 调用上面装配好的执行模块、风控和通知，用这把锁；巡检配置用默认值（间隔 15 秒） |
 
 #### Scenario: 打开买单和止损单错开
 
@@ -304,6 +315,12 @@ OpenD 没有运行或没有登录 SHALL NOT 算启动失败，见「第一次健
 - **GIVEN** 风控配置的每笔佣金是默认值 2；Alpaca 那边有一笔全部成交的买单和一张全部成交的止损单
 - **WHEN** 按模拟盘装配的两个券商适配器查询这两笔
 - **THEN** 两笔回报的费用都是 2
+
+#### Scenario: 巡检和以后的流程共用一把锁
+
+- **WHEN** 正常启动
+- **THEN** 巡检的间隔是 15 秒
+- **AND** 启动给以后的流程用的锁，就是巡检用的那一把：另一个线程拿着它时，巡检不调用执行模块和风控
 
 ### Requirement: 启动对账
 
@@ -382,12 +399,12 @@ Alpaca 账户设置之后、Discord 和 DBOS 之前，程序 SHALL 让执行模�
 
 ### Requirement: DBOS
 
-Discord 启动之后，程序 SHALL 用状态库所在的数据库启动 DBOS，应用名 `tradingagentspro`；DBOS 的表放在 `dbos` schema。停止时 SHALL 先关闭 DBOS，不等还在运行的工作流结束（它们由下次启动的 DBOS 恢复）。
+Discord 启动之后，程序 SHALL 用状态库所在的数据库启动 DBOS，应用名 `tradingagentspro`；DBOS 的表放在 `dbos` schema。停止时 SHALL 在盘中巡检停下以后关闭 DBOS（见「停止」），不等还在运行的工作流结束（它们由下次启动的 DBOS 恢复）。
 
 #### Scenario: 启动和停止 DBOS
 
 - **WHEN** 正常启动再停止
-- **THEN** 日志依次写出 DBOS 已启动、启动完成、收到停止信号、已关闭 DBOS
+- **THEN** 日志依次写出 DBOS 已启动、启动完成、收到停止信号、已关闭盘中巡检、已关闭 DBOS
 - **AND** 数据库里有 `dbos` schema
 
 ### Requirement: 下单流程接上之前
@@ -439,7 +456,7 @@ Discord 启动之后，程序 SHALL 用状态库所在的数据库启动 DBOS，
 程序启动完成以后收到 SIGTERM 或 SIGINT，SHALL：
 
 1. 写一条 INFO：收到停止信号，开始停止
-2. 按打开的相反顺序关闭：DBOS → Discord → OpenD 行情连接 → 数据库连接。每一项关闭写一条 INFO
+2. 按打开的相反顺序关闭：盘中巡检 → DBOS → Discord → OpenD 行情连接 → 数据库连接。每一项关闭写一条 INFO。盘中巡检按 session-patrol spec「巡检的开始、间隔和停止」停下：正在做的那一项做完才算关闭
 3. 某一项关闭出错时写 ERROR（带异常栈），接着关闭下一项
 4. 全部关完写「已停止」，退出码 0
 
@@ -449,7 +466,7 @@ Discord 启动之后，程序 SHALL 用状态库所在的数据库启动 DBOS，
 
 - **GIVEN** 正常启动
 - **WHEN** 收到 SIGTERM
-- **THEN** 日志依次写出：收到停止信号、已关闭 DBOS、已关闭 Discord、已关闭 OpenD 行情连接、已关闭数据库连接、已停止
+- **THEN** 日志依次写出：收到停止信号、已关闭盘中巡检、已关闭 DBOS、已关闭 Discord、已关闭 OpenD 行情连接、已关闭数据库连接、已停止
 - **AND** 退出码 0
 
 #### Scenario: SIGINT
@@ -470,3 +487,10 @@ Discord 启动之后，程序 SHALL 用状态库所在的数据库启动 DBOS，
 - **GIVEN** 正在连接 Discord 时收到 SIGTERM
 - **WHEN** 启动的其余步骤完成
 - **THEN** 写出启动完成以后立即停止，按顺序关闭，退出码 0
+
+#### Scenario: 停止时巡检正在跟进订单
+
+- **GIVEN** 正常启动；巡检正在跟进一笔订单，Alpaca 对这次查询还没有响应
+- **WHEN** 收到 SIGTERM
+- **THEN** Alpaca 的响应回来、这笔订单保存以后才写出已关闭盘中巡检
+- **AND** 之后才关闭 DBOS、Discord、OpenD 行情连接和数据库连接，退出码 0
