@@ -23,7 +23,7 @@ modules/notification
   service.py              加 request_emergency_confirmation
   __init__.py             导出新名字
 integrations/discord
-  messages.py             加 emergency_confirmation_content；confirmation_view 改为按方案 ID 和截止时刻建按钮
+  messages.py             加 emergency_confirmation_content；confirmation_view 接受两种确认请求
   notifier.py             实现 request_emergency_confirmation，和 request_confirmation 共用去重和发送
 workflows/emergency_flow.py
                           EmergencyDecisions（按钮结果的登记）；_Record 加确认状态；judge、advance、report
@@ -101,7 +101,7 @@ class EmergencyConfirmationRequest:
 
 所以等确认期间不检查风控、不预留；确认以后照旧在「一只股票的清仓」第 4 步检查、再校验、提交。
 
-Discord 适配器：`emergency_confirmation_content(request, user_id)` 按 discord-notification spec「紧急退出的确认消息」的表写正文；`confirmation_view(plan_id, deadline)` 两种消息共用；`_request` 和 `_send_confirmation` 改为接收方案 ID、截止时刻、正文和按钮，两种请求按方案 ID 共用 `_requests` 去重（交易方案的 ID 是随机 UUID，清仓方案的是 uuid5，不会冲突）。
+Discord 适配器：`emergency_confirmation_content(request, user_id)` 按 discord-notification spec「紧急退出的确认消息」的表写正文；`confirmation_view` 接受两种确认请求，只用方案 ID 和截止时刻建按钮；`_request` 和 `_send_confirmation` 改为接收方案 ID、截止时刻、正文和按钮，两种请求按方案 ID 共用 `_requests` 去重（交易方案的 ID 是随机 UUID，清仓方案的是 uuid5，不会冲突）。
 
 ### D3 每只股票的确认状态记在 `_Record` 里
 

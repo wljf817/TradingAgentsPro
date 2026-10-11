@@ -20,6 +20,7 @@ from tradingagentspro.integrations.discord.messages import (
     alert_content,
     confirmation_content,
     confirmation_view,
+    emergency_confirmation_content,
     only_user,
     outcome_embed,
     outcome_label,
@@ -29,6 +30,7 @@ from tradingagentspro.modules.notification import (
     ConfirmationOutcome,
     ConfirmationRequest,
     DecisionHandler,
+    EmergencyConfirmationRequest,
     NotificationUnavailableError,
     PendingConfirmation,
 )
@@ -95,7 +97,7 @@ class Gateway(Protocol):
 
 
 class DiscordNotifier:
-    """用 Discord 实现 Notifier。三个同步方法可以从任何线程调用。
+    """用 Discord 实现 Notifier。同步方法可以从任何线程调用。
 
     先 start() 再用，退出时 close()。下面三项状态只在事件循环上读写，不需要锁：
     每个方案的确认请求、每条消息已有的结果、正在调用回调的消息。
@@ -164,7 +166,13 @@ class DiscordNotifier:
 
     def request_confirmation(self, request: ConfirmationRequest) -> PendingConfirmation:
         """发出确认消息；同一个方案重复请求时返回第一次的那条，第一次失败了的重新发送。"""
-        return self._call(lambda: self._request(request))
+        return self._call(lambda: self._request(request, confirmation_content))
+
+    def request_emergency_confirmation(
+        self, request: EmergencyConfirmationRequest
+    ) -> PendingConfirmation:
+        """发出紧急退出的确认消息；重复请求和重新发送同 request_confirmation。"""
+        return self._call(lambda: self._request(request, emergency_confirmation_content))
 
     def finish_confirmation(self, message_id: str, outcome: ConfirmationOutcome) -> None:
         """把确认消息改为调用方报告的结果、去掉按钮；之后按钮不再交给回调。"""
@@ -218,21 +226,26 @@ class DiscordNotifier:
 
     # 在事件循环上运行的部分
 
-    async def _request(self, request: ConfirmationRequest) -> PendingConfirmation:
+    async def _request[R: (ConfirmationRequest, EmergencyConfirmationRequest)](
+        self, request: R, write: Callable[[R, int], str]
+    ) -> PendingConfirmation:
+        """两种确认请求按方案 ID 共用去重；write 写正文。"""
         plan_id = request.plan.plan_id
         task = self._requests.get(plan_id)
         if task is None or (task.done() and (task.cancelled() or task.exception() is not None)):
-            task = asyncio.create_task(self._send_confirmation(request))
+            task = asyncio.create_task(self._send_confirmation(request, write))
             # 没人等它的结果时（调用方已经超时），也取走异常，免得 asyncio 报未取走的异常
             task.add_done_callback(lambda done: done.cancelled() or done.exception())
             self._requests[plan_id] = task
         # shield：调用方超时取消时，不取消发送本身，重试时拿到的是那条迟到的消息
         return await asyncio.shield(task)
 
-    async def _send_confirmation(self, request: ConfirmationRequest) -> PendingConfirmation:
+    async def _send_confirmation[R: (ConfirmationRequest, EmergencyConfirmationRequest)](
+        self, request: R, write: Callable[[R, int], str]
+    ) -> PendingConfirmation:
         user_id = self._config.user_id
         message_id = await self._gateway.send(
-            confirmation_content(request, user_id), confirmation_view(request), only_user(user_id)
+            write(request, user_id), confirmation_view(request), only_user(user_id)
         )
         _log.info("请求确认：方案 %s，消息 %s", request.plan.plan_id, message_id)
         return PendingConfirmation(message_id=str(message_id), deadline=request.deadline)

@@ -1,4 +1,5 @@
-"""确认请求、确认的结果和发出的确认消息，见 discord-notification spec「确认请求和截止时刻」。"""
+"""确认请求、确认的结果和发出的确认消息，见 discord-notification spec「确认请求和截止时刻」
+「紧急退出的确认消息」。"""
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -27,6 +28,19 @@ class ConfirmationRequest:
 
     plan: TradePlan
     decision: RiskDecision
+    deadline: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class EmergencyConfirmationRequest:
+    """请求确认的一个紧急退出：代码触发的清仓方案、当前持仓股数和原因。
+
+    deadline 是 UTC 时刻，由 NotificationService 算出。
+    """
+
+    plan: TradePlan
+    quantity: int
+    reason: str
     deadline: datetime
 
 

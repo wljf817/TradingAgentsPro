@@ -6,7 +6,8 @@ add-session-patrol 的 design D12。启动对账有不一致、第一次健康�
 推送告警，见 add-close-reconciliation 的 design D10 和 add-health-monitoring 的 design D8。
 下单流程的部件在 DBOS launch 之前 install，/plan 的提交接口和确认按钮的回调接上下单流程，见
 add-order-flow 的 design D13。盘中巡检的每一轮里有紧急退出，见 add-emergency-exit-flow 的
-design D10。以后的流程从 TradingApp.lock 取锁。
+design D10。确认按钮的结果先送给紧急退出流程，它不在等的再送给下单流程；通知和紧急退出流程用同一份
+通知配置，见 update-confirmation-rules 的 design D4、D7。以后的流程从 TradingApp.lock 取锁。
 """
 
 import logging
@@ -17,6 +18,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from importlib.metadata import version
 from typing import Protocol
+from uuid import UUID
 
 from dbos import DBOS
 from pydantic import BaseModel, ConfigDict, Field
@@ -66,13 +68,18 @@ from tradingagentspro.modules.execution import (
 )
 from tradingagentspro.modules.health import HealthConfig, HealthService
 from tradingagentspro.modules.marketdata import MarketDataConfig, MarketDataService
-from tradingagentspro.modules.notification import NotificationConfig, NotificationService
+from tradingagentspro.modules.notification import (
+    ConfirmationOutcome,
+    DecisionHandler,
+    NotificationConfig,
+    NotificationService,
+)
 from tradingagentspro.modules.risk import PostgresReservationStore, RiskConfig, RiskService
 from tradingagentspro.modules.statestore import connect
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.ids import IdGenerator
 from tradingagentspro.shared.trading_calendar import TradingCalendar
-from tradingagentspro.workflows.emergency_flow import EmergencyFlow
+from tradingagentspro.workflows.emergency_flow import EmergencyDecisions, EmergencyFlow
 from tradingagentspro.workflows.health import HealthMonitor, degraded_text
 from tradingagentspro.workflows.order_flow import OrderFlow, OrderFlowConfig, TradeServices
 from tradingagentspro.workflows.order_workflow import OrderPlanIntake, deliver_decision, install
@@ -189,6 +196,19 @@ def paper_execution(
     )
 
 
+def decision_handler(decisions: EmergencyDecisions) -> DecisionHandler:
+    """确认按钮的回调：紧急退出流程在等的方案送给它，其余送给下单流程（不在等时抛错）。
+
+    见 bootstrap spec「模拟盘的装配」和 update-confirmation-rules 的 design D4。
+    """
+
+    def deliver(plan_id: UUID, outcome: ConfirmationOutcome) -> None:
+        if not decisions.deliver(plan_id, outcome):
+            deliver_decision(plan_id, outcome)
+
+    return deliver
+
+
 @dataclass(frozen=True, slots=True)
 class _Parts:
     """装配好、还没启动的部件。"""
@@ -241,8 +261,10 @@ def _assemble(
     services = TradeServices(execution, risk, emergency, health, market_data, lock)
     plans = PlanCommand(OrderPlanIntake(services), externals.ids, calendar, settings.discord)
     gateway = externals.discord(settings.discord, plans)
-    notifier = DiscordNotifier(gateway, settings.discord, clock, deliver_decision)
-    notification = NotificationService(notifier, clock, NotificationConfig())
+    notification_config = NotificationConfig()  # 通知和紧急退出流程共用
+    decisions = EmergencyDecisions()  # 紧急退出在等的确认，按钮的回调先送到这里
+    notifier = DiscordNotifier(gateway, settings.discord, clock, decision_handler(decisions))
+    notification = NotificationService(notifier, clock, notification_config)
     monitor = HealthMonitor(health, execution, market_data, notification, lock, clock)
     return _Parts(
         alpaca=client,
@@ -262,7 +284,15 @@ def _assemble(
             monitor,
             lock,
             PatrolConfig(),
-            emergency=EmergencyFlow(services, notification, clock, calendar, emergency_config),
+            emergency=EmergencyFlow(
+                services,
+                notification,
+                clock,
+                calendar,
+                emergency_config,
+                notification_config,
+                decisions,
+            ),
         ),
         flow=OrderFlow(services, notification, clock, calendar, OrderFlowConfig()),
     )

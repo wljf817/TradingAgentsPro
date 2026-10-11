@@ -4,10 +4,15 @@
 见 emergency-exit-flow spec 和 add-emergency-exit-flow 的 design。一轮里的每一项由巡检编排
 （patrol.py 的 _emergency_exit）：judge 不拿锁；cancel_buys、advance 各拿一次全程序共用的那把锁；
 report 只在释放预留时拿锁；推送告警都在锁外。
+
+通知配置的「紧急退出要确认」打开时，个股跌幅和组合熔断触发的清仓先请求人工确认，确认以后才
+清仓；本地备用止损不等确认。按钮的结果经 EmergencyDecisions 送到这里，见 emergency-exit-flow spec
+「紧急退出的人工确认」和 update-confirmation-rules 的 design D2 到 D7。
 """
 
 import logging
-from collections.abc import Iterable, Mapping
+import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -33,7 +38,13 @@ from tradingagentspro.modules.execution import (
     OrderStatus,
 )
 from tradingagentspro.modules.marketdata import Quote, QuoteUnavailableError
-from tradingagentspro.modules.notification import NotificationService
+from tradingagentspro.modules.notification import (
+    ConfirmationOutcome,
+    NotificationConfig,
+    NotificationService,
+    NotificationUnavailableError,
+    PendingConfirmation,
+)
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.trading_calendar import TradingCalendar
 from tradingagentspro.workflows.account_snapshot import account_snapshot
@@ -106,12 +117,22 @@ class ExitStep:
     order: Order | None = None
 
 
+class Gate(StrEnum):
+    """一只股票当天的紧急退出走到确认的哪一步，见 update-confirmation-rules 的 design D3。"""
+
+    OPEN = "open"  # 不用确认，或者已经确认：按「一只股票的清仓」处理
+    ASKING = "asking"  # 要请求确认
+    WAITING = "waiting"  # 已经请求，在等结果
+    DECLINED = "declined"  # 拒绝、超时或者发不出去：当天不再处理，本地备用止损除外
+
+
 @dataclass
 class _Record:
-    """这次运行里当天开始的一只股票的紧急退出，见 design D2。
+    """这次运行里当天开始的一只股票的紧急退出，见 add-emergency-exit-flow 的 design D2。
 
-    trigger 是第一次触发的原因；重启以后按清仓单找回来的为 None。announced：开始的告警已经推送过
-    （找回来的一开始就是）。ended：当天的紧急退出已经结束、结果已经告警，不再处理。
+    trigger 是第一次触发的原因（本地备用止损越过确认以后是备用止损）；重启以后按清仓单找回来的
+    为 None。announced：开始的告警已经推送过（找回来的一开始就是）。ended：当天的紧急退出已经结束，
+    不再处理。gate 是确认走到哪一步；pending 是在等的确认消息，请求以后才有。
     """
 
     plan: TradePlan
@@ -119,6 +140,45 @@ class _Record:
     trigger: Trigger | None
     announced: bool
     ended: bool = False
+    gate: Gate = Gate.OPEN
+    pending: PendingConfirmation | None = None
+
+
+class EmergencyDecisions:
+    """紧急退出在等的确认和送到的按钮结果，见 update-confirmation-rules 的 design D4。
+
+    按钮的回调在通知通道的工作线程里调用 deliver，巡检线程调用其余三个方法，所以用一把锁。
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._waiting: dict[UUID, ConfirmationOutcome | None] = {}
+
+    def expect(self, plan_id: UUID) -> None:
+        """开始等这个方案的结果。"""
+        with self._lock:
+            self._waiting[plan_id] = None
+
+    def deliver(self, plan_id: UUID, outcome: ConfirmationOutcome) -> bool:
+        """在等、还没有结果时记下这个结果并返回 True；否则不收下，返回 False。"""
+        with self._lock:
+            if plan_id not in self._waiting or self._waiting[plan_id] is not None:
+                return False
+            self._waiting[plan_id] = outcome
+            return True
+
+    def take(self, plan_id: UUID) -> ConfirmationOutcome | None:
+        """有结果就取走并停止等；没有结果时返回 None，继续等。"""
+        with self._lock:
+            outcome = self._waiting.get(plan_id)
+            if outcome is not None:
+                del self._waiting[plan_id]
+            return outcome
+
+    def close(self, plan_id: UUID) -> ConfirmationOutcome | None:
+        """停止等这个方案，返回已经送到的结果。"""
+        with self._lock:
+            return self._waiting.pop(plan_id, None)
 
 
 def holdings_of(account: Account, quotes: Mapping[str, Quote]) -> tuple[Holding, ...]:
@@ -142,8 +202,8 @@ def holdings_of(account: Account, quotes: Mapping[str, Quote]) -> tuple[Holding,
 class EmergencyFlow:
     """盘中巡检每一轮里的紧急退出，见 emergency-exit-flow spec。
 
-    judge 不拿锁；cancel_buys、advance 各拿一次锁，告警在锁外；report 只在释放预留时拿锁。
-    只在巡检的线程里调用。
+    judge 不拿锁；cancel_buys、advance 各拿一次锁，告警和请求确认在锁外；report 只在释放预留时
+    拿锁。只在巡检的线程里调用；按钮的结果经 decisions 从别的线程送来。
     """
 
     def __init__(
@@ -153,12 +213,16 @@ class EmergencyFlow:
         clock: Clock,
         calendar: TradingCalendar,
         config: EmergencyConfig,
+        notification_config: NotificationConfig,
+        decisions: EmergencyDecisions,
     ) -> None:
         self._services = services
         self._notification = notification
         self._clock = clock
         self._calendar = calendar
         self._config = config
+        self._confirm = notification_config.confirm_emergency_exits
+        self._decisions = decisions
         self._records: dict[UUID, _Record] = {}  # 当天开始的紧急退出，按清仓方案 ID
         self._breaker_day: date | None = None  # 推送过熔断告警的交易日
 
@@ -188,12 +252,12 @@ class EmergencyFlow:
             )
             for e in exits
         }
+        backups: dict[str, Trigger] = {}
         for position in account.positions:
-            if position.symbol not in triggers:
-                trigger = self._backup_stop(position, holdings[position.symbol], day)
-                if trigger is not None:
-                    triggers[position.symbol] = trigger
-        self._remember(triggers.values(), account, day)
+            trigger = self._backup_stop(position, holdings[position.symbol], day)
+            if trigger is not None:
+                backups[position.symbol] = trigger
+        self._remember(triggers, backups, account, day)
         breaker = None
         if emergency.breaker_tripped():
             breaker = Breaker(account.equity, account.previous_close_equity)
@@ -225,11 +289,20 @@ class EmergencyFlow:
         if self._breaker_day != judgement.day:
             self._breaker_day = judgement.day
             ratio = self._config.daily_loss_breaker_ratio
-            self._notify(breaker_text(breaker, ratio, len(buys)))
+            self._notify(breaker_text(breaker, ratio, len(buys), self._confirm))
 
     def advance(self, plan: TradePlan, judgement: Judgement) -> None:
-        """一只股票的清仓，见 spec「一只股票的清仓」和 design D5。锁里做事，锁外告警。"""
+        """一只股票的清仓，见 spec「一只股票的清仓」「紧急退出的人工确认」和 design D5。
+
+        要确认的先请求确认、等结果，确认的那一轮接着清仓（update-confirmation-rules 的 design D3）。
+        锁里做事，锁外告警和请求确认。
+        """
         record = self._records[plan.plan_id]
+        if record.gate is Gate.ASKING:
+            self._ask(record, judgement)
+            return
+        if record.gate is Gate.WAITING and not self._settle(record):
+            return
         with self._services.lock:
             step = self._advance(plan, judgement.snapshot)
         _log_step(plan, step)
@@ -249,6 +322,10 @@ class EmergencyFlow:
         in_session = self._calendar.session_at(self._clock.now()) is not None
         execution = self._services.execution
         for record in [r for r in self._records.values() if not r.ended]:
+            if record.gate is not Gate.OPEN:
+                if not in_session:
+                    self._close_unconfirmed(record)
+                continue
             order = execution.order(record.plan.plan_id)
             if order is not None:
                 if order.status.is_terminal:
@@ -264,6 +341,92 @@ class EmergencyFlow:
         """这次运行里这个清仓方案第一次触发的原因；没有记录、或者是重启后找回的为 None。"""
         record = self._records.get(plan.plan_id)
         return None if record is None else record.trigger
+
+    def _ask(self, record: _Record, judgement: Judgement) -> None:
+        """请求紧急退出的确认，不拿锁；发不出去按超时处理。
+
+        见 update-confirmation-rules 的 design D3。
+        """
+        plan = record.plan
+        assert record.trigger is not None  # 要确认的记录都是这次运行里触发的
+        quantity = next(p.quantity for p in judgement.snapshot.positions if p.symbol == plan.symbol)
+        self._decisions.expect(plan.plan_id)
+        try:
+            pending = self._notification.request_emergency_confirmation(
+                plan, quantity, record.trigger.detail
+            )
+        except NotificationUnavailableError as error:
+            self._decisions.close(plan.plan_id)
+            self._decline(record)
+            _log.error("紧急退出 %s：确认请求没有发出去（%s）", plan.symbol, error)
+            self._notify(unsent_text(plan.symbol))
+            return
+        record.gate = Gate.WAITING
+        record.pending = pending
+        _log.info(
+            "紧急退出 %s：%s，请求确认（方案 %s，消息 %s，截止 %s）",
+            plan.symbol,
+            record.trigger.detail,
+            plan.plan_id,
+            pending.message_id,
+            pending.deadline.isoformat(),
+        )
+
+    def _settle(self, record: _Record) -> bool:
+        """在等确认：先看按钮的结果，再看截止时刻。返回这一轮是否接着清仓。"""
+        plan, pending = record.plan, record.pending
+        assert pending is not None  # 在等的记录都已经请求过
+        outcome = self._decisions.take(plan.plan_id)
+        if outcome is None and self._clock.now() >= pending.deadline:
+            outcome = self._decisions.close(plan.plan_id)  # 关闭时刚好送到的结果照样采用
+            if outcome is None:
+                self._notification.finish_confirmation(
+                    pending.message_id, ConfirmationOutcome.TIMED_OUT
+                )
+                self._decline(record)
+                self._notify(timeout_text(plan.symbol))
+                return False
+        if outcome is ConfirmationOutcome.CONFIRMED:
+            record.gate = Gate.OPEN
+            _log.info("紧急退出 %s：已确认", plan.symbol)
+            return True
+        if outcome is ConfirmationOutcome.REJECTED:
+            self._decline(record)
+            _log.info("紧急退出 %s：确认被拒绝，今天不再紧急退出 %s", plan.symbol, plan.symbol)
+        return False
+
+    def _bypass(self, record: _Record, trigger: Trigger) -> None:
+        """本地备用止损越过确认：在等的确认消息作废；在等或已经拒绝、超时的改为接着清仓，
+        原因换成本地备用止损。见 update-confirmation-rules 的 design D3。
+        """
+        if record.gate is Gate.WAITING:
+            assert record.pending is not None
+            self._decisions.close(record.plan.plan_id)
+            message_id = record.pending.message_id
+            self._notification.finish_confirmation(message_id, ConfirmationOutcome.VOIDED)
+            _log.info(
+                "紧急退出 %s：本地备用止损触发，确认消息 %s 作废", record.plan.symbol, message_id
+            )
+        elif record.gate is not Gate.DECLINED:
+            return
+        record.gate = Gate.OPEN
+        record.trigger = trigger
+        record.announced = False
+        record.ended = False
+
+    def _close_unconfirmed(self, record: _Record) -> None:
+        """收盘以后还在等确认：确认消息作废，当天不再紧急退出，告警。"""
+        self._decisions.close(record.plan.plan_id)
+        if record.pending is not None:
+            message_id = record.pending.message_id
+            self._notification.finish_confirmation(message_id, ConfirmationOutcome.VOIDED)
+        self._decline(record)
+        self._notify(unconfirmed_text(record.plan.symbol))
+
+    def _decline(self, record: _Record) -> None:
+        """拒绝、超时、发不出去或者收盘：当天的紧急退出结束，本地备用止损除外。"""
+        record.gate = Gate.DECLINED
+        record.ended = True
 
     def _advance(self, plan: TradePlan, snapshot: AccountSnapshot) -> ExitStep:
         """在锁里：已有清仓单就不动；作废还没下单的方案；有挂着的订单就撤单、等它们结束；
@@ -335,19 +498,34 @@ class EmergencyFlow:
         plan = close_plan(position.symbol, position.sector, day)
         return Trigger(plan, ExitCause.BACKUP_STOP, detail)
 
-    def _remember(self, triggers: Iterable[Trigger], account: Account, day: date) -> None:
+    def _remember(
+        self,
+        triggers: Mapping[str, Trigger],
+        backups: Mapping[str, Trigger],
+        account: Account,
+        day: date,
+    ) -> None:
         """记下这一轮新触发的股票；重启以后找回有持仓、当天的清仓单还没结束的股票，见 design D2。
 
-        当天的清仓方案已经有结束了的订单的股票，当天的紧急退出已经做过，不再记。
+        triggers 是紧急退出的判定，backups 是本地备用止损；一只股票两种都有时原因取紧急退出的。
+        要确认时新记录从 ASKING 开始，备用止损触发的从 OPEN 开始；已有的记录遇到备用止损触发时
+        越过确认（update-confirmation-rules 的 design D3）。当天的清仓方案已经有结束了的订单的
+        股票，当天的紧急退出已经做过，不再记。
         """
         execution = self._services.execution
-        for trigger in triggers:
+        for symbol, trigger in {**backups, **triggers}.items():
             plan_id = trigger.plan.plan_id
-            if plan_id in self._records:
+            record = self._records.get(plan_id)
+            if record is not None:
+                if symbol in backups:
+                    self._bypass(record, backups[symbol])
                 continue
             order = execution.order(plan_id)
             if order is None:
-                self._records[plan_id] = _Record(trigger.plan, day, trigger, announced=False)
+                gate = Gate.ASKING if self._confirm and symbol not in backups else Gate.OPEN
+                self._records[plan_id] = _Record(
+                    trigger.plan, day, trigger, announced=False, gate=gate
+                )
             elif not order.status.is_terminal:
                 self._records[plan_id] = _Record(trigger.plan, day, None, announced=True)
         for position in account.positions:
@@ -417,15 +595,16 @@ def start_text(trigger: Trigger, step: ExitStep) -> str:
     return "".join(parts)
 
 
-def breaker_text(breaker: Breaker, ratio: Decimal, cancelled: int) -> str:
-    """熔断告警，见 design D8。"""
+def breaker_text(breaker: Breaker, ratio: Decimal, cancelled: int, confirm: bool) -> str:
+    """熔断告警，见 design D8；confirm 是「紧急退出要确认」打开，写明清仓要确认。"""
     previous, equity = breaker.previous_close_equity, breaker.equity
     loss = previous - equity
-    return (
+    text = (
         f"单日亏损熔断：前一交易日收盘时的权益 {previous:,}，当前权益 {equity:,}，"
         f"单日亏损 {loss:,}（{loss / previous:.1%}），达到熔断比例 {ratio:.1%}。"
         f"清仓全部持仓，撤掉全部买单（{cancelled} 笔），收盘前不再开仓"
     )
+    return text + "；每只持仓的清仓要确认" if confirm else text
 
 
 def outcome_text(order: Order) -> str:
@@ -437,6 +616,18 @@ def outcome_text(order: Order) -> str:
         f"{symbol} 紧急清仓单{ORDER_STATUSES[order.status]}：成交 {order.filled} / "
         f"{order.quantity} 股。今天不再清仓 {symbol}，剩下的持仓由止损单保护"
     )
+
+
+def timeout_text(symbol: str) -> str:
+    return f"{symbol} 紧急退出没有执行：到截止时刻没有确认。今天不再紧急退出 {symbol}，止损单照挂"
+
+
+def unsent_text(symbol: str) -> str:
+    return f"{symbol} 紧急退出没有执行：确认请求没有发出去。今天不再紧急退出 {symbol}，止损单照挂"
+
+
+def unconfirmed_text(symbol: str) -> str:
+    return f"{symbol} 紧急退出没有执行：到收盘还没有确认。今天不再紧急退出 {symbol}"
 
 
 def no_shares_text(symbol: str) -> str:

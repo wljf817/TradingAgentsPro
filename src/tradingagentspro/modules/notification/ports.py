@@ -9,6 +9,7 @@ from tradingagentspro.contracts.trade_plan import TradePlan
 from tradingagentspro.modules.notification.domain.confirmation import (
     ConfirmationOutcome,
     ConfirmationRequest,
+    EmergencyConfirmationRequest,
     PendingConfirmation,
 )
 
@@ -26,7 +27,7 @@ type DecisionHandler = Callable[[UUID, ConfirmationOutcome], None]
 
 
 class Notifier(Protocol):
-    """通知通道。三个方法都可以从任何线程同步调用，失败时抛 NotificationUnavailableError。"""
+    """通知通道。每个方法都可以从任何线程同步调用，失败时抛 NotificationUnavailableError。"""
 
     def alert(self, text: str) -> None:
         """推送一条告警。"""
@@ -34,6 +35,12 @@ class Notifier(Protocol):
 
     def request_confirmation(self, request: ConfirmationRequest) -> PendingConfirmation:
         """发出确认消息；同一个方案重复请求时返回第一次的那条。"""
+        ...
+
+    def request_emergency_confirmation(
+        self, request: EmergencyConfirmationRequest
+    ) -> PendingConfirmation:
+        """发出紧急退出的确认消息；同一个方案重复请求时返回第一次的那条。"""
         ...
 
     def finish_confirmation(self, message_id: str, outcome: ConfirmationOutcome) -> None:
