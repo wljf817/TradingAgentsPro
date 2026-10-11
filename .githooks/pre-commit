@@ -1,5 +1,5 @@
 #!/bin/sh
-# 提交前跑一遍和 CI 相同的检查，任何一项失败就拒绝提交。
+# 提交前跑一遍 CI 的检查，再加上只在本地的测试（tests/ 不进 git），任何一项失败就拒绝提交。
 # 启用：git config core.hooksPath .githooks
 # 检查的是工作区的全部文件，不只是暂存的部分。
 set -e

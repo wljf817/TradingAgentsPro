@@ -31,3 +31,6 @@ htmlcov/
 # Agent instructions (local only)
 AGENTS.md
 CLAUDE.md
+
+# Tests (local only)
+tests/

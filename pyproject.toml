@@ -39,6 +39,9 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py313"
+# tests/ 只在本地、写在 .gitignore 里，按 .gitignore 排除会漏掉它；.claude/worktrees/ 里是 worktree。
+respect-gitignore = false
+extend-exclude = [".claude/worktrees"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "DTZ", "TID", "RUF"]

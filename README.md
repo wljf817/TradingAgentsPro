@@ -74,7 +74,9 @@ uv run tradingagentspro run
 
 连数据库的测试会用 testcontainers 启动一个临时的 PostgreSQL 18 容器，用完即删，所以跑完整的测试要开着 Docker（比如 OrbStack 或 Docker Desktop）。第一次运行会先下载镜像。不连数据库的测试不需要 Docker。
 
-克隆后启用提交前检查（和 CI 跑同一套，任何一项失败就拒绝提交）：
+`tests/` 只在本地，不进 git：CI 不跑测试，mypy 只查 `src`。提交前检查是 CI 的检查再加上测试，所以新克隆的仓库要先放好 `tests/`。
+
+启用提交前检查（任何一项失败就拒绝提交）：
 
 ```bash
 git config core.hooksPath .githooks
