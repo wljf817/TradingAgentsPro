@@ -17,10 +17,11 @@ class Actor(StrEnum):
     EXECUTION = "execution"  # 执行模块
     HUMAN = "human"  # 人
     SYSTEM = "system"  # 系统
+    STOCK_POOL = "stock_pool"  # 股票池
 
 
 class Action(StrEnum):
-    """动作，见 program-log spec 四个行为者的动作表。"""
+    """动作，见 program-log spec 各个行为者的动作表。"""
 
     RISK_CHECK = "risk_check"  # 风控检查
     RECHECK = "recheck"  # 下单前再校验
@@ -48,6 +49,16 @@ class Action(StrEnum):
     ALERT = "alert"  # 告警
     REQUEST_CONFIRMATION = "request_confirmation"  # 请求确认
     FINISH_CONFIRMATION = "finish_confirmation"  # 结束确认
+    POOL_ADD = "pool_add"  # 加入股票池
+    POOL_REMOVE = "pool_remove"  # 删除
+    POOL_PROMOTE = "pool_promote"  # 升级
+    POOL_DEMOTE = "pool_demote"  # 降为候选
+    POOL_KEEP = "pool_keep"  # 保持
+    POOL_SCORE = "pool_score"  # 记录评分
+    POOL_THESIS = "pool_thesis"  # 论点更新
+    POOL_EXPIRE = "pool_expire"  # 超期移出
+    POOL_BOUGHT = "pool_bought"  # 买入成交
+    POOL_CLOSED = "pool_closed"  # 清仓
 
 
 ACCOUNT = "account"  # 对象：整个券商账户

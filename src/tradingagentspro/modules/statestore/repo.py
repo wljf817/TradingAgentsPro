@@ -2,7 +2,8 @@
 
 每张表按键保存记录的各个版本：内容有变化时写入一个新版本，读取时取最新版本；需要时也能读出
 一段时间里用过的版本。
-记录整份存成 JSONB；筛选列在保存时从记录算出，列出记录时按最新版本筛选。
+记录整份存成 JSONB；筛选列在保存时从记录算出，列出记录时按最新版本筛选：筛选列等于给定值，或者
+几个时刻列至少一列不早于给定时刻。
 """
 
 from collections.abc import Sequence
@@ -17,9 +18,12 @@ from sqlalchemy import (
     Integer,
     MetaData,
     PrimaryKeyConstraint,
+    Select,
+    Subquery,
     Table,
     create_engine,
     insert,
+    or_,
     select,
     union_all,
 )
@@ -106,21 +110,24 @@ class VersionedStore[T]:
 
     def latest(self, **where: object) -> tuple[T, ...]:
         """每个键的最新版本里，筛选列等于给定值的那些，按键排序。"""
-        table = self._table
-        newest = (
-            select(table)
-            .ext(distinct_on(self._key))
-            .order_by(self._key, table.c.version.desc())
-            .subquery()
-        )
-        query = (
+        newest = self._newest()
+        return self._records(
             select(newest.c.data)
             .where(*(newest.c[name] == value for name, value in where.items()))
             .order_by(newest.c[self._key.name])
         )
-        with self._engine.connect() as connection:
-            rows: Sequence[Any] = connection.execute(query).scalars().all()
-        return tuple(self._adapter.validate_python(data) for data in rows)
+
+    def latest_since(self, since: datetime, *columns: str) -> tuple[T, ...]:
+        """每个键的最新版本里，columns 这几个时刻列至少有一列不早于 since 的那些，按键排序。
+
+        为空的时刻列不算。
+        """
+        newest = self._newest()
+        return self._records(
+            select(newest.c.data)
+            .where(or_(*(newest.c[name] >= since for name in columns)))
+            .order_by(newest.c[self._key.name])
+        )
 
     def history(self, since: datetime) -> tuple[T, ...]:
         """since 以来用过的版本：每个键在 since 时的版本，加上写入时刻不早于 since 的全部版本。
@@ -138,7 +145,20 @@ class VersionedStore[T]:
         )
         later = select(self._key, table.c.version, table.c.data).where(table.c.recorded_at >= since)
         used = union_all(select(at_since), later).subquery()
-        query = select(used.c.data).order_by(used.c[self._key.name], used.c.version)
+        return self._records(select(used.c.data).order_by(used.c[self._key.name], used.c.version))
+
+    def _newest(self) -> Subquery:
+        """每个键的最新版本，带全部的列。"""
+        table = self._table
+        return (
+            select(table)
+            .ext(distinct_on(self._key))
+            .order_by(self._key, table.c.version.desc())
+            .subquery()
+        )
+
+    def _records(self, query: Select[Any]) -> tuple[T, ...]:
+        """执行只选出记录内容的查询，按查询给出的顺序读回记录。"""
         with self._engine.connect() as connection:
             rows: Sequence[Any] = connection.execute(query).scalars().all()
         return tuple(self._adapter.validate_python(data) for data in rows)

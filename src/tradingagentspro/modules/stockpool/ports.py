@@ -9,8 +9,8 @@ from tradingagentspro.modules.stockpool.domain.entry import PoolEntry
 class StockPoolStore(Protocol):
     """股票池的存储：按股票代码保存每只股票最新的记录，包括已经移出的。
 
-    数据库实现（M4）只追加不覆盖：内容有变化时写入一个新版本，读取时取每只股票的最新版本，
-    见 state-store spec。
+    数据库实现在 repo.py，只追加不覆盖：内容有变化时写入一个新版本，读取时取每只股票的最新版本，
+    见 state-store spec。数据库的错误原样抛出，不当作没有记录。
     """
 
     def get(self, symbol: str) -> PoolEntry | None:

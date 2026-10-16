@@ -18,8 +18,8 @@
 
 ```
 modules/stockpool
-  domain/entry.py   PoolEntry：thesis 改名 watch_thesis，加 investment_thesis、last_review_day；
-                    状态变化的方法带上论点和上次复查的那一天；加两个论点更新的方法
+  domain/entry.py   PoolEntry：thesis 改名 watch_thesis，加 investment_thesis、last_review_day、
+                    candidate_since；状态变化的方法带上论点和上次复查的那一天；加两个论点更新的方法
   service.py        构造参数加 ProgramLog；PM 发起的操作加案件 ID；两个论点更新；
                     买入成交带投资论点；PM 发起的清仓分成转为关注和移出两个操作；锁；写程序日志
   repo.py           新：表 stockpool_entries，PostgresStockPoolStore
@@ -56,7 +56,7 @@ bootstrap/migrations/versions/v0005_create_stock_pool.py    新
 
 ## Decisions
 
-### D1 记录：两种论点和上次复查的那一天
+### D1 记录：两种论点、上次复查的那一天和成为候选的时刻
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -71,6 +71,7 @@ class PoolEntry:
     watch_thesis: WatchThesis | None = None  # 只有关注有
     investment_thesis: InvestmentThesis | None = None  # 只有持仓有
     last_review_day: date | None = None  # 只有关注和持仓有
+    candidate_since: datetime | None = None  # 加入或代码触发的清仓转为候选的时刻
     score: int | None = None
     reviewed_at: datetime | None = None
     removal: Removal | None = None
@@ -80,19 +81,19 @@ class PoolEntry:
 
 | 状态 | 有 | 没有 |
 | --- | --- | --- |
-| 候选 | 过期时间 | 关注论点、投资论点、上次复查的那一天 |
-| 关注 | 关注论点、上次复查的那一天 | 过期时间、投资论点 |
-| 持仓 | 投资论点、上次复查的那一天 | 过期时间、关注论点 |
+| 候选 | 过期时间；加入和代码触发的清仓来的还有成为候选的时刻 | 关注论点、投资论点、上次复查的那一天；降为候选来的没有成为候选的时刻 |
+| 关注 | 关注论点、上次复查的那一天 | 过期时间、投资论点、成为候选的时刻 |
+| 持仓 | 投资论点、上次复查的那一天 | 过期时间、关注论点、成为候选的时刻 |
 
-状态变化的方法（返回新的记录）：
+加入时用例新建记录，成为候选的时刻和加入时刻相同。状态变化的方法（返回新的记录）：
 
 | 方法 | 之后 |
 | --- | --- |
-| `promoted(thesis, last_review_day)` | 关注，关注论点和上次复查的那一天是给出的，没有过期时间 |
+| `promoted(thesis, last_review_day)` | 关注，关注论点和上次复查的那一天是给出的，去掉过期时间和成为候选的时刻 |
 | `kept(expires_at)` | 不改 |
-| `demoted(expires_at)` | 候选，去掉关注论点和上次复查的那一天 |
-| `bought(thesis, last_review_day)` | 不在池子里抛 `ValueError`；持仓返回自己；否则持仓，投资论点和上次复查的那一天是给出的，去掉关注论点和过期时间 |
-| `closed_to_candidate(expires_at)` | 要求池子里的持仓；候选，去掉投资论点和上次复查的那一天 |
+| `demoted(expires_at)` | 候选，去掉关注论点和上次复查的那一天，没有成为候选的时刻 |
+| `bought(thesis, last_review_day)` | 不在池子里抛 `ValueError`；持仓返回自己；否则持仓，投资论点和上次复查的那一天是给出的，去掉关注论点、过期时间和成为候选的时刻 |
+| `closed_to_candidate(expires_at, at)` | 要求池子里的持仓；候选，去掉投资论点和上次复查的那一天，成为候选的时刻是 `at` |
 | `closed_to_watch(thesis, last_review_day)` | 要求池子里的持仓；关注，去掉投资论点 |
 | `watch_thesis_updated(thesis, last_review_day)` | 新：换关注论点和上次复查的那一天 |
 | `investment_thesis_updated(thesis, last_review_day)` | 新：换投资论点和上次复查的那一天 |
@@ -101,6 +102,8 @@ class PoolEntry:
 - 两个论点更新的方法和 `promoted` 一样不检查状态：PM 发起的变化先由 `rules.py` 的检查给出拒绝原因（`status_rejection(entry, WATCH)`、`status_rejection(entry, HOLDING)`），已有的写法
 - `thesis` 改名 `watch_thesis`：记录里有了两种论点，字段名会存进表里的 JSON。现在表里还没有数据，是改名代价最小的时候；名字和结论里的 `watch_thesis` 一致
 - 上次复查的那一天只有一个字段：一只股票同时最多有一种论点，它跟着现在的论点走
+- 成为候选的时刻给收盘心跳判断新候选（close-check spec「候选评估」）：新候选是加入或代码触发的清仓转为候选以后、还没有候选评估得出结论的候选，降为候选的不算。股票池只记这个时刻，降为候选的为空；有没有候选评估得出结论由收盘心跳查案件记录
+- 考虑过：股票池存一个"是不是新候选"的标记。要股票池知道候选评估什么时候得出结论，那是案件记录的事，没有采用
 - 考虑过：一个字段 `thesis: WatchThesis | InvestmentThesis | None`。收盘心跳和 `ThesisUpdate` 读"现在的论点"时少一次按状态选，但读入场条件（只有关注论点有）、目标价和证伪条件（只有投资论点有）的地方都要先判断类型，从 JSON 读回时也要靠 Pydantic 在两种模型里挑。没有采用
 - 考虑过：论点和上次复查的那一天合成一个小类型。没有采用：为两个字段多一个类型
 
@@ -227,7 +230,7 @@ class VersionedStore[T]:
         return self._records(query)
 ```
 
-- `_newest()`、`_records()` 从现在的 `latest` 里抽出来，`latest` 的行为不变
+- `_newest()`、`_records()` 从现在的 `latest` 里抽出来，`latest` 和 `history` 共用 `_records()`，行为不变
 - 仍是"只看每个键的最新版本"的列出，在 state-store spec「读取最新版本」说的范围里，不改 state-store spec；它的行为由 stock-pool spec「股票池的存储」的场景和状态库模块自己的测试管
 - 跟进存储的 `requested_since`（获批时刻不早于某个时刻的跟进）是同一种列出，可以直接用
 - 考虑过：`changed_since` 读出全部股票的最新版本，在 Python 里筛。最简单，但每次加入和删除都要读出所有加入过的股票，越用越多。没有采用
@@ -298,7 +301,7 @@ class Action(StrEnum):
 | 删除 | `通过：候选移出，理由：论点不再成立`；`被拒绝：持仓不能删除；理由：……` |
 | 升级 | `通过：复查日 2026-10-21，催化剂截止日期 2026-10-29，上次复查的那一天 2026-10-14` |
 | 降为候选、保持 | `通过：过期时间 2026-10-28 20:00 UTC` |
-| 记录评分 | `评分 1`；`被拒绝：不在池子里` |
+| 记录评分 | `评分 1`；`被拒绝：不在池子里；评分 1` |
 | 论点更新 | `投资论点，通过：复查日 2026-10-23，催化剂截止日期 2026-10-29，上次复查的那一天 2026-10-07` |
 | 超期移出 | `过期时间 2026-10-27 20:00 UTC` |
 | 买入成交 | `关注变为持仓：复查日 2026-10-21，催化剂截止日期 2026-10-29，上次复查的那一天 2026-10-14` |
@@ -319,9 +322,9 @@ class Action(StrEnum):
 ### D7 测试
 
 ```
-tests/modules/stockpool/builders.py           CCC 带基准投资论点，BBB、CCC 的上次复查的那一天
-                                              2026-10-07；基准投资论点；用例带内存的程序日志；
-                                              案件 ID K1
+tests/modules/stockpool/builders.py           AAA 的成为候选的时刻；CCC 带基准投资论点，BBB、CCC
+                                              的上次复查的那一天 2026-10-07；基准投资论点；
+                                              用例带内存的程序日志；案件 ID K1
 tests/modules/stockpool/domain/test_entry.py  新字段、状态变化的方法和不变量
 tests/modules/stockpool/test_service.py       stock-pool spec 改了和新增的场景，存储和同时进行的除外
 tests/modules/stockpool/test_program_log.py   program-log spec「股票池的动作」
@@ -333,7 +336,7 @@ tests/bootstrap/test_database.py、test_app.py 表的清单加 stockpool_entries
 ```
 
 - 基准投资论点和 case-types spec 的相同，从 `tests/modules/scheduler` 的 builders 复制，不跨测试目录 import
-- 同时进行的测试：存储包一层，`in_pool`、`changed_since` 被调用时最多等 0.5 秒，等另一个线程也来读。没有锁时两个线程读到同样的池子，两次都通过，测试失败；有锁时第二个线程要等第一个保存完才读到。每个场景用两个线程各发一个请求，断言恰好一个通过
+- 同时进行的测试：存储包一层，`in_pool`、`changed_since` 读完以后最多等 0.5 秒，等另一个线程也读完。没有锁时两个线程拿着同样的池子做检查，两次都通过，测试失败；有锁时第二个线程要等第一个保存完才读到。每个场景用两个线程各发一个请求，断言恰好一个通过
 - `test_repo.py`：列出池子里的股票、`changed_since` 只看最新版本、移出时刻为空的不算，内存实现和数据库实现都测；原样读回、重启（用同一个数据库新建 `PostgresStockPoolStore` 和用例）、数据库连不上只测数据库实现，要开着 Docker
 - 状态机性质测试：加上两个论点更新、带论点的买入成交、两种 PM 发起的清仓；每一步之后另外检查：每条记录满足 D1 的不变量；通过并改变了记录的、被拒绝的请求各多一条条目，没改变的、报错的不多
 - 每个测试的说明写明对应的 spec 场景
@@ -344,7 +347,6 @@ tests/bootstrap/test_database.py、test_app.py 表的清单加 stockpool_entries
 - [锁只管一个进程] → 程序是单进程；以后拆进程时改成数据库里的锁
 - [锁里写程序日志，拿锁的时间长一点] → 每个操作是几次本机数据库读写；股票池每天几十次操作
 - [`thesis` 改名] → 只影响股票池模块和它的测试；表还没有数据
-- [新候选的判断还缺"成为候选的时刻"] → proposal「需要人决定」第 3 条
 - [跟进存储同时在写 proposal，也要按时刻列出最新版本] → 本变更先 apply，`latest_since` 它可以直接用；它的 proposal 里如果写了别的做法，apply 时统一
 
 ## Migration Plan

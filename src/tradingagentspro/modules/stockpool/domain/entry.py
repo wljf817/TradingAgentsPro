@@ -1,15 +1,16 @@
-"""股票池的记录：一只股票一条，以及按 stock-pool spec「状态变化」表改变状态的方法。
+"""股票池的记录：一只股票一条，以及按 stock-pool spec「状态变化」表改变状态、按「论点更新」换论点的
+方法。
 
 移出以后记录保留，带着移出的时刻和原因，用来判断冷却期；重新加入时换成一条新记录。
 """
 
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Self
 
 from tradingagentspro.contracts.stock_pool import StockStatus
-from tradingagentspro.contracts.thesis import WatchThesis
+from tradingagentspro.contracts.thesis import InvestmentThesis, WatchThesis
 
 _MIN_SCORE, _MAX_SCORE = -2, 2
 
@@ -45,13 +46,19 @@ class PoolEntry:
     - reason：加入时的理由与论点草稿
     - sector：加入时由调用方从数据源传入，之后不变
     - expires_at：过期时间，是某个交易日的收盘时刻；只有候选有
-    - thesis：关注论点；只有关注有
+    - watch_thesis：关注论点；只有关注有
+    - investment_thesis：投资论点；只有持仓有
+    - last_review_day：论点的复查日最近一次新设（买入、升级、清仓转为关注、续期）的那个交易日，
+      由调用方给出；只有关注和持仓有
+    - candidate_since：加入或代码触发的清仓转为候选的时刻；降为候选的候选没有，关注和持仓也没有。
+      收盘心跳拿它判断新候选
     - score、reviewed_at：PM 最近一次对这只股票给出结论时的评分和时刻；还没有时为 None
     - removal：移出以后才有，这时状态停在移出前的状态
 
-    状态变化的方法都返回新的记录，并维持不变量：候选有过期时间、没有关注论点；关注有关注论点、
-    没有过期时间；持仓两者都没有。PM 发起的变化先由 rules 里的检查给出拒绝原因，方法本身不再
-    检查；代码发起的变化（买入成交、清仓）在方法里检查状态，不对就抛 ValueError。
+    状态变化的方法都返回新的记录，并维持不变量：候选有过期时间，没有论点和上次复查的那一天；关注
+    有关注论点，持仓有投资论点，两者都有上次复查的那一天，都没有过期时间和成为候选的时刻。PM 发起
+    的变化先由 rules 里的检查给出拒绝原因，方法本身不再检查；代码发起的变化（买入成交、清仓）在
+    方法里检查状态，不对就抛 ValueError。
     """
 
     symbol: str
@@ -61,7 +68,10 @@ class PoolEntry:
     sector: str
     added_at: datetime
     expires_at: datetime | None
-    thesis: WatchThesis | None = None
+    watch_thesis: WatchThesis | None = None
+    investment_thesis: InvestmentThesis | None = None
+    last_review_day: date | None = None
+    candidate_since: datetime | None = None
     score: int | None = None
     reviewed_at: datetime | None = None
     removal: Removal | None = None
@@ -70,35 +80,86 @@ class PoolEntry:
     def in_pool(self) -> bool:
         return self.removal is None
 
-    def promoted(self, thesis: WatchThesis) -> Self:
-        """候选升级为关注。"""
-        return replace(self, status=StockStatus.WATCH, expires_at=None, thesis=thesis)
+    def promoted(self, thesis: WatchThesis, last_review_day: date) -> Self:
+        """候选升级为关注：关注论点和上次复查的那一天是给出的。"""
+        return replace(
+            self,
+            status=StockStatus.WATCH,
+            expires_at=None,
+            candidate_since=None,
+            watch_thesis=thesis,
+            last_review_day=last_review_day,
+        )
 
     def kept(self, expires_at: datetime) -> Self:
         """候选保持，重设过期时间。"""
         return replace(self, expires_at=expires_at)
 
     def demoted(self, expires_at: datetime) -> Self:
-        """关注降为候选：去掉关注论点，设过期时间。"""
-        return replace(self, status=StockStatus.CANDIDATE, expires_at=expires_at, thesis=None)
+        """关注降为候选：去掉关注论点和上次复查的那一天，设过期时间。降为候选的不是新候选，
+        没有成为候选的时刻。
+        """
+        return replace(
+            self,
+            status=StockStatus.CANDIDATE,
+            expires_at=expires_at,
+            candidate_since=None,
+            watch_thesis=None,
+            last_review_day=None,
+        )
 
-    def bought(self) -> Self:
-        """买入成交（部分成交也算）：候选和关注变为持仓，持仓加仓不变。"""
+    def bought(self, thesis: InvestmentThesis, last_review_day: date) -> Self:
+        """开仓单买入成交（部分成交也算）：候选和关注变为持仓，投资论点是开仓方案附的，上次复查的
+        那一天是给出开仓方案结论的那一天。持仓（同一笔开仓单后续的成交、加仓）不变，不用传入的论点。
+        """
         if not self.in_pool:
             raise ValueError(f"{self.symbol} 不在池子里，不能买入成交")
         if self.status is StockStatus.HOLDING:
             return self
-        return replace(self, status=StockStatus.HOLDING, expires_at=None, thesis=None)
+        return replace(
+            self,
+            status=StockStatus.HOLDING,
+            expires_at=None,
+            candidate_since=None,
+            watch_thesis=None,
+            investment_thesis=thesis,
+            last_review_day=last_review_day,
+        )
 
-    def closed_to_candidate(self, expires_at: datetime) -> Self:
-        """代码触发的清仓（止损单、紧急风险退出）：持仓转为候选，设过期时间。"""
+    def closed_to_candidate(self, expires_at: datetime, at: datetime) -> Self:
+        """代码触发的清仓（止损单、紧急风险退出）在 at 完成：持仓转为候选，去掉投资论点和上次复查的
+        那一天，设过期时间；成为候选的时刻是 at。
+        """
         self._check_holding()
-        return replace(self, status=StockStatus.CANDIDATE, expires_at=expires_at)
+        return replace(
+            self,
+            status=StockStatus.CANDIDATE,
+            expires_at=expires_at,
+            candidate_since=at,
+            investment_thesis=None,
+            last_review_day=None,
+        )
 
-    def closed_to_watch(self, thesis: WatchThesis) -> Self:
-        """PM 发起的清仓，PM 选择转为关注：持仓转为关注。"""
+    def closed_to_watch(self, thesis: WatchThesis, last_review_day: date) -> Self:
+        """PM 发起的清仓，PM 选择转为关注：持仓转为关注，去掉投资论点，关注论点和上次复查的那一天
+        是给出的。
+        """
         self._check_holding()
-        return replace(self, status=StockStatus.WATCH, thesis=thesis)
+        return replace(
+            self,
+            status=StockStatus.WATCH,
+            watch_thesis=thesis,
+            investment_thesis=None,
+            last_review_day=last_review_day,
+        )
+
+    def watch_thesis_updated(self, thesis: WatchThesis, last_review_day: date) -> Self:
+        """关注论点更新：关注论点整份换成新的，上次复查的那一天换成给出的。"""
+        return replace(self, watch_thesis=thesis, last_review_day=last_review_day)
+
+    def investment_thesis_updated(self, thesis: InvestmentThesis, last_review_day: date) -> Self:
+        """投资论点更新：投资论点整份换成新的，上次复查的那一天换成给出的。"""
+        return replace(self, investment_thesis=thesis, last_review_day=last_review_day)
 
     def scored(self, score: int, at: datetime) -> Self:
         """PM 在 at 给出了一次结论，评分是 score：更新最新评分和上次复查时间。"""
