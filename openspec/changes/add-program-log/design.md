@@ -202,7 +202,7 @@ class ProgramLog:
 | --- | --- |
 | 录入方案 | `OrderPlanIntake.submit`，风控检查之前 |
 | 风控检查 | `check_plan`；`EmergencyFlow._advance` 检查清仓方案以后 |
-| 下单前再校验 | `OrderFlow._attempt`；`EmergencyFlow._advance` |
+| 下单前再校验 | `OrderFlow._attempt`，作废或者提交了订单时才写（转去等重试、等开盘的那几次不写）；`EmergencyFlow._advance` |
 | 释放预留 | `entries.release`（D6），在每个调用 `risk.release` 的地方 |
 | 提交订单 | `OrderFlow._attempt`、`OrderFlow.void_expired`（已经有订单）；`EmergencyFlow._advance` |
 | 订单变化 | `SessionPatrol._track_orders`；撤单和三种对账用 `entries.order_changes`（D5） |

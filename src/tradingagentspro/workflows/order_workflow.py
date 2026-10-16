@@ -15,6 +15,8 @@ from dbos import DBOS, SetWorkflowID
 from tradingagentspro.contracts.risk import RiskDecision, RiskOutcome
 from tradingagentspro.contracts.trade_plan import TradePlan
 from tradingagentspro.modules.notification import ConfirmationOutcome
+from tradingagentspro.modules.programlog import Action, Actor
+from tradingagentspro.workflows.entries import plan_text, release
 from tradingagentspro.workflows.order_flow import (
     Attempt,
     AttemptKind,
@@ -75,16 +77,20 @@ class OrderPlanIntake:
         return next((p.sector for p in positions if p.symbol == symbol), None)
 
     def submit(self, plan: TradePlan) -> RiskDecision:
-        """检查并预留；通过或调整时以方案 ID 启动下单流程，启动失败时释放预留再抛出。"""
-        decision = check_plan(self._services, plan)
+        """写程序日志的录入方案，检查并预留；通过或调整时以方案 ID 启动下单流程，启动失败时
+        释放预留再抛出。见 program-log spec「人的动作」。
+        """
+        services = self._services
+        services.log.write(Actor.HUMAN, Action.ENTER_PLAN, str(plan.plan_id), plan_text(plan))
+        decision = check_plan(services, plan)
         if decision.outcome is RiskOutcome.REJECTED:
             return decision
         try:
             with SetWorkflowID(str(plan.plan_id)):
                 DBOS.start_workflow(order_plan, plan, decision)
         except Exception:
-            with self._services.lock:
-                self._services.risk.release(plan.plan_id)
+            with services.lock:
+                release(services.risk, services.log, plan.plan_id, "启动下单流程失败")
             raise
         return decision
 
@@ -109,7 +115,7 @@ def order_plan(plan: TradePlan, decision: RiskDecision) -> PlanEnd:
     choice = DBOS.recv(DECISION_TOPIC, timeout_seconds=requested.wait_seconds)
     stage = Stage.TIMED_OUT if choice is None else Stage(choice)
     DBOS.set_event(CONFIRMATION, stage)
-    _settle(plan, decision, stage, requested.message_id)
+    _settle(plan, decision, stage, requested)
     if stage is not Stage.CONFIRMED:
         return PlanEnd(stage.value)
     return _execute(plan, decision)
@@ -146,8 +152,10 @@ def _request_confirmation(plan: TradePlan, decision: RiskDecision) -> Requested 
 
 
 @DBOS.step(name="order_plan.settle")
-def _settle(plan: TradePlan, decision: RiskDecision, stage: Stage, message_id: str | None) -> None:
-    _parts().flow.settle(plan, decision, stage, message_id)
+def _settle(
+    plan: TradePlan, decision: RiskDecision, stage: Stage, requested: Requested | None
+) -> None:
+    _parts().flow.settle(plan, decision, stage, requested)
 
 
 @DBOS.step(name="order_plan.timing")

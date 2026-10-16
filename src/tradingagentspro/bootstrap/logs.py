@@ -1,7 +1,7 @@
 """日志配置：全部日志写到 stderr，时间用 UTC，级别 INFO。
 
-见 bootstrap spec「日志」和 add-bootstrap-wiring 的 design D4。程序日志 M4 才有，
-在那之前程序的行为都写进 Python 的日志，由 systemd 交给 journald。
+见 bootstrap spec「日志」和 add-bootstrap-wiring 的 design D4。这里只写启动和停止的过程和技术问题，
+由 systemd 交给 journald；程序的动作写进数据库里的程序日志，见 program-log spec。
 """
 
 import logging

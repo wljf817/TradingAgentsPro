@@ -1,6 +1,6 @@
-"""方案动作、订单状态、买卖方向和止损单状态的中文名：几个流程的日志和告警共用。"""
+"""方案动作、订单类型、订单状态、买卖方向和止损单状态的中文名：几个流程的日志和告警共用。"""
 
-from tradingagentspro.contracts.trade_plan import TradeAction
+from tradingagentspro.contracts.trade_plan import OrderType, TradeAction
 from tradingagentspro.modules.execution import OrderSide, OrderStatus, StopStatus
 
 ACTIONS = {
@@ -10,6 +10,7 @@ ACTIONS = {
     TradeAction.CLOSE: "清仓",
 }
 
+ORDER_TYPES = {OrderType.LIMIT: "限价单", OrderType.MARKET: "市价单"}
 SIDES = {OrderSide.BUY: "买入", OrderSide.SELL: "卖出"}
 ORDER_STATUSES = {
     OrderStatus.PENDING: "待提交",

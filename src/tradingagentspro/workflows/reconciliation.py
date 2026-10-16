@@ -1,7 +1,8 @@
-"""对账的流程：盘中巡检每一轮最后的收盘对账，以及收盘对账结果和启动对账告警的文字。
+"""对账的流程：盘中巡检每一轮最后的收盘对账，以及收盘对账结果、对账条目和启动对账告警的文字。
 
 见 close-reconciliation spec、bootstrap spec「启动对账」和 add-close-reconciliation 的 design D2、
-D8、D9。收盘对账拿着全程序共用的那把锁做，推送结果时不拿锁。
+D8、D9。收盘对账拿着全程序共用的那把锁做，推送结果时不拿锁。对账的结果和对账跟进过的订单的变化
+写进程序日志，见 program-log spec「执行模块的动作」和 add-program-log 的 design D5。
 """
 
 import logging
@@ -15,6 +16,8 @@ from tradingagentspro.modules.execution import (
     Reconciliation,
 )
 from tradingagentspro.modules.notification import NotificationService
+from tradingagentspro.modules.programlog import ACCOUNT, Action, Actor, ProgramLog
+from tradingagentspro.workflows.entries import order_changes
 from tradingagentspro.workflows.names import ORDER_STATUSES, SIDES
 
 _log = logging.getLogger(__name__)
@@ -25,28 +28,29 @@ _RESUMED = "没有不一致，已恢复开仓"
 
 
 def close_reconcile_if_due(
-    execution: ExecutionService, notification: NotificationService, lock: threading.RLock
+    execution: ExecutionService,
+    notification: NotificationService,
+    lock: threading.RLock,
+    log: ProgramLog,
 ) -> None:
     """收盘对账到期就做，见 close-reconciliation spec「巡检里的收盘对账」。
 
-    判断是否到期不拿锁；对账拿着锁；放开锁以后写日志、推送结果。券商不可用时写 WARNING，
-    下一轮再做；别的错误原样抛出，由巡检写 ERROR。
+    判断是否到期不拿锁；对账拿着锁，跟进过的订单有变化的写订单变化；放开锁以后写程序日志的
+    对账（输出的引用是交易日，说明是结果消息），再推送结果。券商不可用时写 WARNING，下一轮再做；
+    别的错误原样抛出，由巡检写 ERROR。
     """
     day = execution.close_due()
     if day is None:
         return
     try:
-        with lock:
+        with lock, order_changes(execution, log):
             record = execution.close_reconcile(day)
     except BrokerUnavailableError as error:
         _log.warning("收盘对账 %s 没做成：券商不可用（%s），下一轮再做", day, error)
         return
     text = close_text(record)
-    if record.clean:
-        _log.info("%s", text)
-    else:
-        _log.warning("%s", text)
-    notification.alert(text)
+    log.write(Actor.EXECUTION, Action.RECONCILE, ACCOUNT, text, outputs=[day.isoformat()])
+    notification.alert(ACCOUNT, text)
 
 
 def close_text(record: CloseReconciliation) -> str:
@@ -71,6 +75,13 @@ def close_text(record: CloseReconciliation) -> str:
 def startup_text(result: Reconciliation) -> str:
     """启动对账有不一致时的告警，见 bootstrap spec「启动对账」。"""
     return "\n".join(["启动对账有不一致：", *inconsistency_lines(result), PAUSED])
+
+
+def reconciliation_text(kind: str, result: Reconciliation) -> str:
+    """程序日志的对账的说明：哪一种对账，没有不一致，或者每一条不一致一行。"""
+    if result.clean:
+        return f"{kind}：没有不一致"
+    return "\n".join([f"{kind}有不一致：", *inconsistency_lines(result)])
 
 
 def inconsistency_lines(result: Reconciliation) -> list[str]:

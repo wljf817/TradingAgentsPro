@@ -4,6 +4,8 @@
 见 session-patrol spec、health-monitoring spec「巡检里的健康判定」、emergency-exit-flow spec
 「巡检里的紧急退出」、close-reconciliation spec「巡检里的收盘对账」和 add-session-patrol 的
 design。执行模块和风控里会改变状态的调用都拿着全程序共用的那把锁，一项一项地拿；推送告警时不拿锁。
+订单和止损单的变化、无保护仓位和解除、同步预留时的释放写进程序日志，见 program-log spec 和
+add-program-log 的 design D5、D6。
 """
 
 import logging
@@ -25,10 +27,12 @@ from tradingagentspro.modules.execution import (
     StopStatus,
 )
 from tradingagentspro.modules.notification import NotificationService
+from tradingagentspro.modules.programlog import Action, Actor, ProgramLog
 from tradingagentspro.modules.risk import RiskService
 from tradingagentspro.workflows.emergency_flow import EmergencyFlow, Judgement
+from tradingagentspro.workflows.entries import log_order_change, release
 from tradingagentspro.workflows.health import HealthMonitor
-from tradingagentspro.workflows.names import ORDER_STATUSES, SIDES, STOP_STATUSES
+from tradingagentspro.workflows.names import ORDER_STATUSES, STOP_STATUSES
 from tradingagentspro.workflows.reconciliation import close_reconcile_if_due
 
 _log = logging.getLogger(__name__)
@@ -48,7 +52,7 @@ class SessionPatrol:
 
     run_round 做一轮，可以直接调用；start 在守护线程里循环，stop 停下并等线程结束。
     lock 是全程序共用的那把锁，见 spec「执行模块和风控的调用串行」。emergency 是每一轮里的紧急退出，
-    见 emergency-exit-flow spec。
+    见 emergency-exit-flow spec。log 是程序日志。
     """
 
     def __init__(
@@ -61,9 +65,11 @@ class SessionPatrol:
         config: PatrolConfig,
         *,
         emergency: EmergencyFlow,
+        log: ProgramLog,
     ) -> None:
         self._execution = execution
         self._emergency = emergency
+        self._log = log
         self._risk = risk
         self._notification = notification
         self._health = health
@@ -120,7 +126,7 @@ class SessionPatrol:
         self._close_reconcile()
 
     def _track_orders(self) -> set[str]:
-        """第 1 步：每一笔未结束的订单按创建的先后各跟进一次，有变化时写日志。
+        """第 1 步：每一笔未结束的订单按创建的先后各跟进一次，有变化时写程序日志的订单变化。
 
         返回跟进没有出错的订单的股票：跟进时已经对齐过，第 3 步不再对齐，见 design D4。
         """
@@ -137,11 +143,13 @@ class SessionPatrol:
                 with self._lock:
                     after = self._execution.track(before.plan_id)
                 tracked.add(after.symbol)
-                _log_order(before, after)
+                log_order_change(self._log, before, after)
         return tracked
 
     def _sync_reservations(self) -> None:
-        """第 2 步：有有效预留、已经有订单的方案，上报累计成交；订单到了终态就释放。"""
+        """第 2 步：有有效预留、已经有订单的方案，上报累计成交；订单到了终态就释放剩下的预留，
+        还有剩下的才写释放预留。
+        """
         if self._stopping.is_set():
             return
         plan_ids: tuple[UUID, ...] = ()
@@ -159,7 +167,10 @@ class SessionPatrol:
             return
         self._risk.record_fill(plan_id, order.filled)
         if order.status.is_terminal:
-            self._risk.release(plan_id)
+            reason = (
+                f"订单{ORDER_STATUSES[order.status]}，累计成交 {order.filled} / {order.quantity}"
+            )
+            release(self._risk, self._log, plan_id, reason)
 
     def _align_stops(self, tracked: set[str]) -> bool | None:
         """第 3 步：要对齐的股票按代码顺序各处理一次，然后写止损单的日志、按无保护仓位告警。
@@ -238,10 +249,12 @@ class SessionPatrol:
         if self._stopping.is_set():
             return
         with self._item("收盘对账"):
-            close_reconcile_if_due(self._execution, self._notification, self._lock)
+            close_reconcile_if_due(self._execution, self._notification, self._lock, self._log)
 
     def _log_stop(self, symbol: str, protection: Protection | None) -> None:
-        """当前止损单和上次看到的不同时写一条 INFO，第一次看到的也写，见 design D9。"""
+        """当前止损单和上次看到的不同时写一条程序日志的止损单变化，第一次看到的也写，见
+        add-session-patrol 的 design D9。先写条目再记下：写入出错时下一轮再写。
+        """
         stop = protection.stop if protection else None
         if stop is None:
             self._stops.pop(symbol, None)
@@ -249,26 +262,40 @@ class SessionPatrol:
         seen = (stop.client_order_id, stop.status, stop.quantity, stop.stop_price)
         if self._stops.get(symbol) == seen:
             return
+        self._log.write(
+            Actor.EXECUTION, Action.STOP_CHANGE, stop.client_order_id, _describe_stop(stop)
+        )
         self._stops[symbol] = seen
-        _log.info("止损单 %s", _describe_stop(stop))
 
     def _alert(self, symbol: str, protection: Protection | None) -> None:
-        """无保护仓位：同一段只告警一次；告警过的解除时写 INFO，见 design D8。不拿锁。"""
+        """无保护仓位：同一段只写一次程序日志的无保护仓位、只告警一次；告警过的解除时写无保护
+        解除，见 add-session-patrol 的 design D8。不拿锁。
+        """
         since = protection.unprotected_since if protection else None
         if since is None:
-            if self._alerted.pop(symbol, None) is not None:
-                _log.info("%s 不再是无保护仓位", symbol)
+            if symbol in self._alerted:
+                self._protected(symbol)
             return
         if self._alerted.get(symbol) == since:
             return
+        self._log.write(
+            Actor.EXECUTION,
+            Action.UNPROTECTED,
+            symbol,
+            f"从 {since.astimezone(UTC):%Y-%m-%d %H:%M} UTC 起是无保护仓位",
+        )
         self._alerted[symbol] = since
-        self._notification.alert(unprotected_text(symbol, since))
+        self._notification.alert(symbol, unprotected_text(symbol, since))
+
+    def _protected(self, symbol: str) -> None:
+        """告警过的股票不再是无保护仓位：写无保护解除，删掉告警记录。"""
+        self._log.write(Actor.EXECUTION, Action.PROTECTED, symbol, "")
+        del self._alerted[symbol]
 
     def _forget(self, symbols: set[str]) -> None:
-        """不再需要对齐的股票：删掉告警记录（写 INFO）和上次看到的止损单。"""
+        """不再需要对齐的股票：告警过的写无保护解除、删掉告警记录；删掉上次看到的止损单。"""
         for symbol in [s for s in self._alerted if s not in symbols]:
-            del self._alerted[symbol]
-            _log.info("%s 不再是无保护仓位", symbol)
+            self._protected(symbol)
         for symbol in [s for s in self._stops if s not in symbols]:
             del self._stops[symbol]
 
@@ -293,24 +320,10 @@ def unprotected_text(symbol: str, since: datetime) -> str:
 
 
 def _describe_stop(stop: StopOrder) -> str:
-    """止损单的日志内容：股票、客户端订单 ID、状态、股数、止损价。"""
-    return (
-        f"{stop.symbol} {stop.client_order_id}：{STOP_STATUSES[stop.status]}，"
-        f"{stop.quantity} 股，止损价 {stop.stop_price}"
+    """止损单变化的说明：股票、状态、未成交股数、止损价；有成交时加累计成交和成交均价。"""
+    text = (
+        f"{stop.symbol}：{STOP_STATUSES[stop.status]}，{stop.quantity} 股，止损价 {stop.stop_price}"
     )
-
-
-def _log_order(before: Order, after: Order) -> None:
-    """跟进前后状态或累计成交不同时写一条 INFO，见 spec「订单和止损单变化的日志」。"""
-    if (before.status, before.filled) == (after.status, after.filled):
-        return
-    _log.info(
-        "订单 %s %s %s：%s → %s，累计成交 %d / %d",
-        after.symbol,
-        SIDES[after.side],
-        after.plan_id,
-        ORDER_STATUSES[before.status],
-        ORDER_STATUSES[after.status],
-        after.filled,
-        after.quantity,
-    )
+    if stop.filled > 0:
+        text += f"，累计成交 {stop.filled}，成交均价 {stop.average_price}"
+    return text

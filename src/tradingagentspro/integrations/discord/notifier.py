@@ -2,7 +2,8 @@
 
 discord.py 在自己的线程 discord 上跑自己的事件循环；同步的调用方把工作交给这个循环并等结果，
 最多等发送超时。按钮按下时先在内存里判断、应答 Discord，再在工作线程里调用回调。
-见 discord-notification spec 和 add-discord-notify 的 design D7。
+见 discord-notification spec 和 add-discord-notify 的 design D7。推送、请求确认和报告结果由通知
+模块写进程序日志，这里只写每次按下和连接出错的日志，见 add-program-log 的 design D4。
 """
 
 import asyncio
@@ -162,7 +163,6 @@ class DiscordNotifier:
         self._call(
             lambda: self._gateway.send(alert_content(text, user_id), None, only_user(user_id))
         )
-        _log.info("推送告警：%s", text)
 
     def request_confirmation(self, request: ConfirmationRequest) -> PendingConfirmation:
         """发出确认消息；同一个方案重复请求时返回第一次的那条，第一次失败了的重新发送。"""
@@ -247,13 +247,11 @@ class DiscordNotifier:
         message_id = await self._gateway.send(
             write(request, user_id), confirmation_view(request), only_user(user_id)
         )
-        _log.info("请求确认：方案 %s，消息 %s", request.plan.plan_id, message_id)
         return PendingConfirmation(message_id=str(message_id), deadline=request.deadline)
 
     async def _finish(self, message_id: int, outcome: ConfirmationOutcome) -> None:
         self._settled[message_id] = outcome
         await self._gateway.edit(message_id, outcome_embed(outcome, self._clock.now()))
-        _log.info("确认消息 %s 改为%s（调用方报告）", message_id, outcome)
 
     async def _on_press(self, press: ButtonPress) -> None:
         choice = parse_button_id(press.custom_id)

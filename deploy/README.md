@@ -368,6 +368,36 @@ sudo journalctl -u tradingagentspro-backup -n 20 --no-pager
 cd /opt/tradingagentspro/app/deploy && sudo docker compose logs --tail 50 postgres
 ```
 
+## 查看程序日志
+
+程序的动作（风控、订单和止损单、人工确认、对账、降级、紧急退出、告警，以及启动和停止）记在状态库的 `programlog_entries` 表里，一个动作一行，只追加；journald 里只有启动、停止的过程和技术问题。用 psql 查：
+
+```bash
+# 部署机器 · 管理员
+cd /opt/tradingagentspro/app/deploy && sudo docker compose exec postgres psql --username=tradingagentspro --dbname=tradingagentspro
+```
+
+```sql
+-- 最近 50 条
+select id, recorded_at, actor, action, subject, detail
+from programlog_entries order by id desc limit 50;
+
+-- 一个方案的全部条目
+select id, recorded_at, actor, action, subject, detail
+from programlog_entries
+where subject = '<方案 ID>' or '<方案 ID>' = any(inputs) or '<方案 ID>' = any(outputs)
+order by id;
+
+-- 一只股票一天里的条目（止损单的对象以股票代码开头）
+select id, recorded_at, actor, action, subject, detail
+from programlog_entries
+where recorded_at >= '2026-10-14T13:30Z' and recorded_at < '2026-10-15T13:30Z'
+  and (subject = 'AAA' or subject like 'AAA-STOP-%' or detail like '%AAA%')
+order by id;
+```
+
+时间是 UTC。行为者和动作是英文代码，含义见 openspec 的 program-log spec 和 add-program-log 变更的 design D1。
+
 ## 更新
 
 1. 先备份：

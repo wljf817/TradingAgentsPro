@@ -8,13 +8,16 @@ report 只在释放预留时拿锁；推送告警都在锁外。
 通知配置的「紧急退出要确认」打开时，个股跌幅和组合熔断触发的清仓先请求人工确认，确认以后才
 清仓；本地备用止损不等确认。按钮的结果经 EmergencyDecisions 送到这里，见 emergency-exit-flow spec
 「紧急退出的人工确认」和 update-confirmation-rules 的 design D2 到 D7。
+
+熔断、紧急风险退出、撤单、作废的方案、清仓方案的检查和提交、人的确认结果写进程序日志；等订单结束的
+轮次不写，见 program-log spec 和 add-program-log 的 design D9。
 """
 
 import logging
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date
 from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
@@ -45,9 +48,17 @@ from tradingagentspro.modules.notification import (
     NotificationUnavailableError,
     PendingConfirmation,
 )
+from tradingagentspro.modules.programlog import ACCOUNT, Action, Actor
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.trading_calendar import TradingCalendar
 from tradingagentspro.workflows.account_snapshot import account_snapshot
+from tradingagentspro.workflows.entries import (
+    check_text,
+    log_submit,
+    order_changes,
+    recheck_text,
+    release,
+)
 from tradingagentspro.workflows.names import ACTIONS, ORDER_STATUSES, SIDES
 from tradingagentspro.workflows.order_flow import TradeServices
 
@@ -108,12 +119,11 @@ class StepKind(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ExitStep:
-    """一只股票这一项的结果：作废的方案、这一次撤掉的订单、在等的订单、建立的清仓单。"""
+    """一只股票这一项的结果：作废的方案、这一次撤掉的订单、建立的清仓单。"""
 
     kind: StepKind
     voided: tuple[TradePlan, ...] = ()
     cancelled: tuple[Order, ...] = ()
-    waiting: tuple[Order, ...] = ()
     order: Order | None = None
 
 
@@ -271,25 +281,36 @@ class EmergencyFlow:
     def cancel_buys(self, judgement: Judgement) -> None:
         """熔断已触发：拿锁，有还没撤的买单就撤掉全部买单；每个交易日第一次时推送熔断告警。
 
-        见 spec「单日亏损熔断」和 design D7。
+        见 spec「单日亏损熔断」和 design D7。每个交易日第一次时先写程序日志的熔断；撤掉的买单
+        各写一条撤单，撤单以后的那次跟进有变化的写订单变化。
         """
         breaker = judgement.breaker
         assert breaker is not None  # 只在熔断已触发时调用
-        execution = self._services.execution
-        with self._services.lock:
+        services = self._services
+        execution, log = services.execution, services.log
+        ratio = self._config.daily_loss_breaker_ratio
+        first = self._breaker_day != judgement.day
+        if first:
+            log.write(Actor.SYSTEM, Action.BREAKER, ACCOUNT, breaker_figures(breaker, ratio))
+        with services.lock:
             buys = tuple(
                 o
                 for o in execution.open_orders()
                 if o.side is OrderSide.BUY and not o.cancel_wanted
             )
             if buys:
-                execution.cancel_buy_orders()
-        for order in buys:
-            _log.info("紧急退出：熔断，请求撤掉 %s 的买单（方案 %s）", order.symbol, order.plan_id)
-        if self._breaker_day != judgement.day:
+                with order_changes(execution, log):
+                    execution.cancel_buy_orders()
+                    for order in buys:
+                        log.write(
+                            Actor.EXECUTION,
+                            Action.CANCEL,
+                            str(order.plan_id),
+                            f"熔断：{cancel_text(order)}",
+                        )
+        if first:
             self._breaker_day = judgement.day
-            ratio = self._config.daily_loss_breaker_ratio
-            self._notify(breaker_text(breaker, ratio, len(buys), self._confirm))
+            self._notify(ACCOUNT, breaker_text(breaker, ratio, len(buys), self._confirm))
 
     def advance(self, plan: TradePlan, judgement: Judgement) -> None:
         """一只股票的清仓，见 spec「一只股票的清仓」「紧急退出的人工确认」和 design D5。
@@ -303,15 +324,23 @@ class EmergencyFlow:
             return
         if record.gate is Gate.WAITING and not self._settle(record):
             return
+        if not record.announced:
+            assert record.trigger is not None  # 只有找回来的记录没有触发的原因，它们一开始就告警过
+            self._services.log.write(
+                Actor.SYSTEM,
+                Action.EMERGENCY_EXIT,
+                plan.symbol,
+                record.trigger.detail,
+                outputs=[str(plan.plan_id)],
+            )
         with self._services.lock:
             step = self._advance(plan, judgement.snapshot)
-        _log_step(plan, step)
         if not record.announced:
             assert record.trigger is not None  # 只有找回来的记录没有触发的原因，它们一开始就告警过
             record.announced = True
-            self._notify(start_text(record.trigger, step))
+            self._notify(plan.symbol, start_text(record.trigger, step))
         elif step.kind is StepKind.NO_SHARES:
-            self._notify(no_shares_text(plan.symbol))
+            self._notify(plan.symbol, no_shares_text(plan.symbol))
         if step.kind is StepKind.NO_SHARES:
             record.ended = True
 
@@ -330,12 +359,18 @@ class EmergencyFlow:
             if order is not None:
                 if order.status.is_terminal:
                     record.ended = True
-                    self._notify(outcome_text(order))
+                    self._notify(order.symbol, outcome_text(order))
             elif not in_session:
+                symbol = record.plan.symbol
                 with self._services.lock:
-                    self._services.risk.release(record.plan.plan_id)
+                    release(
+                        self._services.risk,
+                        self._services.log,
+                        record.plan.plan_id,
+                        f"{symbol} 到收盘还没有清仓单",
+                    )
                 record.ended = True
-                self._notify(missed_text(record.plan.symbol))
+                self._notify(symbol, missed_text(symbol))
 
     def trigger_of(self, plan: TradePlan) -> Trigger | None:
         """这次运行里这个清仓方案第一次触发的原因；没有记录、或者是重启后找回的为 None。"""
@@ -359,40 +394,45 @@ class EmergencyFlow:
             self._decisions.close(plan.plan_id)
             self._decline(record)
             _log.error("紧急退出 %s：确认请求没有发出去（%s）", plan.symbol, error)
-            self._notify(unsent_text(plan.symbol))
+            self._notify(plan.symbol, unsent_text(plan.symbol))
             return
         record.gate = Gate.WAITING
         record.pending = pending
-        _log.info(
-            "紧急退出 %s：%s，请求确认（方案 %s，消息 %s，截止 %s）",
-            plan.symbol,
-            record.trigger.detail,
-            plan.plan_id,
-            pending.message_id,
-            pending.deadline.isoformat(),
-        )
 
     def _settle(self, record: _Record) -> bool:
-        """在等确认：先看按钮的结果，再看截止时刻。返回这一轮是否接着清仓。"""
+        """在等确认：先看按钮的结果，再看截止时刻。返回这一轮是否接着清仓。
+
+        收下的确认、拒绝和到截止时刻的超时写程序日志的人的动作。
+        """
         plan, pending = record.plan, record.pending
         assert pending is not None  # 在等的记录都已经请求过
+        log, subject = self._services.log, str(plan.plan_id)
+        about = f"紧急退出 {plan.symbol}"
         outcome = self._decisions.take(plan.plan_id)
         if outcome is None and self._clock.now() >= pending.deadline:
             outcome = self._decisions.close(plan.plan_id)  # 关闭时刚好送到的结果照样采用
             if outcome is None:
+                deadline = f"{pending.deadline.astimezone(UTC):%Y-%m-%d %H:%M} UTC"
+                log.write(
+                    Actor.HUMAN,
+                    Action.TIMEOUT,
+                    subject,
+                    f"{about}：截止 {deadline}",
+                    inputs=[pending.message_id],
+                )
                 self._notification.finish_confirmation(
-                    pending.message_id, ConfirmationOutcome.TIMED_OUT
+                    plan.plan_id, pending.message_id, ConfirmationOutcome.TIMED_OUT
                 )
                 self._decline(record)
-                self._notify(timeout_text(plan.symbol))
+                self._notify(plan.symbol, timeout_text(plan.symbol))
                 return False
         if outcome is ConfirmationOutcome.CONFIRMED:
+            log.write(Actor.HUMAN, Action.CONFIRM, subject, about, inputs=[pending.message_id])
             record.gate = Gate.OPEN
-            _log.info("紧急退出 %s：已确认", plan.symbol)
             return True
         if outcome is ConfirmationOutcome.REJECTED:
+            log.write(Actor.HUMAN, Action.REJECT, subject, about, inputs=[pending.message_id])
             self._decline(record)
-            _log.info("紧急退出 %s：确认被拒绝，今天不再紧急退出 %s", plan.symbol, plan.symbol)
         return False
 
     def _bypass(self, record: _Record, trigger: Trigger) -> None:
@@ -403,9 +443,8 @@ class EmergencyFlow:
             assert record.pending is not None
             self._decisions.close(record.plan.plan_id)
             message_id = record.pending.message_id
-            self._notification.finish_confirmation(message_id, ConfirmationOutcome.VOIDED)
-            _log.info(
-                "紧急退出 %s：本地备用止损触发，确认消息 %s 作废", record.plan.symbol, message_id
+            self._notification.finish_confirmation(
+                record.plan.plan_id, message_id, ConfirmationOutcome.VOIDED
             )
         elif record.gate is not Gate.DECLINED:
             return
@@ -419,9 +458,11 @@ class EmergencyFlow:
         self._decisions.close(record.plan.plan_id)
         if record.pending is not None:
             message_id = record.pending.message_id
-            self._notification.finish_confirmation(message_id, ConfirmationOutcome.VOIDED)
+            self._notification.finish_confirmation(
+                record.plan.plan_id, message_id, ConfirmationOutcome.VOIDED
+            )
         self._decline(record)
-        self._notify(unconfirmed_text(record.plan.symbol))
+        self._notify(record.plan.symbol, unconfirmed_text(record.plan.symbol))
 
     def _decline(self, record: _Record) -> None:
         """拒绝、超时、发不出去或者收盘：当天的紧急退出结束，本地备用止损除外。"""
@@ -431,9 +472,12 @@ class EmergencyFlow:
     def _advance(self, plan: TradePlan, snapshot: AccountSnapshot) -> ExitStep:
         """在锁里：已有清仓单就不动；作废还没下单的方案；有挂着的订单就撤单、等它们结束；
         否则检查、再校验、提交清仓方案。见 design D5、D6。
+
+        每一步接着写程序日志：作废的方案写释放预留，新记下撤单要求的订单写撤单（撤单以后的那次
+        跟进有变化的写订单变化），风控检查、下单前再校验、提交订单各写一条。
         """
         services = self._services
-        execution, risk = services.execution, services.risk
+        execution, risk, log = services.execution, services.risk, services.log
         if execution.order(plan.plan_id) is not None:
             return ExitStep(StepKind.HAS_ORDER)
         voided = tuple(
@@ -444,30 +488,41 @@ class EmergencyFlow:
             and execution.order(p.plan_id) is None
         )
         for other in voided:
-            risk.release(other.plan_id)
+            release(risk, log, other.plan_id, f"{plan.symbol} 紧急退出：作废还没下单的方案")
         waiting = tuple(o for o in execution.open_orders() if o.symbol == plan.symbol)
         if waiting:
             cancelled = tuple(o for o in waiting if not o.cancel_wanted)
             if cancelled:
-                execution.cancel_orders(plan.symbol)
-            return ExitStep(StepKind.WAITING, voided, cancelled, waiting)
+                with order_changes(execution, log):
+                    execution.cancel_orders(plan.symbol)
+                    for order in cancelled:
+                        log.write(
+                            Actor.EXECUTION,
+                            Action.CANCEL,
+                            str(order.plan_id),
+                            f"{plan.symbol} 紧急退出：{cancel_text(order)}",
+                        )
+            return ExitStep(StepKind.WAITING, voided, cancelled)
         breaker = services.emergency.breaker_tripped()
         degraded = services.health.status.degraded
+        subject = str(plan.plan_id)
         decision = risk.check(plan, snapshot, daily_loss_breaker_tripped=breaker, degraded=degraded)
+        log.write(Actor.RISK, Action.RISK_CHECK, subject, check_text(plan, decision))
         if decision.outcome is not RiskOutcome.REJECTED:
             # 退出方案不看最新价，和下单流程一样传 0
             decision = risk.recheck(
                 plan.plan_id, snapshot, ZERO, daily_loss_breaker_tripped=breaker, degraded=degraded
             )
+            log.write(Actor.RISK, Action.RECHECK, subject, recheck_text(decision))
         if decision.outcome is RiskOutcome.REJECTED:
             return ExitStep(StepKind.NO_SHARES, voided)
         order = execution.submit(plan, decision)
+        log_submit(log, plan, order)
         return ExitStep(StepKind.SUBMITTED, voided, order=order)
 
-    def _notify(self, text: str) -> None:
-        """推送告警，同样的文字写一条 WARNING。调用时不拿锁。"""
-        _log.warning("%s", text)
-        self._notification.alert(text)
+    def _notify(self, subject: str, text: str) -> None:
+        """推送告警，subject 是告警针对的对象；通知模块把它写进程序日志。调用时不拿锁。"""
+        self._notification.alert(subject, text)
 
     def _quotes(self, account: Account) -> Mapping[str, Quote]:
         """一次取全部持仓的行情；不可用时当作一只都没有，缺的股票写一条 WARNING。"""
@@ -607,6 +662,21 @@ def breaker_text(breaker: Breaker, ratio: Decimal, cancelled: int, confirm: bool
     return text + "；每只持仓的清仓要确认" if confirm else text
 
 
+def breaker_figures(breaker: Breaker, ratio: Decimal) -> str:
+    """程序日志的熔断的说明：两个权益、单日亏损和它的比例、熔断比例。"""
+    previous, equity = breaker.previous_close_equity, breaker.equity
+    loss = previous - equity
+    return (
+        f"前一交易日收盘时的权益 {previous:,}，当前权益 {equity:,}，"
+        f"单日亏损 {loss:,}（{loss / previous:.1%}），熔断比例 {ratio:.1%}"
+    )
+
+
+def cancel_text(order: Order) -> str:
+    """撤单的说明：买卖方向、股票和委托股数，比如「撤掉卖出 AAA 20 股的订单」。"""
+    return f"撤掉{SIDES[order.side]} {order.symbol} {order.quantity} 股的订单"
+
+
 def outcome_text(order: Order) -> str:
     """清仓单进入终态的告警：全部成交写股数和均价，其他写状态和成交股数。"""
     symbol = order.symbol
@@ -636,24 +706,3 @@ def no_shares_text(symbol: str) -> str:
 
 def missed_text(symbol: str) -> str:
     return f"{symbol} 到收盘还没下清仓单（等撤单结束），今天不再清仓 {symbol}"
-
-
-def _log_step(plan: TradePlan, step: ExitStep) -> None:
-    """这一项的 INFO 日志：作废的方案、撤单请求或者在等的订单、建立的清仓单。"""
-    symbol = plan.symbol
-    for other in step.voided:
-        _log.info("紧急退出 %s：作废方案 %s，释放预留", symbol, other.plan_id)
-    match step.kind:
-        case StepKind.WAITING if step.cancelled:
-            _log.info("紧急退出 %s：请求撤掉 %d 笔挂着的订单", symbol, len(step.cancelled))
-        case StepKind.WAITING:
-            _log.info("紧急退出 %s：等 %d 笔挂着的订单结束", symbol, len(step.waiting))
-        case StepKind.SUBMITTED:
-            assert step.order is not None
-            _log.info(
-                "紧急退出 %s：建立清仓单（方案 %s），卖出 %d 股，%s",
-                symbol,
-                plan.plan_id,
-                step.order.quantity,
-                ORDER_STATUSES[step.order.status],
-            )

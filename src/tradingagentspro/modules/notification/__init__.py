@@ -1,7 +1,8 @@
 """通知：推送告警，请求人工确认交易方案，报告确认的结果。对应架构图「风控与执行」里的「人工确认」。
 
 规则见 openspec 的 discord-notification spec；哪些方案要人工确认见 confirmation-rules spec。
-通知通道和按钮的回调由 bootstrap 注入。
+通知通道和按钮的回调由 bootstrap 注入。推送告警、请求确认和报告结果都写进程序日志
+（program-log spec）。
 人通过通知通道手工录入的方案交给 PlanIntake，见 manual-plans spec。
 模块之外的代码只能 import 这里导出的名字。
 """

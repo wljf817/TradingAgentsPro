@@ -1,0 +1,77 @@
+"""程序日志的条目：行为者、动作和每条记下的字段，见 program-log spec「程序日志的条目」。
+
+行为者和动作存英文代码，说明是中文。以后的变更加别的行为者和动作，见 add-program-log 的 design D1。
+"""
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from decimal import Decimal
+from enum import StrEnum
+from uuid import UUID
+
+
+class Actor(StrEnum):
+    """行为者，见 program-log spec。"""
+
+    RISK = "risk"  # 风控引擎
+    EXECUTION = "execution"  # 执行模块
+    HUMAN = "human"  # 人
+    SYSTEM = "system"  # 系统
+
+
+class Action(StrEnum):
+    """动作，见 program-log spec 四个行为者的动作表。"""
+
+    RISK_CHECK = "risk_check"  # 风控检查
+    RECHECK = "recheck"  # 下单前再校验
+    RELEASE = "release"  # 释放预留
+    SUBMIT = "submit"  # 提交订单
+    ORDER_CHANGE = "order_change"  # 订单变化
+    CANCEL = "cancel"  # 撤单
+    STOP_CHANGE = "stop_change"  # 止损单变化
+    UNPROTECTED = "unprotected"  # 无保护仓位
+    PROTECTED = "protected"  # 无保护解除
+    RECONCILE = "reconcile"  # 对账
+    WAIT_OPEN = "wait_open"  # 等开盘
+    ENTER_PLAN = "enter_plan"  # 录入方案
+    CONFIRM = "confirm"  # 确认
+    REJECT = "reject"  # 拒绝
+    TIMEOUT = "timeout"  # 超时
+    STARTUP = "startup"  # 启动
+    SHUTDOWN = "shutdown"  # 停止
+    CRASH_RECOVERY = "crash_recovery"  # 崩溃恢复
+    ENTER_DEGRADED = "enter_degraded"  # 进入降级模式
+    DEGRADED_UPDATE = "degraded_update"  # 降级模式里的变化
+    LEAVE_DEGRADED = "leave_degraded"  # 退出降级模式
+    BREAKER = "breaker"  # 熔断
+    EMERGENCY_EXIT = "emergency_exit"  # 紧急风险退出
+    ALERT = "alert"  # 告警
+    REQUEST_CONFIRMATION = "request_confirmation"  # 请求确认
+    FINISH_CONFIRMATION = "finish_confirmation"  # 结束确认
+
+
+ACCOUNT = "account"  # 对象：整个券商账户
+WHOLE_SYSTEM = "system"  # 对象：整个程序
+
+
+@dataclass(frozen=True, slots=True)
+class LogEntry:
+    """程序日志的一条。
+
+    - recorded_at：写入时从时钟读取的时刻
+    - subject：对象，动作针对的东西的标识
+    - inputs、outputs：输入和输出的引用
+    - case_id、duration、tokens、cost：案件 ID、耗时、token 和费用，不适用时为 None
+    """
+
+    recorded_at: datetime
+    actor: Actor
+    action: Action
+    subject: str
+    detail: str
+    inputs: tuple[str, ...] = ()
+    outputs: tuple[str, ...] = ()
+    case_id: UUID | None = None
+    duration: timedelta | None = None
+    tokens: int | None = None
+    cost: Decimal | None = None
