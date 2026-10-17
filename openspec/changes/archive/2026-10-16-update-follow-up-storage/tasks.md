@@ -23,4 +23,4 @@
 
 - [x] 5.1 对照本变更的三份 delta spec，逐条列出每个新增和修改的场景由哪个测试覆盖，没有遗漏；修改的两个要求里原有的场景仍有测试。验证：对应表写在完成报告里
 - [x] 5.2 运行全部检查：`uv run pytest`、`uv run ruff check`、`uv run ruff format --check`、`uv run mypy`、`uv run lint-imports`、`openspec validate update-follow-up-storage --strict`。验证：全部通过；`git status` 里没有 `tests/` 下的文件被暂存
-- [ ] 5.3 归档：MODIFIED 的要求整段替换主 spec 里的同名要求。state-store「表的归属和迁移」和 program-log「程序日志的条目」两段 delta 已经按股票池存储归档以后的主 spec 重写（保留股票池的表和行为者，再加上本变更的）；归档前再和主 spec 对一次，有别的改动就同样合进来。`openspec archive update-follow-up-storage -y` 以后，program-log spec 的 Purpose 不随 delta 改，直接在主 spec 里把调度器加进行为者；`docs/实现路线.md` 只改两格：「跟进存储」的状态改为完成，M4 的完成数改为 3 / 18。验证：`openspec validate --all --strict` 通过；主 spec 里有本变更的三处新增要求，修改的两处要求里股票池的内容还在
+- [x] 5.3 归档：MODIFIED 的要求整段替换主 spec 里的同名要求。state-store「表的归属和迁移」和 program-log「程序日志的条目」两段 delta 已经按股票池存储归档以后的主 spec 重写（保留股票池的表和行为者，再加上本变更的）；归档前再和主 spec 对一次，有别的改动就同样合进来。`openspec archive update-follow-up-storage -y` 以后，program-log spec 的 Purpose 不随 delta 改，直接在主 spec 里把调度器加进行为者；`docs/实现路线.md` 只改两格：「跟进存储」的状态改为完成，M4 的完成数改为 3 / 18。验证：`openspec validate --all --strict` 通过；主 spec 里有本变更的三处新增要求，修改的两处要求里股票池的内容还在

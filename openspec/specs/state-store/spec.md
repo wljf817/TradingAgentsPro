@@ -211,8 +211,8 @@
 #### Scenario: 空数据库升级到最新版本
 
 - **WHEN** 在空数据库上升级到最新版本
-- **THEN** 有预留表 risk_reservations、订单表 execution_orders、止损保护表 execution_protections、交易记录表 execution_trades、收盘对账表 execution_close_reconciliations、股票池表 stockpool_entries、程序日志表 programlog_entries，以及记录迁移版本的表
-- **AND** 前六张表都能保存和读取，程序日志表能追加和读取
+- **THEN** 有预留表 risk_reservations、订单表 execution_orders、止损保护表 execution_protections、交易记录表 execution_trades、收盘对账表 execution_close_reconciliations、股票池表 stockpool_entries、跟进表 followups_follow_ups、程序日志表 programlog_entries，以及记录迁移版本的表
+- **AND** 前七张表都能保存和读取，程序日志表能追加和读取
 
 #### Scenario: 已经是最新版本时再升级
 
@@ -223,7 +223,7 @@
 #### Scenario: 表名以写入它的模块开头
 
 - **WHEN** 列出升级之后的全部表，不含记录迁移版本的表
-- **THEN** 每张表的名字都以一个模块的名字加下划线开头：risk_reservations 属于风控模块，execution_orders、execution_protections、execution_trades 和 execution_close_reconciliations 属于执行模块，stockpool_entries 属于股票池模块，programlog_entries 属于程序日志模块
+- **THEN** 每张表的名字都以一个模块的名字加下划线开头：risk_reservations 属于风控模块，execution_orders、execution_protections、execution_trades 和 execution_close_reconciliations 属于执行模块，stockpool_entries 属于股票池模块，followups_follow_ups 属于跟进审批模块，programlog_entries 属于程序日志模块
 
 ### Requirement: 读取一段时间里的版本
 
