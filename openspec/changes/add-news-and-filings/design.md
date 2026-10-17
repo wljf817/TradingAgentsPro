@@ -330,6 +330,7 @@ class SecFilingSource:
 
 ```
 tests/fakes/news.py                         FakeNewsSource、FakeFilingSource、InMemoryNewsStore（新）
+tests/modules/news/builders.py              news-and-filings spec 的基准新闻和公告（新）
 tests/modules/news/test_service.py          用内存存储（新）
 tests/modules/news/test_repo.py             PostgresNewsStore，要开着 OrbStack（新）
 tests/integrations/alpaca/news_payloads.py  基准新闻的回复（新）

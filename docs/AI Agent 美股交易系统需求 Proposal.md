@@ -50,7 +50,7 @@ Sep 29, 2026 · @Eric Xi
 
 ### 触发
 
-- **数据源**：moomoo 实时行情推送、SEC EDGAR 公告和财报原文、新闻，见「技术栈与部署」
+- **数据源**：moomoo 实时行情推送和到价提醒、SEC EDGAR 公告和财报原文、新闻、财报日历，见「技术栈与部署」
 - **事件检测层**（代码）：只监控股票池和持仓中的股票；阈值和规则可配置；给每个事件标注类型、强度和来源。未达阈值的事件只写日志，不进入队列，也不会唤醒任何模型
 - **定时心跳**（代码）：每个交易日收盘检查 PM 写下的日期（持仓复查日、催化剂截止日期、关注复查日），以及是否有新候选、股票池候选是否不足；只有事项到期才开案件
 - **自定义跟进**：PM 针对具体原因在结论中申请、问题由 PM 自己写的一次性检查，调度器审批
@@ -620,7 +620,7 @@ PM 和 Critic 通过 Agent 网关使用两个只读工具：
 | Agent 调用 | PydanticAI 实现 PM 的工具循环（dispatch\_tasks、submit\_conclusion）和各 agent 的模型调用；参考 TradingAgents 的 prompt |
 | Task / Result 数据格式 | Pydantic 模型，输出不合法时直接报错 |
 | 状态库和各类记录 | PostgreSQL，同时作为 DBOS 的状态存储 |
-| 数据源 | moomoo：行情和实盘交易；SEC EDGAR：公告和财报原文；新闻和一致预期：待定（比如 Finnhub、FMP） |
+| 数据源 | moomoo：行情、到价提醒和实盘交易；SEC EDGAR：公告和财报原文；Alpaca：新闻（Benzinga）和寻股用的日线；Finnhub：财报日历、一致预期和行业。都用免费档 |
 | 券商 | 实盘用 moomoo OpenAPI（Python SDK）+ OpenD 网关，订阅实时推送和到价提醒推送作为行情事件源；模拟盘用 Alpaca Trading API。两者实现同一套券商接口，只在启动时切换；Alpaca 不允许同一只股票的买单和止损卖单同时挂着，模拟盘上把两者错开，见「订单生命周期」 |
 | 模型 | 子 agent 用 DeepSeek、GLM 等 flash 模型；Critic 必须和 PM 不同厂商，审核开仓方案建议用较强的模型；PM 建议用较强的模型（可选 Claude）；复盘用 Claude。每个 agent 可配 1 个或多个备用模型 |
 | 通知与人工确认 | Discord 机器人（discord.py）：推送建议、告警和每日摘要，用按钮确认或拒绝；只接受指定用户的操作。Discord 发不出去时只写程序日志，不另设备用通道，也不算健康异常；确认请求发不出去的方案按确认超时处理 |
