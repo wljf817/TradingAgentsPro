@@ -26,7 +26,7 @@ Finnhub（2026-10-17 读 `https://finnhub.io/static/swagger.json`）：
 
 ```
 modules/companydata/                  (新)
-  __init__.py        导出 SectorEtf、EarningsRelease、ReleaseTime、EarningsSurprise、SurpriseHistory、
+  __init__.py        导出 SectorEtf、sector_of、EarningsRelease、ReleaseTime、EarningsSurprise、SurpriseHistory、
                      CompanyDataSource、CompanyDataUnavailableError、EarningsStore、
                      PostgresEarningsStore、CompanyDataConfig、CompanyDataService
   domain/sector.py   SectorEtf、行业代码表、sector_of
@@ -337,7 +337,7 @@ class FinnhubSource:
 
 - `tests/fakes/company_data.py`：
   - `FakeCompanyDataSource`：按股票保存行业、财报日历和 surprise；记录每次调用（方法和参数）；可以安排某个方法下一次抛 `CompanyDataUnavailableError`；日历按请求的日期范围筛选
-  - `FakeEarningsStore`：按键保存每个版本（内容不同才追加），测试能看到一个键有几个版本
+  - `InMemoryEarningsStore`：按键保存每个版本（内容不同才追加），测试能看到一个键有几个版本
 - `tests/modules/companydata/domain/test_sector.py`：「板块」的全部场景
 - `tests/modules/companydata/domain/test_earnings.py`：键的写法、`SurpriseHistory.of` 的排序
 - `tests/modules/companydata/test_service.py`：「查一只股票的板块」「财报的记录」「刷新一只股票的财报」「读取财报」和「公司数据配置」的改窗口；WARNING 日志用 `caplog`
@@ -345,8 +345,8 @@ class FinnhubSource:
 - `tests/modules/companydata/test_repo.py`（要开着 OrbStack）：「财报的存储」的三个场景，以及用真的数据库跑「同一个财年季度是同一次发布」
 - `tests/integrations/finnhub/payloads.py`：spec 基准数据的三个 JSON，函数按需覆盖字段；`tests/integrations/finnhub/test_source.py`：`httpx.MockTransport` 记录请求、按路径返回，覆盖 finnhub-company-data spec 除配置以外的场景；超时由 transport 抛 `httpx.ReadTimeout`，连不上抛 `httpx.ConnectError`；`source: CompanyDataSource = FinnhubSource(...)` 让 mypy 检查适配器满足端口
 - `tests/integrations/finnhub/test_config.py`：「Finnhub 配置」
-- 冒烟测试 `tests/integrations/finnhub/test_finnhub_smoke.py`：加 `finnhub_api` 标记，没有 `FINNHUB_API_KEY` 时跳过。整个文件一共不超过 50 个请求，留在每分钟 60 次以内：
-  - 11 个板块 ETF 各取 2 到 3 只大市值成分股（比如 XLK 的 AAPL、MSFT、NVDA），用真的适配器查板块，应当就是那个 ETF；不符的全部收集起来一起报，用来改代码表。D2 列出的已知横跨（沃尔玛等）单独断言它们的归属
+- 冒烟测试 `tests/integrations/finnhub/test_finnhub_smoke.py`：加 `finnhub_api` 标记，没有 `FINNHUB_API_KEY` 时跳过。整个文件一共 33 个请求，留在每分钟 60 次以内：
+  - 11 个板块 ETF 各取 2 只大市值成分股（比如 XLK 的 AAPL、NVDA），用真的适配器查板块，应当就是那个 ETF；D2 列出的已知横跨里的沃尔玛也在其中，应当归 XLY。不符的全部收集起来一起报，用来改代码表
   - 几只大市值股票在默认窗口里至少有一次发布，并且至少一只的发布日在 30 天以后：证明免费档给得出 1 个月以后的日历
   - AAPL 的 surprise 有 4 个季度
   - 查不到的 ZZZZQQ：没有行业、日历和 surprise 都是空的（核对 `{}`、`{"earningsCalendar": []}`、`[]` 的假设）

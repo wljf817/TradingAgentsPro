@@ -56,6 +56,7 @@ uv run pytest -m moomoo_opend  # 连本机 127.0.0.1:11111 上 OpenD 的行情�
 uv run pytest -m discord_bot   # 连真实 Discord 的冒烟测试，需要 DISCORD_BOT_TOKEN、DISCORD_GUILD_ID、DISCORD_CHANNEL_ID、DISCORD_USER_ID；运行中要在 3 分钟内按消息上的按钮，并在 5 分钟内按告警的提示运行四条 /plan
 uv run pytest -m discord_bot tests/integrations/discord/test_plan_smoke.py  # 只跑 /plan 的冒烟测试
 uv run pytest -m news_sources  # 连真实 Alpaca 新闻和 SEC EDGAR 的冒烟测试：Alpaca 的需要 APCA_API_KEY_ID、APCA_API_SECRET_KEY；SEC 的需要 SEC_USER_AGENT，写名字和联系邮箱，比如 "TradingAgentsPro 你的邮箱"
+uv run pytest -m finnhub_api   # 连真实 Finnhub 的冒烟测试，需要 FINNHUB_API_KEY（Finnhub 免费档的 key）；一次约 33 个请求，两次之间隔 1 分钟以上
 ```
 
 部署机器运行以后，冒烟测试要注意两点（见 [deploy/README.md](deploy/README.md)「Mac 上开发」）：
