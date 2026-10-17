@@ -30,5 +30,5 @@ class Listing(BaseModel):
 
     exchange: Exchange
     security_type: SecurityType
-    average_dollar_volume: Decimal  # 日均成交额，美元；按多少天平均由 M4 定
+    average_dollar_volume: Decimal  # 日均成交额，美元，算法见 stock-screen spec「日均成交额」
     sector: str

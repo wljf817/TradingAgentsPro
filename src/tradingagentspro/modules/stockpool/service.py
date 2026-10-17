@@ -20,6 +20,7 @@ from tradingagentspro.modules.stockpool.domain.rules import (
     add_rejection,
     candidate_expiry,
     changes_since,
+    cooling_down,
     promote_rejection,
     remove_rejection,
     status_rejection,
@@ -60,8 +61,8 @@ class StockPoolService:
     记录不撤回。
 
     容量、关注名额和次数的检查是先读后写，所以改变记录的操作和被拒绝的请求从读时钟到写条目都拿着
-    一把锁，同一个进程里一个接一个进行；读取（entry、entries）不拿锁。见 update-stock-pool-storage
-    的 design D4。
+    一把锁，同一个进程里一个接一个进行；读取（entry、entries、unavailable）不拿锁。见
+    update-stock-pool-storage 的 design D4。
     """
 
     def __init__(
@@ -86,6 +87,22 @@ class StockPoolService:
     def entries(self) -> tuple[PoolEntry, ...]:
         """池子里的全部股票。"""
         return self._store.in_pool()
+
+    def unavailable(self) -> frozenset[str]:
+        """现在加入会被拒绝为已在池子里或冷却期内的股票，见 stock-pool spec「现在不能加入的股票」。
+
+        冷却期内的移出，移出时刻都不早于今天归属的交易日往前数冷却期那么多个交易日那天的收盘时刻，
+        所以只看这以后有增删的记录。见 add-stock-screen 的 design D5。
+        """
+        now = self._clock.now()
+        session = self._calendar.session_closing_after(now)
+        for _ in range(self._config.readd_cooldown_sessions):
+            session = self._calendar.previous_session(session.day)
+        removed = self._store.changed_since(session.close)
+        return frozenset(
+            {e.symbol for e in self._store.in_pool()}
+            | {e.symbol for e in removed if cooling_down(e, now, self._calendar, self._config)}
+        )
 
     def add(
         self,

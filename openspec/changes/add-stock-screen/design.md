@@ -10,7 +10,7 @@
 - 端口也可以由进程里别的部件满足：通知模块的 `PlanIntake` 由 workflows 的 `OrderPlanIntake` 实现，bootstrap 装配
 - 模块之间的 import：业务模块只依赖 `statestore`、`programlog` 的包根；规则允许 import 别的模块的包根，跨模块的流程放 workflows
 - 状态库：`statestore` 的 `versioned_table` 和 `VersionedStore`，按键保存版本，内容相同不写新版本
-- 另外两个数据变更：「新闻和公告」已经 apply（v0008，`integrations/alpaca/news.py` 有 `DATA_URL`）；「财报日历与板块」还没有 apply（v0009，导出 `CompanyDataService.sector(symbol) -> SectorEtf | None`，`SectorEtf` 是值为 ETF 代码的 `StrEnum`，数据源不可用抛 `CompanyDataUnavailableError`，每次 1 个 Finnhub 请求，免费档每分钟 60 次；没有板块的股票不进股票池、粗筛跳过它，已经定了）
+- 另外两个数据变更都已经 apply：「新闻和公告」（v0008，`integrations/alpaca/news.py` 有 `DATA_URL`）；「财报日历与板块」（v0009，`modules/companydata` 导出 `CompanyDataService.sector(symbol) -> SectorEtf | None`，`SectorEtf` 是值为 ETF 代码的 `StrEnum`，数据源不可用抛 `CompanyDataUnavailableError`，每次 1 个 Finnhub 请求，免费档每分钟 60 次；没有板块的股票不进股票池、粗筛跳过它，已经定了）
 - 等待：time 模块全项目禁用，适配器里用 `threading.Event().wait`（`integrations/sec/edgar.py` 的 `_wait`）
 
 数据源（2026-10-17 读本机 moomoo-api 10.11.7108 的源码和 openapi.moomoo.com、docs.alpaca.markets）：
@@ -29,9 +29,10 @@ modules/screener/                           (新，寻股粗筛)
   __init__.py           导出 Condition、Security、DailyBar、Metrics、Candidate、ScreenRun、
                         SecuritySource、BarSource、SectorSource、ScreenStore、
                         ScreenDataUnavailableError、PostgresScreenStore、ScreenerConfig、
-                        ScreenerService
-  domain/screen.py      类型；截止交易日和交易日窗口；范围、合格和排序（evaluate）
-  domain/indicators.py  日均成交额、相对强度、上升趋势和回调幅度、量比
+                        ScreenerService；domain 的 Scope、Ranked、Evaluation 和函数也从这里导出，
+                        给测试用
+  domain/indicators.py  DailyBar；日均成交额、相对强度、上升趋势、回调幅度、量比
+  domain/screen.py      其余类型；截止交易日和交易日窗口；范围、合格、上升趋势和排序（evaluate）
   ports.py              SecuritySource、BarSource、SectorSource、ScreenStore、
                         ScreenDataUnavailableError
   repo.py               表 screener_runs；PostgresScreenStore
@@ -220,7 +221,7 @@ class Condition(StrEnum):
     """粗筛的三个条件，顺序就是结果里列出的顺序。"""
 
     RELATIVE_STRENGTH = "relative_strength"  # 相对强度
-    PULLBACK = "pullback"  # 趋势中回调
+    PULLBACK = "pullback"  # 回调
     VOLUME_SURGE = "volume_surge"  # 成交量异常
 
 
@@ -245,10 +246,9 @@ class DailyBar:
 
 @dataclass(frozen=True, slots=True)
 class Metrics:
-    """一只合格股票在截止交易日的指标。"""
+    """一只在上升趋势里的合格股票在截止交易日的指标。"""
 
     relative_strength: Decimal
-    uptrend: bool
     pullback: Decimal  # 回调幅度
     volume_ratio: Decimal  # 量比
 
@@ -274,6 +274,7 @@ class ScreenRun:
     day: date  # 截止交易日
     universe: int  # 数据源给出的股票数
     eligible: int  # 合格的股票数，包括被排除的
+    trending: int  # 合格的股票里在上升趋势里的
     candidates: tuple[Candidate, ...]  # 按名次
 ```
 
@@ -284,10 +285,19 @@ def average_dollar_volume(bars: Iterable[DailyBar], days: Sequence[date]) -> Dec
     """days 这几个交易日每天成交均价 × 成交量的平均；没有日线的那天算 0。"""
 
 
-def measure(
+def relative_strength(
     bars: Sequence[DailyBar], benchmark: Sequence[DailyBar], config: ScreenerConfig
-) -> Metrics:
-    """bars 和 benchmark 都是窗口里一天一根的日线，最后一根是截止交易日。"""
+) -> Decimal:
+    """bars 和 benchmark 都是窗口里一天一根的日线，最后一根是截止交易日；下面几个函数也一样。"""
+
+
+def uptrend(bars: Sequence[DailyBar], config: ScreenerConfig) -> bool: ...
+
+
+def pullback(bars: Sequence[DailyBar], config: ScreenerConfig) -> Decimal: ...
+
+
+def volume_ratio(bars: Sequence[DailyBar], config: ScreenerConfig) -> Decimal: ...
 ```
 
 `domain/screen.py`：
@@ -308,6 +318,7 @@ class Ranked:
 @dataclass(frozen=True, slots=True)
 class Evaluation:
     eligible: int
+    trending: int
     ranked: tuple[Ranked, ...]  # 按 spec「得分和排序」，0 分的不在里面
 
 
@@ -318,11 +329,13 @@ def evaluate(
     scope: Scope,
     config: ScreenerConfig,
 ) -> Evaluation:
-    """范围、合格、指标、条件和排序。基准缺日线时抛 ValueError，写明基准和缺的交易日。"""
+    """范围、合格、上升趋势、条件和排序。基准缺日线时抛 ValueError，写明基准和缺的交易日。"""
 ```
 
 - 计算全部用 `Decimal`，不四舍五入：存下的值和 spec 的场景逐位相等；成交量是 `int`，平均时转成 `Decimal`
+- 上升趋势是前提，不是条件：不在上升趋势里的合格股票不算分、不进名单，`Metrics` 也就没有上升趋势这一项
 - 相对强度的「前百分比」按"比它高的少于合格数 × 百分比"判断：并列的股票结果相同，和排序的先后无关
+- 前百分比的分母和比较对象是全部合格股票，不只是上升趋势里的：相对强度衡量的是在整个可交易范围里的强弱，门槛不随上升趋势里有多少只而变；大盘转弱、上升趋势里的股票变少时，也不会把相对弱的股票算成前 20%
 - 相对强度的比较包括调用方要排除的股票：名次不随股票池的状态变，同一天的名单只是跳过的不同（spec「跳过要排除的股票」）
 - 分数是条件数，存条件不存分数：分数由条件推出，存两份可能不一致
 - 范围、合格、排序都在 domain 的 `evaluate` 里，service 只做 I/O 和按名次查板块；spec 的大部分场景在 domain 测

@@ -119,15 +119,16 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# 连真实 Alpaca 模拟盘、连本机 OpenD、连真实 Discord、连真实新闻和公告源、连真实 Finnhub 的
-# 冒烟测试默认不运行，用 uv run pytest -m alpaca_paper、uv run pytest -m moomoo_opend、
-# uv run pytest -m discord_bot、uv run pytest -m news_sources、uv run pytest -m finnhub_api 运行。
+# 连真实 Alpaca 模拟盘、连本机 OpenD、连真实 Discord、连真实新闻和公告源、连真实 Finnhub、
+# 连真实 Alpaca 日线的冒烟测试默认不运行，用 uv run pytest -m alpaca_paper、
+# uv run pytest -m moomoo_opend、uv run pytest -m discord_bot、uv run pytest -m news_sources、
+# uv run pytest -m finnhub_api、uv run pytest -m alpaca_bars 运行。
 addopts = [
     "--strict-markers",
     "--strict-config",
     "-ra",
     "-m",
-    "not alpaca_paper and not moomoo_opend and not discord_bot and not news_sources and not finnhub_api",
+    "not alpaca_paper and not moomoo_opend and not discord_bot and not news_sources and not finnhub_api and not alpaca_bars",
 ]
 markers = [
     "alpaca_paper: 连真实的 Alpaca 模拟盘，需要 APCA_API_KEY_ID 和 APCA_API_SECRET_KEY",
@@ -135,4 +136,5 @@ markers = [
     "discord_bot: 连真实的 Discord，需要 DISCORD_BOT_TOKEN、DISCORD_GUILD_ID、DISCORD_CHANNEL_ID 和 DISCORD_USER_ID",
     "news_sources: 连真实的 Alpaca 新闻和 SEC EDGAR，需要 APCA_API_KEY_ID、APCA_API_SECRET_KEY 和 SEC_USER_AGENT",
     "finnhub_api: 连真实的 Finnhub，需要 FINNHUB_API_KEY",
+    "alpaca_bars: 连真实的 Alpaca 市场数据取日线，需要 APCA_API_KEY_ID 和 APCA_API_SECRET_KEY",
 ]
