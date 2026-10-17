@@ -18,6 +18,7 @@ class Actor(StrEnum):
     HUMAN = "human"  # 人
     SYSTEM = "system"  # 系统
     STOCK_POOL = "stock_pool"  # 股票池
+    SCHEDULER = "scheduler"  # 调度器
 
 
 class Action(StrEnum):
@@ -59,6 +60,11 @@ class Action(StrEnum):
     POOL_EXPIRE = "pool_expire"  # 超期移出
     POOL_BOUGHT = "pool_bought"  # 买入成交
     POOL_CLOSED = "pool_closed"  # 清仓
+    APPROVE_FOLLOW_UP = "approve_follow_up"  # 批准跟进
+    REJECT_FOLLOW_UP = "reject_follow_up"  # 拒绝跟进
+    REPLACE_FOLLOW_UP = "replace_follow_up"  # 替换跟进
+    VOID_FOLLOW_UP = "void_follow_up"  # 作废跟进
+    TRIGGER_FOLLOW_UP = "trigger_follow_up"  # 触发跟进
 
 
 ACCOUNT = "account"  # 对象：整个券商账户

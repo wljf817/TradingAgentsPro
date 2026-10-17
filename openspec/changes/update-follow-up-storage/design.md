@@ -5,10 +5,10 @@
 现状：
 
 - 跟进模块 `modules/followups`（add-follow-ups）：domain 的 `FollowUp` 是 frozen dataclass，带原样的 `FollowUpRequest`（contracts 的 Pydantic 模型）；存储端口 `FollowUpStore` 有 `pending()`、`requested_since(moment)`、`save(follow_up)`；`FollowUpService` 只读写这个端口，测试用 `tests/fakes/follow_ups.py` 的内存实现。没有 `repo.py`，没有表。用例的说明写着"同一个实例由调用方串行调用……做法 M4 和股票池一起定"
-- 状态库 `modules/statestore`：`versioned_table(name, key, *columns)` 建版本表；`VersionedStore` 的 `save(key, record, **columns)` 内容没变时不写，`get`，`latest(**where)` 列出每个键的最新版本里筛选列"等于"给定值的，`history(since)`。写入时刻 `recorded_at` 只用来排查，不按它查询（add-state-store design D3）
+- 状态库 `modules/statestore`：`versioned_table(name, key, *columns)` 建版本表；`VersionedStore` 的 `save(key, record, **columns)` 内容没变时不写，`get`，`latest(**where)` 列出每个键的最新版本里筛选列"等于"给定值的，`latest_since(since, *columns)` 列出每个键的最新版本里这几个时刻列至少一列不早于 since 的（update-stock-pool-storage design D3），`history(since)`。写入时刻 `recorded_at` 只用来排查，不按它查询（add-state-store design D3）
 - 程序日志 `modules/programlog`：`Actor`、`Action` 两个枚举；`ProgramLog.write(actor, action, subject, detail, *, inputs, outputs, case_id, ...)` 从时钟取时间、追加一条，出错原样抛出。以后的模块在 service 的构造参数里拿一个 `ProgramLog`，新的行为者和动作加进这两个枚举（add-program-log design D3）
-- 迁移在 `bootstrap/migrations/versions/`，现在到 v0004；v0005（股票池存储）和 v0007（任务和费用存储）由同时进行的另两个变更加。迁移写明每一列，不 import 业务代码；启动时 `upgrade head`，迁移要保持一条线
-- 交易侧的串行是一把进程内的可重入锁，由调用方（workflows、bootstrap）拿：一次拿锁里要组合执行模块和风控的几个调用（session-patrol spec「执行模块和风控的调用串行」，add-session-patrol design D3）
+- 迁移在 `bootstrap/migrations/versions/`，现在到 v0005（股票池存储）。迁移写明每一列，不 import 业务代码；启动时 `upgrade head`，迁移要保持一条线
+- 交易侧的串行是一把进程内的可重入锁，由调用方（workflows、bootstrap）拿：一次拿锁里要组合执行模块和风控的几个调用（session-patrol spec「执行模块和风控的调用串行」，add-session-patrol design D3）。股票池的串行是用例里的一把锁，改变记录的操作拿它（update-stock-pool-storage design D4）
 - 架构是单进程的模块化单体；同一只股票一次只运行一个案件（case-queue spec），不同股票的案件、到点触发的定时任务、股票池的状态变化可以同时调用跟进审批
 - 现在没有运行中的代码调用 `FollowUpService`
 
@@ -65,6 +65,7 @@ FOLLOW_UPS = versioned_table(
     "followups_follow_ups",
     Column("follow_up_id", Uuid, nullable=False),
     Column("pending", Boolean, nullable=False),
+    Column("requested_at", DateTime(timezone=True), nullable=False),
 )
 
 
@@ -78,11 +79,15 @@ class PostgresFollowUpStore:
         return self._versions.latest(pending=True)
 
     def requested_since(self, moment: datetime) -> tuple[FollowUp, ...]:
-        return tuple(f for f in self._versions.latest() if f.requested_at >= moment)
+        return self._versions.latest_since(moment, "requested_at")
 
     def save(self, follow_up: FollowUp) -> None:
-        pending = follow_up.status is FollowUpStatus.PENDING
-        self._versions.save(follow_up.follow_up_id, follow_up, pending=pending)
+        self._versions.save(
+            follow_up.follow_up_id,
+            follow_up,
+            pending=follow_up.status is FollowUpStatus.PENDING,
+            requested_at=follow_up.requested_at,
+        )
 ```
 
 | 列 | 类型 | 说明 |
@@ -90,23 +95,24 @@ class PostgresFollowUpStore:
 | `follow_up_id` | uuid | 键 |
 | `version`、`recorded_at`、`data` | integer、timestamptz、jsonb | 版本表共有的列（add-state-store design D1） |
 | `pending` | boolean | 筛选列：这个版本是待执行 |
+| `requested_at` | timestamptz | 筛选列：获批时刻，同一个跟进的每个版本都一样 |
 
 - 表名按"模块名_内容"：模块是 `followups`，内容是跟进
 - 一个跟进最多 2 个版本：获批时 1 个（待执行），状态变化一次（已触发、被替换、已作废）再 1 个，以后不再变化（follow-ups spec「跟进的状态」）
-- 只有一个筛选列：端口的 `pending()` 列出全部待执行的，按股票筛在用例里（add-follow-ups design D8）；端口没有按股票或按跟进 ID 读的方法
+- 两个筛选列：`pending` 给端口的 `pending()`，它列出全部待执行的，按股票筛在用例里（add-follow-ups design D8）；`requested_at` 给 `requested_since`（D2）。端口没有按股票或按跟进 ID 读的方法
 - 2026-10-16 在临时脚本里验证过：`FollowUp` 经 `TypeAdapter` 转 JSON 再读回，引用是日程项、事件、条件（值 `Decimal("55.10")`、`Decimal("-0.05")`）或没有，触发时间带 -05:00 时差，读回的都和原来相等，引用读回的类型也对（两种引用的字段不重叠）
 
-### D2 每天的申请次数：读全部跟进，按获批时刻筛
+### D2 每天的申请次数：按获批时刻列出
 
-端口的 `requested_since(moment)` 要"获批时刻不早于 moment 的跟进，不论现在的状态"。`VersionedStore.latest` 只能按筛选列"等于"筛，所以数据库实现取每个跟进的最新版本，在 Python 里留下 `requested_at >= moment` 的（D1）。
+端口的 `requested_since(moment)` 要"获批时刻不早于 moment 的跟进，不论现在的状态"。数据库实现用股票池存储加的 `VersionedStore.latest_since(moment, "requested_at")`：每个跟进的最新版本里，获批时刻不早于 moment 的那些，在数据库里筛（D1）。股票池的 `changed_since` 是同一种列出。
 
-- 默认每天最多 5 个跟进获批，一年一千多个；审批一天只有几次，每次读一遍全部跟进
 - 获批时刻不随版本变化，按最新版本筛和按哪个版本筛结果相同
-- 读不出来的旧记录照常报错（state-store spec「读写出错时报错」）；记录格式改了本来就要写数据迁移改旧版本（add-state-store design D4）
+- 只读回这个交易日获批的几个跟进，不随表变大而多读
+- 不改状态库：`latest_since` 已经有了
 
 考虑过：
 
-- 给 `VersionedStore` 加按范围筛的读取：要改状态库模块和 state-store spec，现在只有这一个调用方。股票池存储的 `changed_since` 也是按时刻筛，要加的话两边一起定
+- 读出全部跟进的最新版本，在 Python 里按获批时刻筛：不用加筛选列，但每次审批都要读回获批过的全部跟进，越用越多
 - 记录里加"获批的交易日"，用筛选列按"等于"查：要改 domain 的记录和 follow-ups spec；交易日是从获批时刻和日历推出来的，多存一份
 - 按 `recorded_at` 查：写入时刻只用来排查（add-state-store design D3），和获批时刻也不是同一次读时钟
 
@@ -154,6 +160,7 @@ class FollowUpService:
 考虑过：
 
 - 像交易侧那样由调用方拿锁：那把锁要在一次拿锁里组合执行模块和风控的几个调用；跟进审批的每个方法自己就是完整的一步，没有要组合的
+- 和股票池一样只让改变记录的操作拿锁：股票池一次操作只保存一条记录；跟进的替换要保存两条，只读的 `pending` 不拿锁就可能读到做了一半的替换
 - 每只股票一把锁：每天的申请次数跨股票，保护不了
 - 数据库的事务或行锁：`VersionedStore` 每次保存是一个事务，读和写放不进同一个事务，要加接口；单进程用进程内的锁就够
 - 普通 `Lock`：`status_changed` 调用 `pending` 时会卡死
@@ -236,7 +243,7 @@ CCC，外部日程，日程项 S-9，触发时间 2026-11-19 14:30 UTC；问题�
 
 ### D7 迁移 v0006
 
-`bootstrap/migrations/versions/v0006_create_follow_ups.py`，和 v0002、v0003 一样写明每一列：
+`bootstrap/migrations/versions/v0006_create_follow_ups.py`，接在股票池存储的 v0005 后面，和 v0002、v0003 一样写明每一列：
 
 ```python
 revision: str = "0006"
@@ -251,6 +258,7 @@ def upgrade() -> None:
         sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("data", JSONB(), nullable=False),
         sa.Column("pending", sa.Boolean(), nullable=False),
+        sa.Column("requested_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("follow_up_id", "version"),
     )
 
@@ -259,7 +267,7 @@ def downgrade() -> None:
     raise NotImplementedError("迁移只升级，见 add-state-store 的 design D6")
 ```
 
-编号固定是 v0006。`down_revision` 在 apply 时设为那时最新的迁移：股票池存储的 v0005 已经在 main 上时是 `"0005"`，否则是 `"0004"`，迁移保持一条线。
+表很小，不另建索引。
 
 ### D8 测试
 
@@ -270,6 +278,7 @@ tests/modules/followups/test_service.py         改：program-log spec「调度�
 tests/modules/followups/test_service_threads.py 新：follow-ups spec「同时进行的调用」
 tests/modules/followups/test_state_machine.py   改：用例带程序日志，加条目的检查
 tests/bootstrap/test_database.py                改：表清单、列、主键、归属加跟进表
+tests/bootstrap/test_app.py                     改：空数据库的表清单加跟进表，迁移版本是 0006
 ```
 
 - `test_repo.py`：端口的行为同时测内存实现和数据库实现（`params=["memory", "postgres"]`，同 `tests/modules/risk/test_repo.py`）：`pending()` 只看最新版本；`requested_since` 的边界（等于 moment 的算），已触发、被替换、已作废的也给出。「跟进的存储」的场景只测数据库实现：版本直接查表；重启用同一个数据库新建 Engine、存储和用例；连不上用连不上的地址（同 `tests/modules/programlog/test_repo.py`）
@@ -280,7 +289,6 @@ tests/bootstrap/test_database.py                改：表清单、列、主键�
 
 ## Risks / Trade-offs
 
-- [每次审批读一遍全部跟进] → 一年一千多条；读得慢了再给状态库加按范围筛的读取（D2）
 - [锁只管一个进程] → 架构是单进程
 - [记为已触发以后、入队以前进程退出，这次触发就丢了] → 本变更不改（add-follow-ups 的 Risks）；「跟进到点」接线时处理
 - [保存在前、写条目在后，中间退出少一条条目] → 和别的条目一样（add-program-log 的省略清单）
