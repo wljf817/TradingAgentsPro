@@ -19,6 +19,7 @@ class Actor(StrEnum):
     SYSTEM = "system"  # 系统
     STOCK_POOL = "stock_pool"  # 股票池
     SCHEDULER = "scheduler"  # 调度器
+    GATEWAY = "gateway"  # Agent 网关
 
 
 class Action(StrEnum):
@@ -65,6 +66,9 @@ class Action(StrEnum):
     REPLACE_FOLLOW_UP = "replace_follow_up"  # 替换跟进
     VOID_FOLLOW_UP = "void_follow_up"  # 作废跟进
     TRIGGER_FOLLOW_UP = "trigger_follow_up"  # 触发跟进
+    DISPATCH_TASK = "dispatch_task"  # 派发任务
+    REJECT_TASK = "reject_task"  # 拒绝任务
+    TASK_RESULT = "task_result"  # 生成 Result
 
 
 ACCOUNT = "account"  # 对象：整个券商账户

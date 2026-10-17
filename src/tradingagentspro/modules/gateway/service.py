@@ -1,7 +1,8 @@
 """Agent 网关的用例。
 
 - TaskDispatchService：放行或拒绝 PM 和 Critic 的任务请求，把子 agent 的输出、调用失败和超时记成
-  Result，给出本案件的任务，见 task-dispatch spec。这里只读当前时刻、生成 ID、解析输出、读写存储
+  Result，给出本案件的任务，见 task-dispatch spec；每个 Task 和 Result 写一条程序日志，见
+  program-log spec「Agent 网关的动作」。这里只读当前时刻、生成 ID、解析输出、读写存储、写程序日志
 - ModelFallbackService：一次调用向哪个模型尝试、失败以后换不换，按模型熔断，记下案件内的起点，见
   model-fallback spec。这里只读当前时刻、查模型的配置，在内存里保存熔断状态和起点
 - CallBudgetService：记下每次尝试的费用，给出三个预算的情况，见 call-budget spec。这里只读当前时刻、
@@ -41,6 +42,11 @@ from tradingagentspro.modules.gateway.domain.dispatch import (
     reusable,
     rounds_used,
 )
+from tradingagentspro.modules.gateway.domain.entries import (
+    dispatched_text,
+    rejected_text,
+    result_text,
+)
 from tradingagentspro.modules.gateway.domain.fallback import (
     Breaker,
     CallError,
@@ -58,6 +64,7 @@ from tradingagentspro.modules.gateway.domain.result import (
     rejected,
 )
 from tradingagentspro.modules.gateway.ports import CostStore, TaskStore
+from tradingagentspro.modules.programlog import Action, Actor, ProgramLog
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.ids import IdGenerator
 from tradingagentspro.shared.trading_calendar import TradingCalendar
@@ -68,16 +75,28 @@ _OUTPUT: Final[TypeAdapter[SubAgentOutput]] = TypeAdapter(SubAgentOutput)
 class TaskDispatchService:
     """任务派发的入口。
 
-    同一个案件由调用方串行调用：派发的检查和 Result 只写一次都是先读后写，做法 M4 定。
+    同一个案件的 dispatch 由调用方依次调用：派发的检查是先读后写，一个案件一次只在一个阶段，PM 和
+    Critic 不会同时派发。receive、fail、expire 可以和任何调用同时进行：一个任务只有一个 Result 由
+    存储保证（先写入的为准），派发的检查只看 Task 和派发自己写的被拒绝的 Result，不受它们影响。见
+    task-dispatch spec「任务的存储」和 update-task-cost-storage 的 design D3、D4。
+
+    写入 Task 或 Result 以后写一条程序日志，行为者是 Agent 网关；同时生成的两个 Result 只有写入了的
+    那个写（design D6）。
     """
 
     def __init__(
-        self, store: TaskStore, clock: Clock, ids: IdGenerator, config: GatewayConfig
+        self,
+        store: TaskStore,
+        clock: Clock,
+        ids: IdGenerator,
+        config: GatewayConfig,
+        log: ProgramLog,
     ) -> None:
         self._store = store
         self._clock = clock
         self._ids = ids
         self._config = config
+        self._log = log
 
     def dispatch(
         self, scope: CaseScope, dispatcher: Dispatcher, requests: Sequence[TaskRequest]
@@ -106,11 +125,13 @@ class TaskDispatchService:
             )
             self._store.add_task(task)
             if rejection is None:
+                self._write_task(Action.DISPATCH_TASK, task, dispatched_text(task))
                 records.append(TaskRecord(task))
                 dispatches.append(Dispatch(task, DispatchAction.DISPATCHED))
             else:
                 result = rejected(task, rejection)
                 self._store.add_result(result)
+                self._write_task(Action.REJECT_TASK, task, rejected_text(task, rejection))
                 records.append(TaskRecord(task, result))
                 dispatches.append(Dispatch(task, DispatchAction.REJECTED))
         return tuple(dispatches)
@@ -145,13 +166,39 @@ class TaskDispatchService:
         return self._store.case_records(case_id)
 
     def _settle(self, task_id: UUID, settle: Callable[[Task, datetime], Result]) -> Result:
-        """一个任务只有一个 Result：先到的为准。"""
+        """一个任务只有一个 Result：先写入的为准。
+
+        同时有别的调用在读完以后先写入了 Result 时，存储不写这一个，给出那一个。
+        """
         record = self._store.record(task_id)
         if record.result is not None:
             return record.result
         result = settle(record.task, self._clock.now())
-        self._store.add_result(result)
+        existing = self._store.add_result(result)
+        if existing is not None:
+            return existing
+        self._log.write(
+            Actor.GATEWAY,
+            Action.TASK_RESULT,
+            str(task_id),
+            result_text(result),
+            inputs=result.cited_entries,
+            case_id=record.task.case_id,
+            duration=result.elapsed,
+            cost=result.cost,
+        )
         return result
+
+    def _write_task(self, action: Action, task: Task, detail: str) -> None:
+        """派发任务、拒绝任务的条目：对象是 task_id，输入的引用是 Task 的输入。"""
+        self._log.write(
+            Actor.GATEWAY,
+            action,
+            str(task.task_id),
+            detail,
+            inputs=task.inputs,
+            case_id=task.case_id,
+        )
 
 
 class ModelFallbackService:
@@ -224,8 +271,9 @@ class CallBudgetService:
     """调用预算的入口：记下每次尝试的费用，给出三个预算的情况，见 call-budget spec。
 
     这里只读当前时刻、查单价、读写存储；预算的情况每次从存储里今天的记录重新算，不缓存，进程重启
-    以后接着算。网关不因为预算用完拒绝任务或调用（spec「已经开始的案件」）。同一个实例由调用方串行
-    调用：记到哪个预算是先读后写，做法 M4 定。
+    以后接着算。网关不因为预算用完拒绝任务或调用（spec「已经开始的案件」）。可以同时调用：记到哪个
+    预算按这一条记下时读到的情况，同时记下的几条不互相等待，都在普通预算用完以前读到的都记普通预算，
+    预算可以超出一点（spec「费用的存储」，update-task-cost-storage 的 design D5）。
     """
 
     def __init__(

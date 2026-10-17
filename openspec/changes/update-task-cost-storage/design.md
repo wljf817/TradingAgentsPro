@@ -8,7 +8,7 @@
 - `TaskDispatchService._settle`（收到输出、调用失败、记超时共用）先读这个任务，已经有 Result 就给出它，否则生成 Result 写入；内存实现对同一个 Task 写第二个 Result 时抛错。`dispatch` 读本案件的任务、检查，再逐个写 Task。说明写着"同一个案件由调用方串行调用：派发的检查和 Result 只写一次都是先读后写，做法 M4 定"
 - `CallBudgetService.record` 读今天的记录、算普通预算是否用完、再写一条；说明写着"记到哪个预算是先读后写，做法 M4 定"
 - 程序日志已经有了：`ProgramLog.write(actor, action, subject, detail, *, inputs, outputs, case_id, duration, tokens, cost)`；以后的模块在 service 的构造参数里拿一个 `ProgramLog`，在 `modules/programlog/domain/entry.py` 的 `Actor`、`Action` 里加自己的成员（add-program-log 的 design D3）
-- 表的两种写法：状态库的版本表（`modules/statestore` 的 `VersionedStore`，按键保存版本）；程序日志的只追加表（一行一条，编号自增，`modules/programlog/repo.py`）。迁移在 `bootstrap/migrations/versions/`，现在到 v0004，同时在写的股票池存储、跟进存储占 v0005、v0006
+- 表的两种写法：状态库的版本表（`modules/statestore` 的 `VersionedStore`，按键保存版本）；程序日志的只追加表（一行一条，编号自增，`modules/programlog/repo.py`）。迁移在 `bootstrap/migrations/versions/`，现在到 v0006（v0005 股票池、v0006 跟进）
 - 运行中的代码还没有调用网关：bootstrap 不建这三个用例，「替身」「案件工作流」才接上
 - `tests/contracts/test_task.py` 已经有任意合法的 Task、Result 按 JSON 写出再读回相等的性质测试
 
@@ -238,6 +238,7 @@ def result_text(result: Result) -> str:
 
 - 写在 service 里，不在调用方：同时生成 Result 时两个调用拿到的 Result 一样，只有 service 知道是不是自己写入的（D3）
 - 发起者、目标、任务类型、原因、状态的中文名放在 `domain/entries.py`：只有条目用；时刻写成 UTC，和别的条目一样精确到秒（截止时间是派发时刻加 5 分钟，带秒）
+- 格式不合法的 Result 的说明是 signal-format 的原因代码（`horizon_not_offered`、`data_after_now`）时，条目里写它的中文（评估窗口不在配置的选项里、数据截至时刻晚于现在）；结构错误的位置和原因、调用失败的说明照原样写
 - 被拒绝的 Result 写在拒绝任务里，不另写生成 Result：Proposal 的"被拒绝的任务及原因"就是这一条，一个被拒绝的请求一条
 - 复用不写：没有生成 Task；PM 拿到的工具结果在 M5 每次模型调用的条目里
 - token 不写：一个任务的 token 分在几次尝试里，由 M5 每次模型调用的条目写；费用记录也不另写条目（proposal「需要人决定」第 2 条）
@@ -245,7 +246,7 @@ def result_text(result: Result) -> str:
 
 ### D7 迁移 v0007
 
-`v0007_create_gateway_tables.py` 建三张表和两个索引，照 v0004 的写法写明每一列、不 import 业务代码；`revision = "0007"`，`down_revision` 是实现时最新的版本（按存储组的实现顺序是跟进存储的 `"0006"`）；`downgrade` 照旧不支持。
+`v0007_create_gateway_tables.py` 建三张表和两个索引，照 v0004 的写法写明每一列、不 import 业务代码；`revision = "0007"`，`down_revision = "0006"`（跟进的迁移）；`downgrade` 照旧不支持。
 
 ### D8 测试
 
