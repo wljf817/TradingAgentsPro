@@ -18,12 +18,14 @@ from tradingagentspro.contracts.trade_plan import TradeAction
 from tradingagentspro.integrations.discord.commands import PlanCommand
 from tradingagentspro.integrations.discord.config import DiscordConfig
 from tradingagentspro.integrations.discord.notifier import PressHandler
-from tradingagentspro.integrations.discord.plans import PlanEntry
+from tradingagentspro.integrations.discord.plans import SECTOR_NAMES, PlanEntry
 from tradingagentspro.modules.notification import NotificationUnavailableError
 
 # /plan 每个字段的说明，Discord 显示在字段下面（最长 100 字）
 _SYMBOL = "股票代码，比如 AAPL"
-_SECTOR = "板块，比如 科技"
+_SECTOR = "板块"
+# 板块的选项：Discord 只让选这 11 个，选项的值是板块 ETF 的代码
+_SECTORS = [app_commands.Choice(name=name, value=etf.value) for etf, name in SECTOR_NAMES.items()]
 _QUANTITY = "股数，整股"
 _LIMIT = "限价，美元，比如 180.50"
 _EXIT_LIMIT = "限价，美元，比如 180.50；不填就是市价单"
@@ -249,6 +251,7 @@ class PlanGroup(app_commands.Group):
         self._plans = plans
 
     @app_commands.command(name="buy", description="买入：新建仓，限价单")
+    @app_commands.choices(sector=_SECTORS)
     @app_commands.describe(
         symbol=_SYMBOL,
         sector=_SECTOR,
@@ -263,7 +266,7 @@ class PlanGroup(app_commands.Group):
         self,
         interaction: discord.Interaction,
         symbol: str,
-        sector: str,
+        sector: app_commands.Choice[str],
         quantity: app_commands.Range[int, 1],
         limit: str,
         stop: str,
@@ -272,11 +275,20 @@ class PlanGroup(app_commands.Group):
         expires: str | None = None,
     ) -> None:
         entry = PlanEntry(
-            TradeAction.BUY, symbol, sector, quantity, limit, stop, emergency, deviation, expires
+            TradeAction.BUY,
+            symbol,
+            sector.value,
+            quantity,
+            limit,
+            stop,
+            emergency,
+            deviation,
+            expires,
         )
         await self._plans.handle(InteractionCall(interaction), entry)
 
     @app_commands.command(name="add", description="加仓：限价单")
+    @app_commands.choices(sector=_SECTORS)
     @app_commands.describe(
         symbol=_SYMBOL,
         sector=_SECTOR,
@@ -291,7 +303,7 @@ class PlanGroup(app_commands.Group):
         self,
         interaction: discord.Interaction,
         symbol: str,
-        sector: str,
+        sector: app_commands.Choice[str],
         quantity: app_commands.Range[int, 1],
         limit: str,
         stop: str,
@@ -300,7 +312,15 @@ class PlanGroup(app_commands.Group):
         expires: str | None = None,
     ) -> None:
         entry = PlanEntry(
-            TradeAction.ADD, symbol, sector, quantity, limit, stop, emergency, deviation, expires
+            TradeAction.ADD,
+            symbol,
+            sector.value,
+            quantity,
+            limit,
+            stop,
+            emergency,
+            deviation,
+            expires,
         )
         await self._plans.handle(InteractionCall(interaction), entry)
 

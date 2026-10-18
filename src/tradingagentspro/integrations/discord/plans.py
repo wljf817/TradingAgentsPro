@@ -1,6 +1,7 @@
 """/plan 填的内容：解析成交易方案，以及每种回复的文字。不做 I/O。
 
-见 manual-plans spec「字段的解析」「回复」，以及 add-manual-plan-entry 的 design D2、D3、D10。
+见 manual-plans spec「子命令和字段」「字段的解析」「回复」，以及 add-manual-plan-entry 的
+design D2、D3、D10；板块的选项见 update-order-flow-case-plans 的 design D8。
 """
 
 import re
@@ -16,6 +17,7 @@ from pydantic_core import ErrorDetails
 from tradingagentspro.contracts.risk import RiskDecision, RiskOutcome
 from tradingagentspro.contracts.trade_plan import OrderType, TradeAction, TradePlan
 from tradingagentspro.integrations.discord.messages import ACTION_NAMES
+from tradingagentspro.modules.companydata import SectorEtf
 from tradingagentspro.shared.trading_calendar import CalendarRangeError, TradingCalendar
 
 # 数字只有一种写法：数字，可以带一个小数点和小数部分；百分数后面可以带一个 %
@@ -23,6 +25,21 @@ _NUMBER = re.compile(r"[0-9]+(\.[0-9]+)?")
 _PERCENT = re.compile(r"([0-9]+(?:\.[0-9]+)?)%?")
 _DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 _HUNDRED = Decimal(100)
+
+# /plan 买入和加仓的板块选项：中文板块名，值是板块 ETF 的代码，见 manual-plans spec「子命令和字段」
+SECTOR_NAMES = {
+    SectorEtf.XLK: "科技",
+    SectorEtf.XLC: "通信服务",
+    SectorEtf.XLY: "可选消费",
+    SectorEtf.XLP: "必需消费",
+    SectorEtf.XLV: "医疗",
+    SectorEtf.XLF: "金融",
+    SectorEtf.XLE: "能源",
+    SectorEtf.XLI: "工业",
+    SectorEtf.XLB: "材料",
+    SectorEtf.XLU: "公用事业",
+    SectorEtf.XLRE: "房地产",
+}
 
 # 构造方案时 Pydantic 报错的字段，在原因里写中文名
 _FIELD_NAMES = {
@@ -73,15 +90,12 @@ def build_plan(
 ) -> TradePlan:
     """逐个字段解析，再构造方案；不通过时抛 PlanFormatError，一次列出全部原因。
 
-    sector 是方案的板块：买入和加仓是填的，减仓和清仓是持仓的。
+    sector 是方案的板块：买入和加仓是选的选项的值，减仓和清仓是持仓的。
     """
     reasons: list[str] = []
     symbol = normalize_symbol(entry.symbol)
     if not symbol:
         reasons.append("股票不能为空")
-    sector = sector.strip()
-    if not sector:
-        reasons.append("板块不能为空")
     limit = _price("限价", entry.limit, reasons)
     stop = _price("止损价", entry.stop, reasons)
     emergency = _percent("紧急阈值", entry.emergency, reasons)

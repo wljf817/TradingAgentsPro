@@ -16,8 +16,8 @@
 
 ## 4. /plan 的板块
 
-- [ ] 4.1 先写测试（design D8）：`tests/integrations/discord/test_gateway.py` 覆盖 manual-plans spec「板块的选项」和「buy 的字段」里 sector 是选项；`test_plans.py` 改「填全了的买入」「加仓」「股票代码和板块的空白」「买入不查持仓」的期望（方案的板块是选项的值）。验证：确认失败
-- [ ] 4.2 实现（design D8）：`plans.py` 的中文板块名表，`gateway.py` 的 `buy`、`add` 用 `app_commands.choices`，说明改为「板块」；`build_plan` 去掉板块的空白和为空的检查。验证：4.1 的测试和 `tests/integrations/discord` 原有的测试通过；`uv run mypy` 通过
+- [x] 4.1 先写测试（design D8）：`tests/integrations/discord/test_gateway.py` 覆盖 manual-plans spec「板块的选项」和「buy 的字段」里 sector 是选项；`test_plans.py` 改「填全了的买入」「加仓」「股票代码和板块的空白」「买入不查持仓」的期望（方案的板块是选项的值）。验证：确认失败
+- [x] 4.2 实现（design D8）：`plans.py` 的中文板块名表，`gateway.py` 的 `buy`、`add` 用 `app_commands.choices`，说明改为「板块」；`build_plan` 去掉板块的空白和为空的检查。验证：4.1 的测试和 `tests/integrations/discord` 原有的测试通过；`uv run mypy` 通过
 
 ## 5. 下单流程：案件的方案
 
