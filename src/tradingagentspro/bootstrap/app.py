@@ -10,6 +10,8 @@ design D10。确认按钮的结果先送给紧急退出流程，它不在等的�
 通知配置，见 update-confirmation-rules 的 design D4、D7。以后的流程从 TradingApp.lock 取锁。
 数据库升级以后建程序日志、写启动（需要时先写崩溃恢复），关闭数据库连接以前写停止；装配好的通知、
 各流程都写进这一个程序日志，以后的流程从 TradingApp.log 取，见 add-program-log 的 design D7。
+股票池、跟进和案件记录交给下单流程（案件的方案）和巡检里的股票池跟上持仓，以后的流程从 TradingApp
+取；案件工作流和交接还不装配，见 update-order-flow-case-plans 的 design D9。
 """
 
 import logging
@@ -74,6 +76,11 @@ from tradingagentspro.modules.execution import (
     Reconciliation,
     StopBroker,
 )
+from tradingagentspro.modules.followups import (
+    FollowUpConfig,
+    FollowUpService,
+    PostgresFollowUpStore,
+)
 from tradingagentspro.modules.health import HealthConfig, HealthService
 from tradingagentspro.modules.marketdata import MarketDataConfig, MarketDataService
 from tradingagentspro.modules.notification import (
@@ -90,6 +97,11 @@ from tradingagentspro.modules.programlog import (
 )
 from tradingagentspro.modules.risk import PostgresReservationStore, RiskConfig, RiskService
 from tradingagentspro.modules.statestore import connect
+from tradingagentspro.modules.stockpool import (
+    PostgresStockPoolStore,
+    StockPoolConfig,
+    StockPoolService,
+)
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.ids import IdGenerator
 from tradingagentspro.shared.trading_calendar import TradingCalendar
@@ -98,6 +110,7 @@ from tradingagentspro.workflows.health import HealthMonitor, degraded_text
 from tradingagentspro.workflows.order_flow import OrderFlow, OrderFlowConfig, TradeServices
 from tradingagentspro.workflows.order_workflow import OrderPlanIntake, deliver_decision, install
 from tradingagentspro.workflows.patrol import PatrolConfig, SessionPatrol
+from tradingagentspro.workflows.pool_sync import PoolSync
 from tradingagentspro.workflows.reconciliation import startup_text
 
 _log = logging.getLogger(__name__)
@@ -164,6 +177,9 @@ class TradingApp:
     health: HealthService
     market_data: MarketDataService
     notification: NotificationService
+    stock_pool: StockPoolService
+    follow_ups: FollowUpService
+    case_records: CaseRecordService
     reconciliation: Reconciliation  # 启动对账的结果
     lock: threading.RLock  # 执行模块和风控的调用串行用的锁，见 session-patrol spec
     log: ProgramLog  # 程序日志，见 program-log spec
@@ -235,6 +251,9 @@ class _Parts:
     health: HealthService
     market_data: MarketDataService
     notification: NotificationService
+    stock_pool: StockPoolService
+    follow_ups: FollowUpService
+    case_records: CaseRecordService
     notifier: DiscordNotifier
     lock: threading.RLock
     monitor: HealthMonitor
@@ -285,6 +304,18 @@ def _assemble(
     notifier = DiscordNotifier(gateway, settings.discord, clock, decision_handler(decisions))
     notification = NotificationService(notifier, clock, notification_config, program_log)
     monitor = HealthMonitor(health, execution, market_data, notification, lock, clock, program_log)
+    stock_pool = StockPoolService(
+        PostgresStockPoolStore(engine, clock), clock, calendar, StockPoolConfig(), program_log
+    )
+    follow_ups = FollowUpService(
+        PostgresFollowUpStore(engine, clock),
+        clock,
+        calendar,
+        externals.ids,
+        FollowUpConfig(),
+        program_log,
+    )
+    case_records = CaseRecordService(PostgresCaseRecordStore(engine, clock), clock)
     return _Parts(
         alpaca=client,
         execution=execution,
@@ -293,6 +324,9 @@ def _assemble(
         health=health,
         market_data=market_data,
         notification=notification,
+        stock_pool=stock_pool,
+        follow_ups=follow_ups,
+        case_records=case_records,
         notifier=notifier,
         lock=lock,
         monitor=monitor,
@@ -312,13 +346,14 @@ def _assemble(
                 notification_config,
                 decisions,
             ),
+            pool=PoolSync(execution, stock_pool, follow_ups, case_records, calendar),
             log=program_log,
         ),
         flow=OrderFlow(
             services,
             notification,
             notification_config,
-            CaseRecordService(PostgresCaseRecordStore(engine, clock), clock),
+            case_records,
             clock,
             calendar,
             OrderFlowConfig(),
@@ -388,6 +423,9 @@ def start(
         health=parts.health,
         market_data=parts.market_data,
         notification=parts.notification,
+        stock_pool=parts.stock_pool,
+        follow_ups=parts.follow_ups,
+        case_records=parts.case_records,
         reconciliation=reconciliation,
         lock=parts.lock,
         log=program_log,

@@ -1,9 +1,10 @@
 """盘中巡检：每一轮跟进全部未结束的订单、按订单同步预留、对齐持仓的止损单，发现无保护仓位时告警，
-然后判定一次系统健康、做紧急退出，最后在到期时做收盘对账。
+然后让股票池跟上持仓、判定一次系统健康、做紧急退出，最后在到期时做收盘对账。
 
-见 session-patrol spec、health-monitoring spec「巡检里的健康判定」、emergency-exit-flow spec
-「巡检里的紧急退出」、close-reconciliation spec「巡检里的收盘对账」和 add-session-patrol 的
-design。执行模块和风控里会改变状态的调用都拿着全程序共用的那把锁，一项一项地拿；推送告警时不拿锁。
+见 session-patrol spec、pool-position-sync spec、health-monitoring spec「巡检里的健康判定」、
+emergency-exit-flow spec「巡检里的紧急退出」、close-reconciliation spec「巡检里的收盘对账」和
+add-session-patrol 的 design。执行模块和风控里会改变状态的调用都拿着全程序共用的那把锁，
+一项一项地拿；推送告警时不拿锁。
 订单和止损单的变化、无保护仓位和解除、同步预留时的释放写进程序日志，见 program-log spec 和
 add-program-log 的 design D5、D6。
 """
@@ -29,10 +30,12 @@ from tradingagentspro.modules.execution import (
 from tradingagentspro.modules.notification import NotificationService
 from tradingagentspro.modules.programlog import Action, Actor, ProgramLog
 from tradingagentspro.modules.risk import RiskService
+from tradingagentspro.modules.stockpool import PoolEntry
 from tradingagentspro.workflows.emergency_flow import EmergencyFlow, Judgement
 from tradingagentspro.workflows.entries import log_order_change, release
 from tradingagentspro.workflows.health import HealthMonitor
 from tradingagentspro.workflows.names import ORDER_STATUSES, STOP_STATUSES
+from tradingagentspro.workflows.pool_sync import PoolSync
 from tradingagentspro.workflows.reconciliation import close_reconcile_if_due
 
 _log = logging.getLogger(__name__)
@@ -52,7 +55,8 @@ class SessionPatrol:
 
     run_round 做一轮，可以直接调用；start 在守护线程里循环，stop 停下并等线程结束。
     lock 是全程序共用的那把锁，见 spec「执行模块和风控的调用串行」。emergency 是每一轮里的紧急退出，
-    见 emergency-exit-flow spec。log 是程序日志。
+    见 emergency-exit-flow spec；pool 是每一轮里的股票池跟上持仓，见 pool-position-sync spec。
+    log 是程序日志。
     """
 
     def __init__(
@@ -65,10 +69,12 @@ class SessionPatrol:
         config: PatrolConfig,
         *,
         emergency: EmergencyFlow,
+        pool: PoolSync,
         log: ProgramLog,
     ) -> None:
         self._execution = execution
         self._emergency = emergency
+        self._pool = pool
         self._log = log
         self._risk = risk
         self._notification = notification
@@ -112,15 +118,17 @@ class SessionPatrol:
             self._stopping.wait(seconds)
 
     def run_round(self) -> None:
-        """做一轮：跟进订单、同步预留、对齐止损单，见 session-patrol spec「每一轮」；然后是健康
-        判定，见 health-monitoring spec「巡检里的健康判定」，和紧急退出，见 emergency-exit-flow
-        spec「巡检里的紧急退出」；最后是收盘对账，见 close-reconciliation spec「巡检里的收盘对账」。
+        """做一轮：跟进订单、同步预留、对齐止损单，见 session-patrol spec「每一轮」；然后是股票池
+        跟上持仓，见 pool-position-sync spec；健康判定，见 health-monitoring spec「巡检里的健康
+        判定」，和紧急退出，见 emergency-exit-flow spec「巡检里的紧急退出」；最后是收盘对账，见
+        close-reconciliation spec「巡检里的收盘对账」。
 
         停止以后不再开始新的一项，直接返回。
         """
         tracked = self._track_orders()
         self._sync_reservations()
         broker_connected = self._align_stops(tracked)
+        self._follow_pool()
         self._judge_health(broker_connected)
         self._emergency_exit()
         self._close_reconcile()
@@ -207,6 +215,21 @@ class SessionPatrol:
                 self._alert(symbol, protection)
         self._forget(set(symbols))
         return connected
+
+    def _follow_pool(self) -> None:
+        """第 3 步之后：股票池跟上持仓。列出要跟上的股票是一项，每只股票各一项，见
+        update-order-flow-case-plans 的 design D7。不拿锁。
+        """
+        if self._stopping.is_set():
+            return
+        targets: tuple[tuple[PoolEntry, bool], ...] = ()
+        with self._item("列出股票池要跟上的股票"):
+            targets = self._pool.targets()
+        for entry, held in targets:
+            if self._stopping.is_set():
+                return
+            with self._item(f"股票池跟上 {entry.symbol} 的持仓"):
+                self._pool.follow(entry, held)
 
     def _judge_health(self, broker_connected: bool | None) -> None:
         """第 3 步之后：判定一次系统健康，见 add-health-monitoring 的 design D1。

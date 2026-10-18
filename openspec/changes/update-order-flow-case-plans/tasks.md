@@ -31,13 +31,13 @@
 
 ## 7. 股票池跟上持仓
 
-- [ ] 7.1 先写测试（design D7）`tests/workflows/test_pool_sync.py`：`pool_change` 覆盖 pool-position-sync spec「股票池跟上持仓」表的每一行；`PoolSync` 用 `tests/fakes/` 的股票池、跟进、案件记录和券商、订单的内存实现，覆盖两个要求的全部场景（巡检的一轮用 `SessionPatrol.run_round`）；`tests/workflows/test_patrol.py` 加 session-patrol spec「股票池跟上持仓在第 3 步之后」。验证：确认因为 `workflows/pool_sync.py` 不存在而失败
-- [ ] 7.2 实现（design D7）：`workflows/pool_sync.py` 的 `PoolChange`、`pool_change`、`PoolSync`（`targets`、`follow`）；`patrol.py` 的 `SessionPatrol` 加 `pool` 参数，第 3 步之后一项列出、每只股票一项；模块说明写上这一项。验证：7.1 的测试通过，`tests/workflows` 原有的巡检测试只改构造参数，全部通过；`uv run mypy`、`uv run lint-imports` 通过
+- [x] 7.1 先写测试（design D7）`tests/workflows/test_pool_sync.py`：`pool_change` 覆盖 pool-position-sync spec「股票池跟上持仓」表的每一行；`PoolSync` 用 `tests/fakes/` 的股票池、跟进、案件记录和券商、订单的内存实现，覆盖两个要求的全部场景（巡检的一轮用 `SessionPatrol.run_round`）；`tests/workflows/test_patrol.py` 加 session-patrol spec「股票池跟上持仓在第 3 步之后」。验证：确认因为 `workflows/pool_sync.py` 不存在而失败
+- [x] 7.2 实现（design D7）：`workflows/pool_sync.py` 的 `PoolChange`、`pool_change`、`PoolSync`（`targets`、`follow`）；`patrol.py` 的 `SessionPatrol` 加 `pool` 参数，第 3 步之后一项列出、每只股票一项；模块说明写上这一项。验证：7.1 的测试通过，`tests/workflows` 原有的巡检测试只改构造参数，全部通过；`uv run mypy`、`uv run lint-imports` 通过
 
 ## 8. 装配
 
-- [ ] 8.1 先写测试（design D9）`tests/bootstrap/test_app.py`：bootstrap spec「巡检里股票池跟上持仓」；`TradingApp` 有股票池、跟进和案件记录。验证：确认失败
-- [ ] 8.2 实现（design D9）：`bootstrap/app.py` 建股票池、跟进、案件记录，交给 `OrderFlow` 和 `PoolSync`，一份 `NotificationConfig` 给三处；`TradingApp` 加三个字段；模块说明写上。验证：8.1 的测试和 `tests/bootstrap` 原有的测试通过
+- [x] 8.1 先写测试（design D9）`tests/bootstrap/test_app.py`：bootstrap spec「巡检里股票池跟上持仓」；`TradingApp` 有股票池、跟进和案件记录。验证：确认失败
+- [x] 8.2 实现（design D9）：`bootstrap/app.py` 建股票池、跟进、案件记录，交给 `OrderFlow` 和 `PoolSync`，一份 `NotificationConfig` 给三处；`TradingApp` 加三个字段；模块说明写上。验证：8.1 的测试和 `tests/bootstrap` 原有的测试通过
 
 ## 9. 收尾
 
