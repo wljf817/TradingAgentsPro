@@ -165,12 +165,10 @@ def _run(plan: TradePlan, decision: RiskDecision, source: CaseSource | None) -> 
     DBOS.set_event(CONFIRMATION, Stage.WAITING)
     requested = _request_confirmation(plan, decision, source)
     if requested is None:
-        DBOS.set_event(CONFIRMATION, Stage.UNSENT)
-        _settle(plan, decision, Stage.UNSENT, None, source)
-        _report(source, PlanEvent.TIMED_OUT)
-        return PlanEnd.UNSENT
-    choice = DBOS.recv(DECISION_TOPIC, timeout_seconds=requested.wait_seconds)
-    stage = Stage.TIMED_OUT if choice is None else Stage(choice)
+        stage = Stage.UNSENT
+    else:
+        choice = DBOS.recv(DECISION_TOPIC, timeout_seconds=requested.wait_seconds)
+        stage = Stage.TIMED_OUT if choice is None else Stage(choice)
     DBOS.set_event(CONFIRMATION, stage)
     _settle(plan, decision, stage, requested, source)
     _report(source, _EVENTS[stage])
@@ -190,7 +188,8 @@ def _report(source: CaseSource | None, event: PlanEvent) -> None:
         report_plan(source.case_id, event)
 ```
 
-- `_EVENTS`：确认 → `CONFIRMED`，拒绝 → `DECLINED`，超时 → `TIMED_OUT`
+- `_EVENTS`：确认 → `CONFIRMED`，拒绝 → `DECLINED`，超时和发不出去 → `TIMED_OUT`
+- `/plan` 的方案 step 的先后不变：设置确认的进展、请求确认、（等按钮）、设置确认的进展、`settle`
 - `_execute` 的 `PlanEnd.SUBMITTED` 包括券商拒绝受理和作废时已经有订单（order-flow spec「提交的结果」），`VOIDED` 包括再校验拒绝、到有效期、对账不一致，正好对上「订单已提交」「再校验作废」
 - `report_plan` 在工作流函数里调用，DBOS 把一次 send 记成一步：重放时不重送
 - 意料之外的错误：step 抛出的异常（`attempt` 自己接住、等重试的除外）到工作流函数，送回 `FAILED` 再原样抛出，工作流进入 ERROR。DBOS 的取消和接管是 `BaseException`，`except Exception` 接不到，也不该送回
