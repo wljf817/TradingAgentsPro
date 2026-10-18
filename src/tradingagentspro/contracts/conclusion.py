@@ -259,4 +259,6 @@ class ExplorationConclusion(_ConclusionBase):
     removals: tuple[PoolRemoval, ...] = ()
 
 
-type Conclusion = HoldingConclusion | WatchConclusion | CandidateConclusion | ExplorationConclusion
+# 候选的结论排在关注的结论前面：候选决定移出的结论的字段是关注的结论的子集，按 JSON 读回时两种都
+# 能通过，pydantic 取左边的。其余的决定和字段各不相同，只有一种能通过
+type Conclusion = HoldingConclusion | CandidateConclusion | WatchConclusion | ExplorationConclusion
