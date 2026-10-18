@@ -7,12 +7,17 @@
   model-fallback spec。这里只读当前时刻、查模型的配置，在内存里保存熔断状态和起点
 - CallBudgetService：记下每次尝试的费用，给出三个预算的情况，见 call-budget spec。这里只读当前时刻、
   查交易日历和单价、读写存储
+- AgentCallService：调用 agent，按 ModelFallbackService 的步骤经 ModelBackend 向模型逐次尝试，每次
+  拿到用量就经 CallBudgetService 记一条费用；子 agent 的任务经 TaskDispatchService 生成 Result，见
+  agent-calls spec
 
 规则都在 domain 里。
 """
 
+import threading
 from collections.abc import Callable, Sequence
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Final
 from uuid import UUID
@@ -20,8 +25,19 @@ from uuid import UUID
 from pydantic import TypeAdapter, ValidationError
 
 from tradingagentspro.contracts.agent import Agent
+from tradingagentspro.contracts.agent_call import (
+    CriticReply,
+    CriticRequest,
+    PmReply,
+    PmRequest,
+    RetrospectiveReport,
+    ReviewerRequest,
+    SubAgentRequest,
+)
 from tradingagentspro.contracts.model import ModelRef, ModelUse, TokenUsage
+from tradingagentspro.contracts.review import PlanResponse
 from tradingagentspro.contracts.signal import SubAgentOutput
+from tradingagentspro.contracts.snapshot import Snapshot
 from tradingagentspro.contracts.task import Dispatcher, Result, Task, TaskRequest
 from tradingagentspro.modules.gateway.config import GatewayConfig, ModelAssignments
 from tradingagentspro.modules.gateway.domain.budget import (
@@ -48,9 +64,12 @@ from tradingagentspro.modules.gateway.domain.entries import (
     result_text,
 )
 from tradingagentspro.modules.gateway.domain.fallback import (
+    AllUnavailable,
+    Attempt,
     Breaker,
     CallError,
     CallStep,
+    DeadlineReached,
     ModelCall,
     after_failure,
     exhausted,
@@ -63,7 +82,13 @@ from tradingagentspro.modules.gateway.domain.result import (
     received,
     rejected,
 )
-from tradingagentspro.modules.gateway.ports import CostStore, TaskStore
+from tradingagentspro.modules.gateway.ports import (
+    CostStore,
+    ModelBackend,
+    ModelCallError,
+    ModelReply,
+    TaskStore,
+)
 from tradingagentspro.modules.programlog import Action, Actor, ProgramLog
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.ids import IdGenerator
@@ -205,62 +230,71 @@ class ModelFallbackService:
     """备用模型的入口：网关不调用模型，调用方按返回的步骤去尝试，把每次尝试的结果报告回来。
 
     熔断状态和案件内的起点都放在内存里：新建以后所有模型都正常、所有起点都是主模型，进程重启以后
-    从头算（add-model-fallback 的 design D6、D7）。同一个实例由调用方串行调用。
+    从头算（add-model-fallback 的 design D6、D7）。可以同时调用：每个方法整段拿着一把锁，几个案件
+    同时调用 agent、健康监控同时读取时状态不乱（add-stand-ins 的 design D6）。
     """
 
     def __init__(self, clock: Clock, models: ModelAssignments, config: GatewayConfig) -> None:
         self._clock = clock
         self._models = models
         self._config = config
+        self._lock = threading.Lock()
         self._breakers: dict[ModelRef, Breaker] = {}
         # 每个案件、每个 agent 的起点在 chain 里的位置；没有记录时是 0（主模型）
         self._starts: dict[tuple[UUID, Agent], int] = {}
 
     def begin(self, case_id: UUID, agent: Agent, deadline: datetime | None = None) -> CallStep:
         """为案件里的 agent 开始一次调用，给出第一步。deadline 是子 agent 任务的截止时间。"""
-        chain = self._models.of(agent).chain
-        first = self._starts.get((case_id, agent), 0)
-        return start(
-            case_id, agent, chain, first, deadline, self._breakers, self._clock.now(), self._config
-        )
+        with self._lock:
+            chain = self._models.of(agent).chain
+            first = self._starts.get((case_id, agent), 0)
+            now = self._clock.now()
+            return start(case_id, agent, chain, first, deadline, self._breakers, now, self._config)
 
     def fail(self, call: ModelCall, error: CallError) -> CallStep:
         """正在进行的尝试失败了，给出下一步。这是这个模型的最后一次尝试时，它不可用，计入熔断。"""
-        now = self._clock.now()
-        if exhausted(call, self._config):
-            self._breakers[call.model] = self._breaker(call.model).failed(now, self._config)
-        return after_failure(call, error, self._breakers, now, self._config)
+        with self._lock:
+            now = self._clock.now()
+            if exhausted(call, self._config):
+                self._breakers[call.model] = self._breaker(call.model).failed(now, self._config)
+            return after_failure(call, error, self._breakers, now, self._config)
 
     def succeed(self, call: ModelCall) -> ModelUse:
         """正在进行的尝试拿到了输出（格式不合法也算）：模型回到正常，起点只往后移。"""
-        self._breakers[call.model] = self._breaker(call.model).succeeded()
-        key = (call.case_id, call.agent)
-        self._starts[key] = max(self._starts.get(key, 0), call.index)
-        return ModelUse(model=call.model, fallback=call.index > 0)
+        with self._lock:
+            self._breakers[call.model] = self._breaker(call.model).succeeded()
+            key = (call.case_id, call.agent)
+            self._starts[key] = max(self._starts.get(key, 0), call.index)
+            return ModelUse(model=call.model, fallback=call.index > 0)
 
     def case_model(self, case_id: UUID, agent: Agent) -> ModelUse:
         """本案件这个 agent 的起点，以及它是不是备用模型。"""
-        index = self._starts.get((case_id, agent), 0)
-        return ModelUse(model=self._models.of(agent).chain[index], fallback=index > 0)
+        with self._lock:
+            index = self._starts.get((case_id, agent), 0)
+            return ModelUse(model=self._models.of(agent).chain[index], fallback=index > 0)
 
     def end_case(self, case_id: UUID) -> None:
         """案件结束：清掉这个案件所有 agent 的起点。"""
-        for key in [key for key in self._starts if key[0] == case_id]:
-            del self._starts[key]
+        with self._lock:
+            for key in [key for key in self._starts if key[0] == case_id]:
+                del self._starts[key]
 
     def has_available_model(self, agent: Agent) -> bool:
         """这个 agent 还有可用的模型：主模型或者任何一个备用模型不在冷却中。"""
-        now = self._clock.now()
-        return any(not self._breaker(model).cooling(now) for model in self._models.of(agent).chain)
+        with self._lock:
+            now = self._clock.now()
+            chain = self._models.of(agent).chain
+            return any(not self._breaker(model).cooling(now) for model in chain)
 
     def cooling(self) -> dict[ModelRef, datetime]:
         """现在冷却中的模型和各自冷却结束的时刻。"""
-        now = self._clock.now()
-        return {
-            model: breaker.cooling_until
-            for model, breaker in self._breakers.items()
-            if breaker.cooling_until is not None and breaker.cooling(now)
-        }
+        with self._lock:
+            now = self._clock.now()
+            return {
+                model: breaker.cooling_until
+                for model, breaker in self._breakers.items()
+                if breaker.cooling_until is not None and breaker.cooling(now)
+            }
 
     def _breaker(self, model: ModelRef) -> Breaker:
         """这个模型的熔断状态；没有记录时是正常。"""
@@ -320,6 +354,136 @@ class CallBudgetService:
         start = self._calendar.last_session_before(now).close
         day = self._calendar.session_closing_after(now).day
         return budget_status(self._store.since(start), day, self._config)
+
+
+@dataclass(frozen=True, slots=True)
+class Answered[T]:
+    """一次成功的调用：输出、实际使用的模型，以及这次调用各次尝试记下的费用之和。"""
+
+    output: T
+    model_use: ModelUse
+    cost: Decimal
+
+
+class AgentCallService:
+    """调用 agent：按备用模型的步骤向模型尝试，每次拿到用量就记一条费用，见 agent-calls spec 和
+    add-stand-ins 的 design D5。
+
+    不检查结论：结论的校验、备用模型的限制和结论里的信号由调用方做。全部不可用时不告警，由调用方
+    告警。可以同时调用：备用模型的状态由 ModelFallbackService 的锁保护，费用和 Result 本来就可以
+    同时写；模型调用本身不在任何锁里。
+    """
+
+    def __init__(
+        self,
+        backend: ModelBackend,
+        fallback: ModelFallbackService,
+        budget: CallBudgetService,
+        tasks: TaskDispatchService,
+    ) -> None:
+        self._backend = backend
+        self._fallback = fallback
+        self._budget = budget
+        self._tasks = tasks
+
+    def pm(self, request: PmRequest) -> Answered[PmReply] | AllUnavailable:
+        """调用 PM 做研究：派发任务或提交结论。"""
+        return self._without_deadline(
+            request.snapshot,
+            Agent.PM,
+            lambda model, timeout: self._backend.pm(model, timeout, request),
+        )
+
+    def pm_respond(self, request: PmRequest) -> Answered[PlanResponse] | AllUnavailable:
+        """调用 PM 回应对话最后一轮交回的质询。"""
+        return self._without_deadline(
+            request.snapshot,
+            Agent.PM,
+            lambda model, timeout: self._backend.pm_respond(model, timeout, request),
+        )
+
+    def critic(self, request: CriticRequest) -> Answered[CriticReply] | AllUnavailable:
+        """调用 Critic：补充研究或审核。"""
+        return self._without_deadline(
+            request.snapshot,
+            Agent.CRITIC,
+            lambda model, timeout: self._backend.critic(model, timeout, request),
+        )
+
+    def reviewer(self, request: ReviewerRequest) -> Answered[RetrospectiveReport] | AllUnavailable:
+        """调用 Reviewer。"""
+        return self._without_deadline(
+            request.snapshot,
+            Agent.REVIEWER,
+            lambda model, timeout: self._backend.reviewer(model, timeout, request),
+        )
+
+    def run_task(self, task_id: UUID, snapshot: Snapshot) -> Result:
+        """运行一个派发出去的任务，给出它的 Result；已经有 Result 时直接给出，不调用模型。"""
+        record = self._tasks.record(task_id)
+        if record.result is not None:
+            return record.result
+        task = record.task
+        request = SubAgentRequest(task=task, snapshot=snapshot)
+        outcome, cost = self._call(
+            snapshot,
+            Agent(task.target.value),
+            task.deadline,
+            lambda model, timeout: self._backend.sub_agent(model, timeout, request),
+        )
+        match outcome:
+            case Answered():
+                return self._tasks.receive(task_id, outcome.output, cost, outcome.model_use)
+            case AllUnavailable():
+                return self._tasks.fail(task_id, outcome.detail, cost)
+            case DeadlineReached():
+                return self._tasks.expire(task_id, cost)
+
+    def _without_deadline[T](
+        self,
+        snapshot: Snapshot,
+        agent: Agent,
+        attempt: Callable[[ModelRef, timedelta], ModelReply[T]],
+    ) -> Answered[T] | AllUnavailable:
+        """PM、Critic、Reviewer 的调用没有截止时间，不会在截止时间停止。"""
+        outcome, _ = self._call(snapshot, agent, None, attempt)
+        if isinstance(outcome, DeadlineReached):
+            raise AssertionError("没有截止时间的调用不会在截止时间停止")
+        return outcome
+
+    def _call[T](
+        self,
+        snapshot: Snapshot,
+        agent: Agent,
+        deadline: datetime | None,
+        attempt: Callable[[ModelRef, timedelta], ModelReply[T]],
+    ) -> tuple[Answered[T] | AllUnavailable | DeadlineReached, Decimal]:
+        """一次调用：按备用模型的步骤逐次尝试，给出结果和这次调用记下的费用之和。
+
+        案件 ID 和案件类型取自快照：费用记录要案件开始时确定的类型。
+        """
+        scope = CaseScope(snapshot.case_id, snapshot.case_type, snapshot.symbol)
+        step = self._fallback.begin(scope.case_id, agent, deadline)
+        cost = Decimal(0)
+        while isinstance(step, Attempt):
+            model = step.call.model
+            try:
+                reply = attempt(model, step.timeout)
+            except ModelCallError as failure:
+                cost += self._charge(scope, agent, model, failure.usage)
+                step = self._fallback.fail(step.call, failure.error)
+                continue
+            cost += self._charge(scope, agent, model, reply.usage)
+            return Answered(reply.output, self._fallback.succeed(step.call), cost), cost
+        return step, cost
+
+    def _charge(
+        self, scope: CaseScope, agent: Agent, model: ModelRef, usage: TokenUsage | None
+    ) -> Decimal:
+        """有用量时记一条费用，给出这一条的费用；拿不到用量时不记，是 0。"""
+        if usage is None:
+            return Decimal(0)
+        return self._budget.record(scope, agent, model, usage).cost
 
 
 def _parse(output: str) -> SubAgentOutput | Malformed:

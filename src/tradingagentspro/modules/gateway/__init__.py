@@ -13,6 +13,9 @@
 - 调用预算：模型的单价；记下每次尝试的费用，按记之前普通预算是否用完整笔记到普通预算、持仓保留预算
   或寻股预算；按现在归属的交易日给出三个预算今天的费用和用完的预算，不因为预算用完拒绝任务或调用
   （call-budget spec）。费用记录存在 gateway_costs 表里（PostgresCostStore）
+- 调用 agent：AgentCallService 经 ModelBackend 端口向模型逐次尝试，按备用模型的步骤重试和切换，
+  每次拿到用量就记一条费用；PM、Critic、Reviewer 给出输出或全部不可用，子 agent 的任务直接生成
+  Result（agent-calls spec）。M4 由 integrations/standin 的替身实现端口，M5 换成真实模型
 
 网关不做交易判断、不下单。模块之外的代码只能 import 这里导出的名字。
 """
@@ -75,17 +78,27 @@ from tradingagentspro.modules.gateway.domain.signal import (
     conclusion_signal_rejection,
     signal_rejection,
 )
-from tradingagentspro.modules.gateway.ports import CostStore, TaskStore
+from tradingagentspro.modules.gateway.ports import (
+    CostStore,
+    ModelBackend,
+    ModelCallError,
+    ModelReply,
+    TaskStore,
+)
 from tradingagentspro.modules.gateway.repo import PostgresCostStore, PostgresTaskStore
 from tradingagentspro.modules.gateway.service import (
+    AgentCallService,
+    Answered,
     CallBudgetService,
     ModelFallbackService,
     TaskDispatchService,
 )
 
 __all__ = [
+    "AgentCallService",
     "AgentModels",
     "AllUnavailable",
+    "Answered",
     "Attempt",
     "Breaker",
     "Budget",
@@ -102,9 +115,12 @@ __all__ = [
     "GatewayConfig",
     "Malformed",
     "ModelAssignments",
+    "ModelBackend",
     "ModelCall",
+    "ModelCallError",
     "ModelFallbackService",
     "ModelPrice",
+    "ModelReply",
     "ModelSwitch",
     "PostgresCostStore",
     "PostgresTaskStore",
