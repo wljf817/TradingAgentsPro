@@ -349,6 +349,13 @@ class CallBudgetService:
         """现在归属的交易日里三个预算的情况。"""
         return self._status(self._clock.now())
 
+    def case_costs(self, case_id: UUID) -> tuple[CallCost, ...]:
+        """这个案件的全部费用记录，按写入的先后，见 spec「一个案件的费用记录」。
+
+        案件结束时调用方用它的条数作为案件记录的调用次数。
+        """
+        return self._store.case_costs(case_id)
+
     def _status(self, now: datetime) -> BudgetStatus:
         """now 归属的交易日从上一个交易日的收盘时刻开始。"""
         start = self._calendar.last_session_before(now).close

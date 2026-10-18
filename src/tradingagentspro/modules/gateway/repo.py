@@ -131,6 +131,12 @@ class PostgresCostStore:
             rows = connection.execute(query).all()
         return tuple(_cost(row) for row in rows)
 
+    def case_costs(self, case_id: UUID) -> tuple[CallCost, ...]:
+        query = select(COSTS).where(COSTS.c.case_id == case_id).order_by(COSTS.c.id)
+        with self._engine.connect() as connection:
+            rows = connection.execute(query).all()
+        return tuple(_cost(row) for row in rows)
+
     def add(self, entry: CallCost) -> None:
         with self._engine.begin() as connection:
             connection.execute(

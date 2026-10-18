@@ -11,8 +11,8 @@
   熔断；给出实际使用的模型、切换的事件、PM 和 Critic 是否还有可用的模型，以及 PM 用备用模型时不能
   提的决定（model-fallback spec）
 - 调用预算：模型的单价；记下每次尝试的费用，按记之前普通预算是否用完整笔记到普通预算、持仓保留预算
-  或寻股预算；按现在归属的交易日给出三个预算今天的费用和用完的预算，不因为预算用完拒绝任务或调用
-  （call-budget spec）。费用记录存在 gateway_costs 表里（PostgresCostStore）
+  或寻股预算；按现在归属的交易日给出三个预算今天的费用和用完的预算，不因为预算用完拒绝任务或调用；
+  按案件给出费用记录（call-budget spec）。费用记录存在 gateway_costs 表里（PostgresCostStore）
 - 调用 agent：AgentCallService 经 ModelBackend 端口向模型逐次尝试，按备用模型的步骤重试和切换，
   每次拿到用量就记一条费用；PM、Critic、Reviewer 给出输出或全部不可用，子 agent 的任务直接生成
   Result（agent-calls spec）。M4 由 integrations/standin 的替身实现端口，M5 换成真实模型

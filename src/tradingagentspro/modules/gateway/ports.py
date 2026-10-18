@@ -116,6 +116,10 @@ class CostStore(Protocol):
         """记下的时刻不早于 moment 的记录，按写入的先后。"""
         ...
 
+    def case_costs(self, case_id: UUID) -> tuple[CallCost, ...]:
+        """这个案件的全部记录，按写入的先后。"""
+        ...
+
     def add(self, entry: CallCost) -> None:
         """写入一条记录。"""
         ...
