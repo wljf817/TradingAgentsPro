@@ -49,4 +49,4 @@
 
 - [x] 5.1 对照三份 delta spec，逐条列出每个场景由哪个测试覆盖，没有遗漏（「快照配置」的默认值按测试约定不写测试，对照 `SnapshotConfig` 核对）。验证：对应表写在完成报告里
 - [x] 5.2 运行全部检查：`uv run pytest`、`uv run ruff check`、`uv run ruff format --check`、`uv run mypy`、`uv run lint-imports`、`openspec validate add-state-snapshot --strict`。验证：全部通过（要开着 OrbStack）；`git status` 里没有 `tests/` 下的文件被暂存
-- [ ] 5.3 归档前确认：本变更先于「案件记录」归档；v0011 的 `down_revision` 是当时最新的版本、`test_app.py` 的最新版本是 `"0011"`。验证：`openspec validate add-state-snapshot --strict` 通过；归档后的 state-store、program-log 主 spec 里原有的表、动作和场景都还在
+- [x] 5.3 归档前确认：本变更先于「案件记录」归档；v0011 的 `down_revision` 是当时最新的版本、`test_app.py` 的最新版本是 `"0011"`。验证：`openspec validate add-state-snapshot --strict` 通过；归档后的 state-store、program-log 主 spec 里原有的表、动作和场景都还在
