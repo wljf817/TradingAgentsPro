@@ -4,11 +4,15 @@
 一段时间里用过的版本。
 记录整份存成 JSONB；筛选列在保存时从记录算出，列出记录时按最新版本筛选：筛选列等于给定值，或者
 几个时刻列至少一列不早于给定时刻。
+
+另有这个模块自己的快照表 statestore_snapshots 和 SnapshotStore 的数据库实现，见 state-snapshot
+spec「快照的存储」和 add-state-snapshot 的 design D6。
 """
 
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 from pydantic import TypeAdapter
 from sqlalchemy import (
@@ -21,6 +25,7 @@ from sqlalchemy import (
     Select,
     Subquery,
     Table,
+    Uuid,
     create_engine,
     insert,
     or_,
@@ -29,6 +34,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB, distinct_on
 
+from tradingagentspro.contracts.snapshot import Snapshot
 from tradingagentspro.shared.clock import Clock
 
 
@@ -162,3 +168,50 @@ class VersionedStore[T]:
         with self._engine.connect() as connection:
             rows: Sequence[Any] = connection.execute(query).scalars().all()
         return tuple(self._adapter.validate_python(data) for data in rows)
+
+
+SNAPSHOTS = versioned_table("statestore_snapshots", Column("case_id", Uuid, nullable=False))
+
+
+class PostgresSnapshotStore:
+    """满足 SnapshotStore：键是案件 ID，版本号是快照自己的版本，整份快照存成 JSONB。
+
+    不用 VersionedStore.save：它的版本号是最新的加 1，快照的版本号要和条目 ID 的前缀一致。
+    同一版写两次违反主键，IntegrityError 原样抛出；存着的快照读不出来时抛 pydantic 的
+    ValidationError。
+    """
+
+    def __init__(self, engine: Engine, clock: Clock) -> None:
+        self._engine = engine
+        self._clock = clock
+
+    def add(self, snapshot: Snapshot) -> None:
+        with self._engine.begin() as connection:
+            connection.execute(
+                insert(SNAPSHOTS).values(
+                    case_id=snapshot.case_id,
+                    version=snapshot.version,
+                    recorded_at=self._clock.now(),
+                    data=snapshot.model_dump(mode="json"),
+                )
+            )
+
+    def get(self, case_id: UUID, version: int) -> Snapshot | None:
+        query = select(SNAPSHOTS.c.data).where(
+            SNAPSHOTS.c.case_id == case_id, SNAPSHOTS.c.version == version
+        )
+        return self._one(query)
+
+    def latest(self, case_id: UUID) -> Snapshot | None:
+        query = (
+            select(SNAPSHOTS.c.data)
+            .where(SNAPSHOTS.c.case_id == case_id)
+            .order_by(SNAPSHOTS.c.version.desc())
+            .limit(1)
+        )
+        return self._one(query)
+
+    def _one(self, query: Select[Any]) -> Snapshot | None:
+        with self._engine.connect() as connection:
+            data = connection.execute(query).scalar()
+        return None if data is None else Snapshot.model_validate(data)

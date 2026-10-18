@@ -10,7 +10,8 @@ from typing import Annotated
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
-type EntryId = Annotated[str, Field(min_length=1)]  # 状态库条目的 ID，格式 M4 再定
+# 状态库条目的 ID：快照里的条目见 contracts.snapshot 的 entry_id
+type EntryId = Annotated[str, Field(min_length=1)]
 
 
 class Signal(BaseModel):

@@ -69,6 +69,7 @@ class Action(StrEnum):
     DISPATCH_TASK = "dispatch_task"  # 派发任务
     REJECT_TASK = "reject_task"  # 拒绝任务
     TASK_RESULT = "task_result"  # 生成 Result
+    TAKE_SNAPSHOT = "take_snapshot"  # 生成快照
 
 
 ACCOUNT = "account"  # 对象：整个券商账户
