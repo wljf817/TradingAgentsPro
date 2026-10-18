@@ -3,7 +3,7 @@
 每张表按键保存记录的各个版本：内容有变化时写入一个新版本，读取时取最新版本；需要时也能读出
 一段时间里用过的版本。
 记录整份存成 JSONB；筛选列在保存时从记录算出，列出记录时按最新版本筛选：筛选列等于给定值，或者
-几个时刻列至少一列不早于给定时刻。
+几个时刻列至少一列不早于给定时刻；也能按一个时刻列取最近的几个。
 
 另有这个模块自己的快照表 statestore_snapshots 和 SnapshotStore 的数据库实现，见 state-snapshot
 spec「快照的存储」和 add-state-snapshot 的 design D6。
@@ -133,6 +133,19 @@ class VersionedStore[T]:
             select(newest.c.data)
             .where(or_(*(newest.c[name] >= since for name in columns)))
             .order_by(newest.c[self._key.name])
+        )
+
+    def most_recent(self, column: str, limit: int, **where: object) -> tuple[T, ...]:
+        """每个键的最新版本里，筛选列等于给定值的那些，按时刻列 column 从晚到早，最多 limit 个。
+
+        时刻相同的按键排序；筛选列给 None 时按为空筛。
+        """
+        newest = self._newest()
+        return self._records(
+            select(newest.c.data)
+            .where(*(newest.c[name] == value for name, value in where.items()))
+            .order_by(newest.c[column].desc(), newest.c[self._key.name])
+            .limit(limit)
         )
 
     def history(self, since: datetime) -> tuple[T, ...]:
