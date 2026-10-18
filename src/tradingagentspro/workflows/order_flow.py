@@ -4,6 +4,10 @@
 见 order-flow spec 和 add-order-flow 的 design。执行模块和风控里会改变状态的调用都拿着全程序
 共用的那把锁（session-patrol spec）；请求确认、报告结果、推送告警时不拿锁。每一步的结果写进
 程序日志，见 program-log spec 和 add-program-log 的 design D3、D9；等重试只写 Python 日志。
+
+案件的方案（order-flow spec「案件的方案」，update-order-flow-case-plans 的 design D1、D2、D4、D6）：
+首次检查时按确认规则决定要不要人工确认，不要的写自动执行；之后的步骤带着来源（CaseSource）：确认
+消息附上案件的意见，退出方案确认超时以后告警，订单记下来源案件。/plan 的方案来源为 None。
 """
 
 import logging
@@ -13,11 +17,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from tradingagentspro.contracts.risk import RiskDecision, RiskOutcome
 from tradingagentspro.contracts.trade_plan import TradePlan
+from tradingagentspro.modules.caserecords import CaseRecordService
 from tradingagentspro.modules.emergency import EmergencyService
 from tradingagentspro.modules.execution import (
     BrokerUnavailableError,
@@ -32,12 +38,19 @@ from tradingagentspro.modules.execution import (
 from tradingagentspro.modules.health import HealthService
 from tradingagentspro.modules.marketdata import MarketDataService
 from tradingagentspro.modules.notification import (
+    CaseConfirmation,
+    CaseNote,
     ConfirmationOutcome,
+    Disputed,
+    NotificationConfig,
     NotificationService,
     NotificationUnavailableError,
+    Unreviewed,
+    case_plan_confirmation,
 )
 from tradingagentspro.modules.programlog import Action, Actor, ProgramLog
 from tradingagentspro.modules.risk import RiskService
+from tradingagentspro.modules.scheduler import CriticOutcome
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.trading_calendar import OutsideSessionError, TradingCalendar
 from tradingagentspro.workflows.account_snapshot import read_snapshot
@@ -98,6 +111,23 @@ class PlanEnd(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class CaseSource:
+    """案件的方案从哪个案件来，交接时的决定，见 order-flow spec「案件的方案」。"""
+
+    case_id: UUID
+    critic: CriticOutcome  # Critic 审核的结果
+    confirmation: CaseConfirmation  # 要不要人工确认、确认超时以后要不要告警
+
+
+@dataclass(frozen=True, slots=True)
+class CaseCheck:
+    """案件的方案首次检查的结果；source 只在通过或调整时有，拒绝时为 None。"""
+
+    decision: RiskDecision
+    source: CaseSource | None
+
+
+@dataclass(frozen=True, slots=True)
 class Requested:
     """发出的确认消息，和请求以后到截止时刻还要等几秒。"""
 
@@ -139,6 +169,12 @@ def check_plan(services: TradeServices, plan: TradePlan) -> RiskDecision:
 
     读券商账户失败时 BrokerUnavailableError 原样抛出。
     """
+    decision, _ = _check(services, plan)
+    return decision
+
+
+def _check(services: TradeServices, plan: TradePlan) -> tuple[RiskDecision, bool]:
+    """首次检查并写风控检查；同时给出检查时读到的是否处于降级模式。"""
     snapshot, _ = read_snapshot(services.execution, services.market_data)
     breaker = services.emergency.breaker_tripped()
     degraded = services.health.status.degraded
@@ -147,7 +183,7 @@ def check_plan(services: TradeServices, plan: TradePlan) -> RiskDecision:
             plan, snapshot, daily_loss_breaker_tripped=breaker, degraded=degraded
         )
     services.log.write(Actor.RISK, Action.RISK_CHECK, str(plan.plan_id), check_text(plan, decision))
-    return decision
+    return decision, degraded
 
 
 class OrderFlow:
@@ -157,12 +193,16 @@ class OrderFlow:
         self,
         services: TradeServices,
         notification: NotificationService,
+        notification_config: NotificationConfig,
+        case_records: CaseRecordService,
         clock: Clock,
         calendar: TradingCalendar,
         config: OrderFlowConfig,
     ) -> None:
         self._services = services
         self._notification = notification
+        self._notification_config = notification_config
+        self._case_records = case_records
         self._clock = clock
         self._calendar = calendar
         self._config = config
@@ -171,13 +211,45 @@ class OrderFlow:
     def config(self) -> OrderFlowConfig:
         return self._config
 
-    def request_confirmation(self, plan: TradePlan, decision: RiskDecision) -> Requested | None:
+    def check_case_plan(
+        self, case_id: UUID, plan: TradePlan, critic: CriticOutcome
+    ) -> CaseCheck | None:
+        """案件的方案首次检查并预留，见 spec「案件的方案」；读券商账户失败时写 WARNING、返回 None。
+
+        通过或调整时按确认规则决定要不要人工确认（降级用检查时读到的），不要确认的写一条程序日志的
+        自动执行（program-log spec「系统的动作」）。
+        """
+        services = self._services
+        try:
+            decision, degraded = _check(services, plan)
+        except BrokerUnavailableError as error:
+            _log.warning("%s：读券商账户失败（%s），风控检查出错", _head(plan), error)
+            return None
+        if decision.outcome is RiskOutcome.REJECTED:
+            return CaseCheck(decision, None)
+        confirmation = case_plan_confirmation(
+            plan.action,
+            critic_approved=critic is CriticOutcome.APPROVED,
+            degraded=degraded,
+            config=self._notification_config,
+        )
+        if not confirmation.required:
+            services.log.write(
+                Actor.SYSTEM, Action.AUTO_EXECUTE, str(plan.plan_id), auto_execute_text(plan)
+            )
+        return CaseCheck(decision, CaseSource(case_id, critic, confirmation))
+
+    def request_confirmation(
+        self, plan: TradePlan, decision: RiskDecision, source: CaseSource | None
+    ) -> Requested | None:
         """请求人工确认，见 spec「请求人工确认」：通知模块写程序日志的请求确认。
 
-        发不出去时写 ERROR，返回 None。不拿锁。
+        案件的方案按 Critic 审核的结果从案件记录组出意见，附在确认消息里。发不出去时写 ERROR，
+        返回 None。不拿锁。
         """
+        note = None if source is None else self._note(source)
         try:
-            pending = self._notification.request_confirmation(plan, decision, None)
+            pending = self._notification.request_confirmation(plan, decision, note)
         except NotificationUnavailableError as error:
             _log.error("%s：确认请求没有发出去（%s），按确认超时处理", _head(plan), error)
             return None
@@ -185,12 +257,18 @@ class OrderFlow:
         return Requested(pending.message_id, pending.deadline, wait)
 
     def settle(
-        self, plan: TradePlan, decision: RiskDecision, stage: Stage, requested: Requested | None
+        self,
+        plan: TradePlan,
+        decision: RiskDecision,
+        stage: Stage,
+        requested: Requested | None,
+        source: CaseSource | None,
     ) -> None:
         """按确认的结果处理，见 spec「确认的结果」：拒绝、超时、发不出去时释放全部预留。
 
         requested 是请求确认那一步的结果，发不出去时为 None。写程序日志的人的确认、拒绝或超时，
-        以及释放预留，见 program-log spec「人的动作」。
+        以及释放预留，见 program-log spec「人的动作」。案件的方案确认超时以后要告警的（退出类），
+        超时和发不出去时在释放以后推送告警，不拿锁。
         """
         log, subject = self._services.log, str(plan.plan_id)
         trade = trade_text(plan, None)
@@ -222,6 +300,11 @@ class OrderFlow:
                 reason = "确认请求没有发出去，按确认超时处理"
         with self._services.lock:
             release(self._services.risk, log, plan.plan_id, reason)
+        unconfirmed = stage in (Stage.TIMED_OUT, Stage.UNSENT)
+        if unconfirmed and source is not None and source.confirmation.alert_on_timeout:
+            self._notification.alert(
+                str(plan.plan_id), unconfirmed_text(plan, decision, timed_out=requested is not None)
+            )
 
     def timing(self, plan: TradePlan, decision: RiskDecision) -> Timing:
         """到期、盘中还是要等，见 spec「等开盘」。"""
@@ -237,14 +320,21 @@ class OrderFlow:
         )
         return Timing(expired=False, wait_seconds=(wake - now).total_seconds())
 
-    def attempt(self, plan: TradePlan, decision: RiskDecision, *, alert_error: bool) -> Attempt:
+    def attempt(
+        self,
+        plan: TradePlan,
+        decision: RiskDecision,
+        source: CaseSource | None,
+        *,
+        alert_error: bool,
+    ) -> Attempt:
         """一次下单前再校验和提交，见 spec「下单前再校验和提交」「提交的结果」和 design D5、D6。
 
-        decision 是首次检查的结果，只用来写告警。意料之外的错误写 ERROR；alert_error 为真时推送
-        出错的告警。
+        decision 是首次检查的结果，只用来写告警；source 是案件的方案的来源，新建的订单记下它的
+        案件 ID。意料之外的错误写 ERROR；alert_error 为真时推送出错的告警。
         """
         try:
-            return self._attempt(plan, decision)
+            return self._attempt(plan, decision, None if source is None else source.case_id)
         except Exception as error:
             reason = f"{type(error).__name__}: {error}"
             seconds = self._config.retry_delay.total_seconds()
@@ -281,7 +371,25 @@ class OrderFlow:
             f"已经有订单（{ORDER_STATUSES[order.status]}），交给盘中巡检",
         )
 
-    def _attempt(self, plan: TradePlan, decision: RiskDecision) -> Attempt:
+    def _note(self, source: CaseSource) -> CaseNote | None:
+        """确认消息附上的案件的意见，见 spec「请求人工确认」的表。"""
+        match source.critic:
+            case CriticOutcome.APPROVED:
+                return None
+            case CriticOutcome.UNAVAILABLE:
+                return Unreviewed()
+            case CriticOutcome.DISPUTED:
+                conclusion = self._case_records.case(source.case_id).conclusion
+                proposal = self._case_records.proposal(source.case_id)
+                assert conclusion is not None  # 有方案的案件都写过结论和方案记录
+                assert proposal is not None
+                return Disputed(
+                    rationale=conclusion.conclusion.rationale,
+                    reviews=tuple(r.review for r in proposal.reviews),
+                    responses=tuple(r.response for r in proposal.responses),
+                )
+
+    def _attempt(self, plan: TradePlan, decision: RiskDecision, case_id: UUID | None) -> Attempt:
         services = self._services
         log, subject = services.log, str(plan.plan_id)
         existing = services.execution.order(plan.plan_id)
@@ -322,7 +430,7 @@ class OrderFlow:
                 reasons = [f"- {v.rule}：{v.message}" for v in rechecked.violations]
             else:
                 try:
-                    order = services.execution.submit(plan, rechecked, case_id=None)
+                    order = services.execution.submit(plan, rechecked, case_id=case_id)
                 except (NotReconciledError, OrderPausedError, UnprotectedPositionError) as error:
                     return self._retry(plan, str(error))
                 except OutsideSessionError:
@@ -369,6 +477,20 @@ def error_text(
     return (
         f"下单出错：{trade_text(plan, decision.quantity)}（方案 ID {plan.plan_id}）：{reason}。"
         f"每 {seconds:g} 秒重试一次，到有效期为止"
+    )
+
+
+def auto_execute_text(plan: TradePlan) -> str:
+    """自动执行的说明：动作和股票，写明没有经过人工确认。"""
+    return f"{ACTIONS[plan.action]} {plan.symbol}：按模型退出自动执行，没有经过人工确认"
+
+
+def unconfirmed_text(plan: TradePlan, decision: RiskDecision, *, timed_out: bool) -> str:
+    """案件的退出方案确认超时或确认请求发不出去的告警，见 spec「告警」的最后一行。"""
+    head = "确认超时" if timed_out else "确认请求没有发出去"
+    return (
+        f"{head}，方案没有执行：{trade_text(plan, decision.quantity)}（方案 ID {plan.plan_id}）；"
+        "持仓的止损单照挂"
     )
 
 

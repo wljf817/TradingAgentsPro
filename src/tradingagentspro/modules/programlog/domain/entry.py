@@ -51,6 +51,7 @@ class Action(StrEnum):
     ALERT = "alert"  # 告警
     REQUEST_CONFIRMATION = "request_confirmation"  # 请求确认
     FINISH_CONFIRMATION = "finish_confirmation"  # 结束确认
+    AUTO_EXECUTE = "auto_execute"  # 自动执行
     POOL_ADD = "pool_add"  # 加入股票池
     POOL_REMOVE = "pool_remove"  # 删除
     POOL_PROMOTE = "pool_promote"  # 升级

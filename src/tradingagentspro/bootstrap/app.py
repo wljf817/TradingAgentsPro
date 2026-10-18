@@ -61,6 +61,7 @@ from tradingagentspro.integrations.nyse_calendar import (
 )
 from tradingagentspro.integrations.random_ids import RandomIdGenerator
 from tradingagentspro.integrations.system_clock import SystemClock
+from tradingagentspro.modules.caserecords import CaseRecordService, PostgresCaseRecordStore
 from tradingagentspro.modules.emergency import EmergencyConfig, EmergencyService
 from tradingagentspro.modules.execution import (
     Broker,
@@ -313,7 +314,15 @@ def _assemble(
             ),
             log=program_log,
         ),
-        flow=OrderFlow(services, notification, clock, calendar, OrderFlowConfig()),
+        flow=OrderFlow(
+            services,
+            notification,
+            notification_config,
+            CaseRecordService(PostgresCaseRecordStore(engine, clock), clock),
+            clock,
+            calendar,
+            OrderFlowConfig(),
+        ),
     )
 
 

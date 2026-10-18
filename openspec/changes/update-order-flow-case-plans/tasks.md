@@ -21,8 +21,8 @@
 
 ## 5. 下单流程：案件的方案
 
-- [ ] 5.1 先写测试（design D1、D4、D6）`tests/workflows/test_order_flow.py`：order-flow spec「案件的方案」的六个场景（用 `OrderFlow.check_case_plan` 直接调用）；「请求人工确认」新加的三个场景（附双方意见、注明 Critic 不可用、退出方案的确认请求发不出去要告警）；「确认的结果」「告警」新加的超时场景；program-log spec「案件的方案的风控检查」「自动执行」；`attempt` 把来源案件交给执行模块。确认规则的开关从 `NotificationConfig` 读，不在测试里硬编码。验证：确认因为 `check_case_plan`、`CaseSource` 不存在而失败
-- [ ] 5.2 实现（design D1、D2、D4、D6）：`modules/programlog/domain/entry.py` 加 `Action.AUTO_EXECUTE` 和中文名；`order_flow.py` 的 `CaseSource`、`CaseCheck`、`check_case_plan`（和 `check_plan` 共用读账户、检查和风控检查的条目），`OrderFlow` 构造参数加 `NotificationConfig`、`CaseRecordService`，`request_confirmation`、`settle`、`attempt` 接收 `source`，自动执行和确认超时没有执行的文字；模块说明写上案件的方案。验证：5.1 的测试通过，`tests/workflows` 原有的下单流程测试只改构造和调用参数，全部通过；`uv run mypy`、`uv run lint-imports` 通过
+- [x] 5.1 先写测试（design D1、D4、D6）`tests/workflows/test_order_flow.py`：order-flow spec「案件的方案」的六个场景（用 `OrderFlow.check_case_plan` 直接调用）；「请求人工确认」新加的三个场景（附双方意见、注明 Critic 不可用、退出方案的确认请求发不出去要告警）；「确认的结果」「告警」新加的超时场景；program-log spec「案件的方案的风控检查」「自动执行」；`attempt` 把来源案件交给执行模块。确认规则的开关从 `NotificationConfig` 读，不在测试里硬编码。验证：确认因为 `check_case_plan`、`CaseSource` 不存在而失败
+- [x] 5.2 实现（design D1、D2、D4、D6）：`modules/programlog/domain/entry.py` 加 `Action.AUTO_EXECUTE` 和中文名；`order_flow.py` 的 `CaseSource`、`CaseCheck`、`check_case_plan`（和 `check_plan` 共用读账户、检查和风控检查的条目），`OrderFlow` 构造参数加 `NotificationConfig`、`CaseRecordService`，`request_confirmation`、`settle`、`attempt` 接收 `source`，自动执行和确认超时没有执行的文字；模块说明写上案件的方案。验证：5.1 的测试通过，`tests/workflows` 原有的下单流程测试只改构造和调用参数，全部通过；`uv run mypy`、`uv run lint-imports` 通过
 
 ## 6. 下单工作流：交接和送回
 

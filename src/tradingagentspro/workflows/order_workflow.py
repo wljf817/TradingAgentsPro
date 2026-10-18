@@ -148,14 +148,14 @@ def _execute(plan: TradePlan, decision: RiskDecision) -> PlanEnd:
 
 @DBOS.step(name="order_plan.request_confirmation")
 def _request_confirmation(plan: TradePlan, decision: RiskDecision) -> Requested | None:
-    return _parts().flow.request_confirmation(plan, decision)
+    return _parts().flow.request_confirmation(plan, decision, None)
 
 
 @DBOS.step(name="order_plan.settle")
 def _settle(
     plan: TradePlan, decision: RiskDecision, stage: Stage, requested: Requested | None
 ) -> None:
-    _parts().flow.settle(plan, decision, stage, requested)
+    _parts().flow.settle(plan, decision, stage, requested, None)
 
 
 @DBOS.step(name="order_plan.timing")
@@ -165,7 +165,7 @@ def _timing(plan: TradePlan, decision: RiskDecision) -> Timing:
 
 @DBOS.step(name="order_plan.attempt")
 def _attempt(plan: TradePlan, decision: RiskDecision, alert_error: bool) -> Attempt:
-    return _parts().flow.attempt(plan, decision, alert_error=alert_error)
+    return _parts().flow.attempt(plan, decision, None, alert_error=alert_error)
 
 
 @DBOS.step(name="order_plan.void_expired")
