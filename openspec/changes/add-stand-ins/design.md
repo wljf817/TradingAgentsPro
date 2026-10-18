@@ -457,9 +457,8 @@ def to_tick(price: Decimal) -> Decimal:
     return price.quantize(tick, rounding=ROUND_HALF_UP)
 
 
-def buy_plan(snapshot: Snapshot, price: Decimal, config: StandInConfig) -> PlanDraft:
-    """开仓方案的条款，price 是参考价。"""
-    limit = to_tick(price * (1 + config.limit_markup))
+def buy_plan(snapshot: Snapshot, limit: Decimal, config: StandInConfig) -> PlanDraft:
+    """开仓方案的条款，limit 是限价：参考价乘（1 + 限价的加价比例），目标价也按它算。"""
     quantity = max(1, int(snapshot.account.equity * config.position_ratio / limit))
     return PlanDraft(
         quantity=quantity,

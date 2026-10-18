@@ -86,7 +86,7 @@
 
 完整版 Proposal 对应章节的问题：无。本变更没有改变案件流程和交易规则；替身怎样给结论按 M4 拆分时定的做（What Changes）。
 
-技术上的（推荐的做法已经写进 spec 和 design）：
+技术上的，2026-10-18 都已经定了，做法已经写进 spec 和 design：
 
 1. **端口是"一次尝试"**：`ModelBackend` 只向给定的模型发一次请求；重试、切换备用模型、熔断、记费用都在网关的 `AgentCallService` 里，M3 写好的备用模型和预算规则不用动，M5 的适配器只管调用一个模型（design D1）
 2. **输出的格式在哪里校验**：子 agent 交回原样文本，由网关按 task-dispatch spec 记成 Result（格式不合法记失败、不重新调用）；PM、Critic、Reviewer 交回已经按 contracts 校验过的模型，M5 的 PydanticAI 适配器在工具参数上校验（design D4）
