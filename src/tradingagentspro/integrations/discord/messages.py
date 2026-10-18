@@ -1,7 +1,7 @@
 """消息内容、按钮、结果的嵌入，以及按钮 custom_id 的编码和解析。不做 I/O。
 
 见 discord-notification spec「告警」「确认消息」「紧急退出的确认消息」，以及 add-discord-notify 的
-design D5、D6。
+design D5、D6；确认消息里案件的意见见 update-order-flow-case-plans 的 design D4。
 """
 
 import re
@@ -12,11 +12,20 @@ from uuid import UUID
 
 import discord
 
+from tradingagentspro.contracts.conclusion import PlanDraft
+from tradingagentspro.contracts.review import (
+    CriticReview,
+    PlanResponse,
+    ResponseDecision,
+    Verdict,
+)
 from tradingagentspro.contracts.risk import RiskOutcome
 from tradingagentspro.contracts.trade_plan import OrderType, TradeAction
 from tradingagentspro.modules.notification import (
+    CaseNote,
     ConfirmationOutcome,
     ConfirmationRequest,
+    Disputed,
     EmergencyConfirmationRequest,
 )
 
@@ -29,6 +38,13 @@ ACTION_NAMES = {
     TradeAction.ADD: "加仓",
     TradeAction.REDUCE: "减仓",
     TradeAction.CLOSE: "清仓",
+}
+
+_VERDICTS = {Verdict.APPROVE: "通过", Verdict.CHALLENGE: "质询", Verdict.VETO: "否决"}
+_DECISIONS = {
+    ResponseDecision.MAINTAIN: "维持",
+    ResponseDecision.MODIFY: "修改",
+    ResponseDecision.WITHDRAW: "撤回",
 }
 
 _OUTCOMES = {
@@ -63,7 +79,11 @@ def only_user(user_id: int) -> discord.AllowedMentions:
 
 def alert_content(text: str, user_id: int) -> str:
     """告警：@ 用户加上文字；超过 2000 字时把文字截短，最后一个字是「…」。"""
-    content = f"<@{user_id}> {text}"
+    return _fit(f"<@{user_id}> {text}")
+
+
+def _fit(content: str) -> str:
+    """超过 2000 字时从结尾截短，使整条正好 2000 字，最后一个字是「…」。"""
     if len(content) <= MAX_CONTENT:
         return content
     return content[: MAX_CONTENT - 1] + "…"
@@ -103,7 +123,44 @@ def confirmation_content(request: ConfirmationRequest, user_id: int) -> str:
 
     lines.append(_deadline_line(request.deadline))
     lines.append(f"方案 ID {plan.plan_id}")
-    return "\n".join(lines)
+    if request.note is not None:
+        lines.extend(_note_lines(request.note))
+    return _fit("\n".join(lines))
+
+
+def _note_lines(note: CaseNote) -> list[str]:
+    """案件的意见，放在确认消息的最后，见 spec「确认消息」的第二张表。"""
+    if not isinstance(note, Disputed):
+        return ["Critic 不可用，方案没有经过审核"]
+    lines = ["Critic 有分歧，双方的意见：", f"PM 的方案理由：{note.rationale}"]
+    for i, review in enumerate(note.reviews):
+        lines.extend(_review_lines(i + 1, review))
+        if i < len(note.responses):
+            lines.extend(_response_lines(i + 1, note.responses[i]))
+    return lines
+
+
+def _review_lines(n: int, review: CriticReview) -> list[str]:
+    head = f"Critic 第 {n} 次审核：{_VERDICTS[review.verdict]}；{review.rationale}"
+    return [head, *(f"- {c}" for c in review.challenges)]
+
+
+def _response_lines(n: int, response: PlanResponse) -> list[str]:
+    lines = [f"PM 第 {n} 轮回应：{_DECISIONS[response.decision]}"]
+    lines.extend(f"- {r}" for r in response.replies)
+    if response.plan is not None:
+        lines.append(f"修改后：{_terms(response.plan)}")
+    return lines
+
+
+def _terms(terms: PlanDraft) -> str:
+    """修改后的方案条款：股数、限价、止损价和紧急阈值（case-stages spec「Critic 审核和 PM 回应的
+    格式」要求修改的条款都写这几项）。"""
+    assert terms.emergency_threshold is not None  # PlanResponse 校验过修改的条款
+    return (
+        f"{terms.quantity} 股，限价 {terms.limit_price}，止损价 {terms.stop_price}，"
+        f"紧急阈值 {_percent(terms.emergency_threshold)}"
+    )
 
 
 def emergency_confirmation_content(request: EmergencyConfirmationRequest, user_id: int) -> str:

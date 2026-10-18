@@ -13,6 +13,7 @@ from tradingagentspro.contracts.risk import RiskDecision, RiskOutcome
 from tradingagentspro.contracts.trade_plan import TradePlan
 from tradingagentspro.modules.notification.config import NotificationConfig
 from tradingagentspro.modules.notification.domain.confirmation import (
+    CaseNote,
     ConfirmationOutcome,
     ConfirmationRequest,
     EmergencyConfirmationRequest,
@@ -61,8 +62,12 @@ class NotificationService:
             detail = text
         self._program_log.write(Actor.SYSTEM, Action.ALERT, subject, detail)
 
-    def request_confirmation(self, plan: TradePlan, decision: RiskDecision) -> PendingConfirmation:
+    def request_confirmation(
+        self, plan: TradePlan, decision: RiskDecision, note: CaseNote | None
+    ) -> PendingConfirmation:
         """请求人工确认这个方案：截止时刻 = 现在 + 确认超时；写程序日志的请求确认。
+
+        note 是案件的方案附上的意见，原样交给通知通道；/plan 的方案和 Critic 通过的为 None。
 
         风控拒绝的方案抛 ValueError，不发消息；发不出去时条目写明原因，再抛
         NotificationUnavailableError。
@@ -70,7 +75,7 @@ class NotificationService:
         if decision.outcome is RiskOutcome.REJECTED:
             raise ValueError(f"方案 {plan.plan_id} 被风控拒绝，不能请求确认")
         deadline = self._clock.now() + self._config.confirmation_timeout
-        request = ConfirmationRequest(plan=plan, decision=decision, deadline=deadline)
+        request = ConfirmationRequest(plan=plan, decision=decision, deadline=deadline, note=note)
         return self._request(plan, (), lambda: self._notifier.request_confirmation(request))
 
     def request_emergency_confirmation(

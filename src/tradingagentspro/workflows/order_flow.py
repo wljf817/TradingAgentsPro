@@ -177,7 +177,7 @@ class OrderFlow:
         发不出去时写 ERROR，返回 None。不拿锁。
         """
         try:
-            pending = self._notification.request_confirmation(plan, decision)
+            pending = self._notification.request_confirmation(plan, decision, None)
         except NotificationUnavailableError as error:
             _log.error("%s：确认请求没有发出去（%s），按确认超时处理", _head(plan), error)
             return None

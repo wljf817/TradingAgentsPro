@@ -11,8 +11,8 @@
 
 ## 3. 确认消息的意见
 
-- [ ] 3.1 先写测试（design D4）：`tests/integrations/discord/test_messages.py` 覆盖 discord-notification spec「确认消息」新加的四个场景（开仓方案的双方意见、退出方案有异议、Critic 不可用、意见太长时截短）和"没有案件的意见"；`tests/modules/notification/test_service.py` 加 `request_confirmation` 把意见原样交给通知通道；`tests/fakes/notifier.py` 记下请求里的意见。验证：确认因为 `Disputed`、`Unreviewed`、`note` 不存在而失败
-- [ ] 3.2 实现（design D4）：`modules/notification/domain/confirmation.py` 的 `Disputed`、`Unreviewed`、`CaseNote`，`ConfirmationRequest.note`；`service.py` 的 `request_confirmation(plan, decision, note)`；`__init__.py` 导出；`integrations/discord/messages.py` 写意见、和告警共用截短；`order_flow.py` 先传 `note=None`。验证：3.1 的测试通过，`tests/integrations/discord`、`tests/workflows` 原有的测试通过；`uv run mypy`、`uv run lint-imports` 通过
+- [x] 3.1 先写测试（design D4）：`tests/integrations/discord/test_messages.py` 覆盖 discord-notification spec「确认消息」新加的四个场景（开仓方案的双方意见、退出方案有异议、Critic 不可用、意见太长时截短）和"没有案件的意见"；`tests/modules/notification/test_service.py` 加 `request_confirmation` 把意见原样交给通知通道；`tests/fakes/notifier.py` 记下请求里的意见。验证：确认因为 `Disputed`、`Unreviewed`、`note` 不存在而失败
+- [x] 3.2 实现（design D4）：`modules/notification/domain/confirmation.py` 的 `Disputed`、`Unreviewed`、`CaseNote`，`ConfirmationRequest.note`；`service.py` 的 `request_confirmation(plan, decision, note)`；`__init__.py` 导出；`integrations/discord/messages.py` 写意见、和告警共用截短；`order_flow.py` 先传 `note=None`。验证：3.1 的测试通过，`tests/integrations/discord`、`tests/workflows` 原有的测试通过；`uv run mypy`、`uv run lint-imports` 通过
 
 ## 4. /plan 的板块
 

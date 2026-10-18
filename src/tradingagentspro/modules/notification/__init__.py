@@ -9,10 +9,13 @@
 
 from tradingagentspro.modules.notification.config import NotificationConfig
 from tradingagentspro.modules.notification.domain.confirmation import (
+    CaseNote,
     ConfirmationOutcome,
     ConfirmationRequest,
+    Disputed,
     EmergencyConfirmationRequest,
     PendingConfirmation,
+    Unreviewed,
 )
 from tradingagentspro.modules.notification.domain.rules import (
     CaseConfirmation,
@@ -28,9 +31,11 @@ from tradingagentspro.modules.notification.service import NotificationService
 
 __all__ = [
     "CaseConfirmation",
+    "CaseNote",
     "ConfirmationOutcome",
     "ConfirmationRequest",
     "DecisionHandler",
+    "Disputed",
     "EmergencyConfirmationRequest",
     "NotificationConfig",
     "NotificationService",
@@ -38,5 +43,6 @@ __all__ = [
     "Notifier",
     "PendingConfirmation",
     "PlanIntake",
+    "Unreviewed",
     "case_plan_confirmation",
 ]
