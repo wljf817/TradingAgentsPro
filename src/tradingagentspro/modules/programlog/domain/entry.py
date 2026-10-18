@@ -70,6 +70,9 @@ class Action(StrEnum):
     REJECT_TASK = "reject_task"  # 拒绝任务
     TASK_RESULT = "task_result"  # 生成 Result
     TAKE_SNAPSHOT = "take_snapshot"  # 生成快照
+    OPEN_CASE = "open_case"  # 开案件
+    CASE_STAGE = "case_stage"  # 案件阶段变化
+    WAKE_AGENT = "wake_agent"  # 唤醒 agent
 
 
 ACCOUNT = "account"  # 对象：整个券商账户

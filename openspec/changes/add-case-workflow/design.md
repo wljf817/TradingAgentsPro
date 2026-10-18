@@ -24,8 +24,9 @@ workflows/
                      case_progress；CaseProgress
   plan_handoff.py    (新) PlanHandoff、Handoff、PlanEvent、PLAN_TOPIC、report_plan：交给下单的接口
   case_flow.py       (新) CaseFlow：每个 step 的用例（不 import dbos）；CaseServices、CaseFlowConfig
-  case_conclusion.py (新) 结论的检查（第 1 到 4 项是纯函数）和结论生效
-  case_entries.py    (新) case_trigger（调度器的触发换成案件记录的触发）、程序日志和退回原因的文字
+  case_conclusion.py (新) 结论的检查（第 1 到 5 项是纯函数，CheckConfigs）和结论生效（ConclusionEffects）
+  case_entries.py    (新) case_trigger（调度器的触发换成案件记录的触发）、退回原因（Blocked、Unscreened、
+                     Problem）和程序日志、告警的文字
   names.py           (改) 案件类型、阶段、结束原因、事件类别、决定的中文名
 contracts/agent_call.py      (改) CaseContext 加 recent_cases、pending_follow_ups；新增 RecentCase
 modules/gateway/             (改) CostStore.case_costs、PostgresCostStore、CallBudgetService.case_costs
@@ -87,14 +88,16 @@ def run_case(
     if version is None:
         case.advance(case.state.fail())
     elif case.state.stage is CaseStage.RETROSPECTIVE:
-        _retrospective(case, version)
+        _retrospective(case)
     else:
-        case.begin(_context(case_id, definition, trigger), version)
+        case.context = _context(definition, trigger)
         _research(case)
         _review(case)
         _deliver(case)
-    _end(case_id, case.state)
-    return case.end_reason
+    reason = case.state.end_reason
+    assert reason is not None  # 走完以后案件一定结束了
+    _end(case_id, reason)
+    return reason
 ```
 
 - `_Case` 是工作流内存里的一个可变对象：案件状态、现在的方案、PM 和 Critic 的对话、PM 派过的任务的结果、最新的快照版本、案件上下文。崩溃以后 DBOS 重放工作流函数，step 的输出从库里读回，`_Case` 一步步重建成同样的内容，不另存
@@ -108,8 +111,8 @@ def run_case(
 | `case.start` | 写案件记录的开始运行（`case_trigger` 换出触发）、写开案件 | 无 |
 | `case.snapshot` | `SnapshotFlow.take`；三种"读不到"的异常换成 None | 版本号或 None |
 | `case.context` | 组出案件上下文（D7） | `CaseContext` |
-| `case.call_pm` | 读快照，调用 `pm` 或 `pm_respond`；写唤醒 agent；全部不可用时告警 | `Answered` 或 None |
-| `case.dispatch` | `TaskDispatchService.dispatch`（PM 或 Critic，案件的 `CaseScope`） | 每个请求的 task_id 和是不是派发出去的 |
+| `case.call_pm`、`case.call_pm_respond` | 读快照，调用 `pm`（研究）或 `pm_respond`（回应）；写唤醒 agent；全部不可用时告警 | `Answered` 或 None |
+| `case.dispatch` | `TaskDispatchService.dispatch`（PM 或 Critic，案件的 `CaseScope`） | 每个请求的处理结果（`Dispatch`） |
 | 子工作流 `case_task` | step `case_task.run`：读快照，`AgentCallService.run_task` | 无 |
 | `case.outcomes` | 按请求的顺序读每个 Task 和 Result | `tuple[TaskOutcome, ...]` |
 | `case.conclude` | 结论的检查；通过时写案件记录的结论、结论生效（D5、D6） | 退回的原因或现在的方案 |
@@ -118,7 +121,7 @@ def run_case(
 | `case.record_risk` | 把交接给出的风控结果写进案件记录（`submit` 在工作流函数里调用，D4） | 无 |
 | `case.call_reviewer` | 读快照，调用 `reviewer`；唤醒 agent 写报告的总结；全部不可用时告警 | 是否成功 |
 | `case.stage` | 写案件阶段变化 | 无 |
-| `case.end` | 写案件记录的结束（Task 数、调用次数）、`ModelFallbackService.end_case` | 无 |
+| `case.end` | 写案件记录的结束（结束原因、Task 数、调用次数）、`ModelFallbackService.end_case` | 无 |
 
 - 生成快照时数据读不到按系统故障结束：快照 spec 把处理交给调用方；三种异常是券商、行情、日线数据源断线，常见，案件结束以后没有结论，复查日由收盘检查顺延；不另外告警，这几种断线由健康监控告警
 - 告警的对象写案件 ID，说明写 agent 和网关给出的说明（`AllUnavailable.detail`）

@@ -10,10 +10,16 @@ dispatch_tasks、submit_conclusion 和对质询的回应，Critic 的回复是�
 
 from typing import Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from tradingagentspro.contracts.agent import SubAgent
-from tradingagentspro.contracts.conclusion import Conclusion, HoldingConclusion, WatchConclusion
+from tradingagentspro.contracts.case import CaseEndReason, CaseType
+from tradingagentspro.contracts.conclusion import (
+    Conclusion,
+    FollowUpRequest,
+    HoldingConclusion,
+    WatchConclusion,
+)
 from tradingagentspro.contracts.event import EventCategory
 from tradingagentspro.contracts.review import CriticReview, PlanResponse, Verdict
 from tradingagentspro.contracts.snapshot import Snapshot
@@ -21,10 +27,21 @@ from tradingagentspro.contracts.task import Result, Task, TaskRequest
 from tradingagentspro.contracts.thesis import InvestmentThesis, WatchThesis
 
 
+class RecentCase(BaseModel):
+    """这只股票最近结束的一个案件，放进案件上下文。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    case_type: CaseType
+    ended_at: AwareDatetime
+    end_reason: CaseEndReason
+    conclusion: Conclusion | None  # 通过校验的结论；没有结论的为 None
+
+
 class CaseContext(BaseModel):
     """案件上下文：快照以外 PM 和 Critic 要看的、由调用方给出的内容，见 agent-calls spec。
 
-    案件 ID、案件类型和股票在快照里。不适用的项为 None。
+    案件 ID、案件类型和股票在快照里。不适用的项为 None，没有的列表为空。
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", str_strip_whitespace=True)
@@ -34,6 +51,8 @@ class CaseContext(BaseModel):
     required_agent: SubAgent | None  # 事件案件至少要派给的子 agent
     watch_thesis: WatchThesis | None  # 关注股现在的关注论点
     investment_thesis: InvestmentThesis | None  # 持仓现在的投资论点
+    recent_cases: tuple[RecentCase, ...] = ()  # 这只股票最近结束的案件，按结束时刻从晚到早
+    pending_follow_ups: tuple[FollowUpRequest, ...] = ()  # 这只股票待执行的跟进，按触发时间
 
 
 class TaskOutcome(BaseModel):
