@@ -26,8 +26,8 @@
 
 ## 6. 下单工作流：交接和送回
 
-- [ ] 6.1 先写测试（design D1、D3、D10）`tests/workflows/test_order_workflow.py`（真的 DBOS，要开着 OrbStack）：测试里定义一个收结果的工作流当作案件，在测试的工作流函数里调用 `CasePlanHandoff.submit`；order-flow spec「结果送回案件」的十一个场景，「案件的方案」里交接返回的结果（要不要确认、风控拒绝不起下单流程、读券商失败为 None），重放时不再检查（照现有的 `Crash`），自动执行的方案按按钮时回调报错。验证：确认因为 `CasePlanHandoff`、`order_plan` 的新参数不存在而失败
-- [ ] 6.2 实现（design D1 到 D3）：`order_workflow.py` 的 `order_plan(plan, decision, source)`、`_run`、`_executed`、`_report`、`except Exception` 送回出错，step `order_plan.check_case_plan`，`CasePlanHandoff`；`OrderPlanIntake.submit` 传 `source=None`；模块说明写上交接和送回。验证：6.1 的测试通过，原有的下单工作流测试全部通过；`uv run mypy`、`uv run lint-imports`、`uv run ruff check` 通过
+- [x] 6.1 先写测试（design D1、D3、D10）`tests/workflows/test_order_workflow.py`（真的 DBOS，要开着 OrbStack）：测试里定义一个收结果的工作流当作案件，在测试的工作流函数里调用 `CasePlanHandoff.submit`；order-flow spec「结果送回案件」的十一个场景，「案件的方案」里交接返回的结果（要不要确认、风控拒绝不起下单流程、读券商失败为 None），重放时不再检查（照现有的 `Crash`），自动执行的方案按按钮时回调报错。验证：确认因为 `CasePlanHandoff`、`order_plan` 的新参数不存在而失败
+- [x] 6.2 实现（design D1 到 D3）：`order_workflow.py` 的 `order_plan(plan, decision, source)`、`_run`、`_executed`、`_report`、`except Exception` 送回出错，step `order_plan.check_case_plan`，`CasePlanHandoff`；`OrderPlanIntake.submit` 传 `source=None`；模块说明写上交接和送回。验证：6.1 的测试通过，原有的下单工作流测试全部通过；`uv run mypy`、`uv run lint-imports`、`uv run ruff check` 通过
 
 ## 7. 股票池跟上持仓
 
