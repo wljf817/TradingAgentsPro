@@ -516,7 +516,7 @@ class EmergencyFlow:
             log.write(Actor.RISK, Action.RECHECK, subject, recheck_text(decision))
         if decision.outcome is RiskOutcome.REJECTED:
             return ExitStep(StepKind.NO_SHARES, voided)
-        order = execution.submit(plan, decision)
+        order = execution.submit(plan, decision, case_id=None)
         log_submit(log, plan, order)
         return ExitStep(StepKind.SUBMITTED, voided, order=order)
 

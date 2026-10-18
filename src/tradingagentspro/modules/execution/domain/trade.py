@@ -30,6 +30,8 @@ class Trade:
     - quantity：委托股数；止损单是未成交股数加累计成交
     - status：和订单的 8 种状态一致
     - traded_on、settles_on：成交日和结算日；累计成交为 0 时都为 None
+    - case_id：来源案件；订单是订单的来源案件，止损单是来源方案的订单的来源案件。默认值只为读回
+      之前写入、没有这一项的记录，见 update-order-flow-case-plans 的 design D5
     """
 
     client_order_id: str
@@ -44,6 +46,7 @@ class Trade:
     created_at: datetime
     traded_on: date | None
     settles_on: date | None
+    case_id: UUID | None = None
 
     @property
     def is_sale(self) -> bool:
@@ -73,11 +76,13 @@ def trade_of_order(order: Order, calendar: TradingCalendar) -> Trade:
         created_at=order.created_at,
         traded_on=traded_on,
         settles_on=_settlement(traded_on, calendar),
+        case_id=order.case_id,
     )
 
 
-def trade_of_stop(stop: StopOrder, plan_id: UUID | None, calendar: TradingCalendar) -> Trade:
-    """止损单的交易记录。plan_id 是这只股票止损价来自的开仓订单的方案 ID。
+def trade_of_stop(stop: StopOrder, source: Order | None, calendar: TradingCalendar) -> Trade:
+    """止损单的交易记录。source 是这只股票止损价来自的开仓订单，来源方案和来源案件都取它的；
+    没有这样的订单时为 None。
 
     成交日是最近一次发现累计成交增加的时刻所在时段的交易日；不在盘中时是这个时刻之前最后一个
     收盘的交易日，因为止损单只在常规交易时段触发。
@@ -90,7 +95,7 @@ def trade_of_stop(stop: StopOrder, plan_id: UUID | None, calendar: TradingCalend
         client_order_id=stop.client_order_id,
         kind=TradeKind.STOP,
         symbol=stop.symbol,
-        plan_id=plan_id,
+        plan_id=None if source is None else source.plan_id,
         quantity=stop.quantity + stop.filled,
         filled=stop.filled,
         average_price=stop.average_price,
@@ -99,6 +104,7 @@ def trade_of_stop(stop: StopOrder, plan_id: UUID | None, calendar: TradingCalend
         created_at=stop.created_at,
         traded_on=traded_on,
         settles_on=_settlement(traded_on, calendar),
+        case_id=None if source is None else source.case_id,
     )
 
 

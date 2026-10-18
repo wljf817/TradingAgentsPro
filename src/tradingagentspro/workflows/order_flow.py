@@ -322,7 +322,7 @@ class OrderFlow:
                 reasons = [f"- {v.rule}：{v.message}" for v in rechecked.violations]
             else:
                 try:
-                    order = services.execution.submit(plan, rechecked)
+                    order = services.execution.submit(plan, rechecked, case_id=None)
                 except (NotReconciledError, OrderPausedError, UnprotectedPositionError) as error:
                     return self._retry(plan, str(error))
                 except OutsideSessionError:

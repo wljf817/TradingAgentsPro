@@ -101,8 +101,11 @@ class ExecutionService:
         self._config = config
         self._last: Reconciliation | None = None  # 最近一次完成的对账；新建以后还没有
 
-    def submit(self, plan: TradePlan, decision: RiskDecision) -> Order:
+    def submit(self, plan: TradePlan, decision: RiskDecision, *, case_id: UUID | None) -> Order:
         """按方案和它的再校验结果（通过或调整）提交订单，返回跟进一次之后的订单。
+
+        case_id 是来源案件，记在新建的订单上（order-lifecycle spec「提交订单」）；/plan 录入的和
+        代码触发的清仓方案为 None。
 
         这个方案已经有订单时不新建，只跟进一次。新建订单之前依次检查：
         - 还没完成过对账时，抛 NotReconciledError，调用方等对账完成再从下单前再校验开始
@@ -128,7 +131,7 @@ class ExecutionService:
             protection = self._protections.get(plan.symbol)
             if plan.action.is_opening and protection and protection.unprotected_since:
                 raise UnprotectedPositionError(f"{plan.symbol} 是无保护仓位，补挂成功之前不能买入")
-            self._save_order(new_order(plan, decision, session, now))
+            self._save_order(new_order(plan, decision, session, now, case_id=case_id))
         return self.track(plan.plan_id)
 
     def track(self, plan_id: UUID) -> Order:
@@ -295,6 +298,20 @@ class ExecutionService:
     def protection(self, symbol: str) -> Protection | None:
         """这只股票的止损保护；没有记录时为 None。只读状态库，不调用券商。"""
         return self._protections.get(symbol)
+
+    def orders(self, symbol: str) -> tuple[Order, ...]:
+        """这只股票的全部订单，包括已经结束的，按创建的先后；只读状态库，不调用券商。
+
+        给股票池跟上持仓用，见 update-order-flow-case-plans 的 design D7。
+        """
+        return tuple(sorted(self._store.of_symbol(symbol), key=lambda o: o.created_at))
+
+    def held_symbols(self) -> frozenset[str]:
+        """券商那边有持仓的股票。只读券商的全部持仓，超时或断线时抛 BrokerUnavailableError。
+
+        给股票池跟上持仓用，见 update-order-flow-case-plans 的 design D7。
+        """
+        return frozenset(self._broker.all_positions())
 
     def symbols_to_protect(self) -> tuple[str, ...]:
         """需要对齐止损单的股票，按代码排序：券商那边有持仓的，加上止损保护需要对齐的。
@@ -492,10 +509,9 @@ class ExecutionService:
     def _save_protection(self, protection: Protection) -> None:
         """有止损单时先写它的交易记录，再保存止损保护，见 add-trade-records 的 design D2。
 
-        来源方案是这只股票止损价来自的开仓订单的方案。
+        来源方案和来源案件取这只股票止损价来自的开仓订单的。
         """
         if protection.stop is not None:
             source = opening_order(self._store.of_symbol(protection.symbol))
-            plan_id = None if source is None else source.plan_id
-            self._trades.save(trade_of_stop(protection.stop, plan_id, self._calendar))
+            self._trades.save(trade_of_stop(protection.stop, source, self._calendar))
         self._protections.save(protection)

@@ -2,12 +2,12 @@
 
 ## 1. 前提
 
-- [ ] 1.1 核对「案件工作流」已经按 design「前提」归档：`workflows/plan_handoff.py` 有 `PlanHandoff`、`Handoff(decision, confirming)`、`PlanEvent`、`PLAN_TOPIC`、`report_plan`；`case_workflow.py` 在工作流函数里调用 `submit`（不在 step 里）；`CaseState.risk_checked` 接收 `confirming`；`openspec/specs/case-workflow/` 存在。验证：`grep -n "class Handoff\|def report_plan" src/tradingagentspro/workflows/plan_handoff.py` 和 `grep -n "confirming" src/tradingagentspro/modules/scheduler/domain/stage.py` 都有结果；任何一项不对就停下，报告给人，不在本变更里补
+- [x] 1.1 核对「案件工作流」已经按 design「前提」归档：`workflows/plan_handoff.py` 有 `PlanHandoff`、`Handoff(decision, confirming)`、`PlanEvent`、`PLAN_TOPIC`、`report_plan`；`case_workflow.py` 在工作流函数里调用 `submit`（不在 step 里）；`CaseState.risk_checked` 接收 `confirming`；`openspec/specs/case-workflow/` 存在。验证：`grep -n "class Handoff\|def report_plan" src/tradingagentspro/workflows/plan_handoff.py` 和 `grep -n "confirming" src/tradingagentspro/modules/scheduler/domain/stage.py` 都有结果；任何一项不对就停下，报告给人，不在本变更里补
 
 ## 2. 执行模块的来源案件
 
-- [ ] 2.1 先写测试（design D5）：`tests/modules/execution/domain/test_order.py`、`test_trade.py` 加 order-lifecycle spec「案件的方案记下来源案件」、trade-records spec「案件的方案的交易记录带来源案件」「加仓的案件换成止损单的来源案件」和基准场景里的"没有来源案件"；`tests/modules/execution/test_service.py` 加 `submit(..., case_id=)`、`held_symbols`（超时抛 `BrokerUnavailableError`）、`orders(symbol)` 按创建的先后；`tests/modules/execution/test_repo.py` 加旧记录（JSON 里没有 `case_id`）读回为 None（要开着 OrbStack）。验证：确认因为 `case_id`、`held_symbols`、`orders` 不存在而失败
-- [ ] 2.2 实现（design D5）：`Order.case_id`、`new_order` 的 `case_id`；`Trade.case_id`、`trade_of_order`、`trade_of_stop(stop, source, calendar)`；`ExecutionService.submit(plan, decision, *, case_id)`、`held_symbols`、`orders`；`workflows/order_flow.py` 和 `workflows/emergency_flow.py` 的调用先传 `case_id=None`。验证：2.1 的测试通过；`uv run pytest tests/modules/execution tests/workflows` 原有的测试只改调用参数，全部通过；`uv run mypy`、`uv run lint-imports` 通过
+- [x] 2.1 先写测试（design D5）：`tests/modules/execution/domain/test_order.py`、`test_trade.py` 加 order-lifecycle spec「案件的方案记下来源案件」、trade-records spec「案件的方案的交易记录带来源案件」「加仓的案件换成止损单的来源案件」和基准场景里的"没有来源案件"；`tests/modules/execution/test_service.py` 加 `submit(..., case_id=)`、`held_symbols`（超时抛 `BrokerUnavailableError`）、`orders(symbol)` 按创建的先后；`tests/modules/execution/test_repo.py` 加旧记录（JSON 里没有 `case_id`）读回为 None（要开着 OrbStack）。验证：确认因为 `case_id`、`held_symbols`、`orders` 不存在而失败
+- [x] 2.2 实现（design D5）：`Order.case_id`、`new_order` 的 `case_id`；`Trade.case_id`、`trade_of_order`、`trade_of_stop(stop, source, calendar)`；`ExecutionService.submit(plan, decision, *, case_id)`、`held_symbols`、`orders`；`workflows/order_flow.py` 和 `workflows/emergency_flow.py` 的调用先传 `case_id=None`。验证：2.1 的测试通过；`uv run pytest tests/modules/execution tests/workflows` 原有的测试只改调用参数，全部通过；`uv run mypy`、`uv run lint-imports` 通过
 
 ## 3. 确认消息的意见
 

@@ -86,6 +86,8 @@ class Order:
     - unknown_since：变为状态未知的时刻；不是状态未知时为 None
     - cancel_requested：已经成功请求过撤单，到期撤单和提前撤单都算
     - cancel_wanted：有撤单要求，跟进时不再提交，挂着的就请求撤单；见 spec「提前撤单」
+    - case_id：来源案件，提交时由调用方给出；/plan 录入的和代码触发的清仓方案没有。默认值只为读回
+      之前写入、没有这一项的记录，见 update-order-flow-case-plans 的 design D5
 
     状态变化的方法都返回新的订单；终态的订单原样返回。
     """
@@ -109,6 +111,7 @@ class Order:
     unknown_since: datetime | None = None
     cancel_requested: bool = False
     cancel_wanted: bool = False
+    case_id: UUID | None = None
 
     @property
     def client_order_id(self) -> str:
@@ -202,9 +205,14 @@ class Order:
 
 
 def new_order(
-    plan: TradePlan, decision: RiskDecision, session: TradingSession, now: datetime
+    plan: TradePlan,
+    decision: RiskDecision,
+    session: TradingSession,
+    now: datetime,
+    *,
+    case_id: UUID | None,
 ) -> Order:
-    """方案按再校验结果（通过或调整）建立的订单，状态是待提交。
+    """方案按再校验结果（通过或调整）建立的订单，状态是待提交；case_id 是来源案件。
 
     买入、加仓是买单，减仓、清仓是卖单；截止时刻是生效的有效期和当天收盘中较早的那个。
     买单记下方案的止损价和再校验结果里生效的紧急阈值。
@@ -224,6 +232,7 @@ def new_order(
         created_at=now,
         stop_price=plan.stop_price,
         emergency_threshold=decision.emergency_threshold if opening else None,
+        case_id=case_id,
     )
 
 
