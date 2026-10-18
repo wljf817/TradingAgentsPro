@@ -47,10 +47,10 @@
 ## 6. 连真实 Finnhub 的冒烟测试
 
 - [x] 6.1 写 `tests/integrations/finnhub/test_finnhub_smoke.py`（design D10 的冒烟测试），全部加 `finnhub_api` 标记，没有 `FINNHUB_API_KEY` 时跳过；整个文件不超过 50 个请求。README 的「常用命令」加一行运行方法，写明需要 `FINNHUB_API_KEY`。验证：没有 key 时 `uv run pytest -m finnhub_api` 全部跳过，`uv run pytest` 不收集这些测试
-- [ ] 6.2 人注册 Finnhub 免费 key 以后，运行一次 `FINNHUB_API_KEY=… uv run pytest -m finnhub_api`。验证：全部通过，并且确实运行了（不是跳过）；板块对不上、窗口给不到 90 天、限额不是每分钟 60 次、查不到的股票返回的格式和假设不同时，先改 spec 和 design（代码表、配置默认值、`对后续变更的影响`），再改代码和 2、3、5 组的测试，然后重跑
+- [x] 6.2 人注册 Finnhub 免费 key 以后，运行一次 `FINNHUB_API_KEY=… uv run pytest -m finnhub_api`。验证：全部通过，并且确实运行了（不是跳过）；板块对不上、窗口给不到 90 天、限额不是每分钟 60 次、查不到的股票返回的格式和假设不同时，先改 spec 和 design（代码表、配置默认值、`对后续变更的影响`），再改代码和 2、3、5 组的测试，然后重跑
 
 ## 7. 收尾
 
 - [x] 7.1 对照三份 delta spec，逐条列出每个场景由哪个测试覆盖，没有遗漏。验证：对应表写在完成报告里
 - [x] 7.2 运行全部检查：`uv run pytest`、`uv run ruff check`、`uv run ruff format --check`、`uv run mypy`、`uv run lint-imports`、`openspec validate add-earnings-calendar-and-sector --strict`。验证：全部通过（要开着 OrbStack）；`git status` 里没有 `tests/` 下的文件被暂存
-- [ ] 7.3 归档前：「新闻和公告」先归档、改过 state-store「表的归属和迁移」的，按当时的主 spec 重写本变更的 state-store delta，只加本变更的两张表；确认 v0009 的 `down_revision` 是当时最新的版本、`test_app.py` 的最新版本是 `"0009"`；6.2 已经完成。验证：`openspec validate add-earnings-calendar-and-sector --strict` 通过；归档后的主 spec 里「新闻和公告」加的表和场景都还在
+- [x] 7.3 归档前：「新闻和公告」先归档、改过 state-store「表的归属和迁移」的，按当时的主 spec 重写本变更的 state-store delta，只加本变更的两张表；确认 v0009 的 `down_revision` 是当时最新的版本、`test_app.py` 的最新版本是 `"0009"`；6.2 已经完成。验证：`openspec validate add-earnings-calendar-and-sector --strict` 通过；归档后的主 spec 里「新闻和公告」加的表和场景都还在
