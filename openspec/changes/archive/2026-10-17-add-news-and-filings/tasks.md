@@ -47,10 +47,10 @@
 ## 6. 连真实服务的冒烟测试
 
 - [x] 6.1 `pyproject.toml` 的 pytest 配置登记标记 `news_sources`（连真实 Alpaca 新闻和 SEC EDGAR，需要 `APCA_API_KEY_ID`、`APCA_API_SECRET_KEY`、`SEC_USER_AGENT`），`addopts` 的 `-m` 加 `and not news_sources`。写 `tests/integrations/alpaca/test_news_smoke.py` 和 `tests/integrations/sec/test_edgar_smoke.py`（design D9），全部加 `news_sources` 标记，各自缺环境变量时跳过；测试和代码里不写任何具体邮箱。README 的「常用命令」加一行运行方法和要的环境变量。验证：没有这些环境变量时 `uv run pytest -m news_sources` 全部跳过，`uv run pytest` 不收集这些测试
-- [ ] 6.2 人设好 `SEC_USER_AGENT` 以后运行一次 `uv run pytest -m news_sources`，同时用真实的 key 录一份 Alpaca 新闻回复核对 `news_payloads.py` 的字段和可以为 null 的项。验证：全部通过；和 spec 不符的地方（比如 url 从不为 null、受理时刻的偏差不再存在）先改 spec 和 design，再改代码和 4、5 组的测试
+- [x] 6.2 人设好 `SEC_USER_AGENT` 以后运行一次 `uv run pytest -m news_sources`，同时用真实的 key 录一份 Alpaca 新闻回复核对 `news_payloads.py` 的字段和可以为 null 的项。验证：全部通过；和 spec 不符的地方（比如 url 从不为 null、受理时刻的偏差不再存在）先改 spec 和 design，再改代码和 4、5 组的测试
 
 ## 7. 收尾
 
 - [x] 7.1 对照本变更的四份 delta spec，逐条列出每个场景由哪个测试覆盖，没有遗漏；state-store「表的归属和迁移」原有的场景仍有测试。验证：对应表写在完成报告里
 - [x] 7.2 运行全部检查：`uv run pytest`、`uv run ruff check`、`uv run ruff format --check`、`uv run mypy`、`uv run lint-imports`、`openspec validate add-news-and-filings --strict`。验证：全部通过（要开着 OrbStack）；`git status` 里没有 `tests/` 下的文件被暂存
-- [ ] 7.3 归档前：「财报日历与板块」如果先归档、改过 state-store「表的归属和迁移」，按当时的主 spec 重写本变更的 delta，只加本变更的两张表；确认 v0008 的 `down_revision` 是 `"0007"`、`test_app.py` 的最新版本和当时的最新迁移一致。验证：`openspec validate add-news-and-filings --strict` 通过；归档后的主 spec 里别的变更加的表都还在
+- [x] 7.3 归档前：「财报日历与板块」如果先归档、改过 state-store「表的归属和迁移」，按当时的主 spec 重写本变更的 delta，只加本变更的两张表；确认 v0008 的 `down_revision` 是 `"0007"`、`test_app.py` 的最新版本和当时的最新迁移一致。验证：`openspec validate add-news-and-filings --strict` 通过；归档后的主 spec 里别的变更加的表都还在

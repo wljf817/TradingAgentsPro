@@ -13,7 +13,8 @@
 
 数据源（2026-10-17 实际调用过 SEC；Alpaca 新闻接口人已经实测过免费档）：
 
-- Alpaca 新闻：`GET https://data.alpaca.markets/v1beta1/news`，参数 symbols、start、end、limit（最多 50）、sort、include_content、page_token；回复 `{"news": [...], "next_page_token": ...}`。每条有 id（整数）、headline、author、created_at、updated_at、summary、content、url、images、symbols、source
+- Alpaca 新闻：`GET https://data.alpaca.markets/v1beta1/news`，参数 symbols、start、end、limit（最多 50）、sort、include_content、page_token；回复 `{"news": [...], "next_page_token": ...}`。每条有 id（整数）、headline、author、created_at、updated_at、summary、content、url、images、symbols、source。Alpaca 的 Python SDK 把 url 标为可以为 null（"if applicable"），其余都是必有的字符串
+- 2026-10-17 用免费档的 key 取了 1000 条真实回复核对：每条都有全部字段；url 都是非空的地址，没有 null；author 都不为空；41% 的条目摘要、正文和图片都为空（只有标题的快讯）；created_at 是 `2026-09-01T01:21:19Z` 这样到秒的 UTC；没有发布时刻早于 start 的条目，start 按发布时刻筛选
 - SEC 代码表 `https://www.sec.gov/files/company_tickers.json`：约 1 万项，800 KB；`{"0": {"cik_str": 1045810, "ticker": "NVDA", "title": "NVIDIA CORP"}, …}`。分级股票用横线（BRK-B、BF-B）；GOOG 和 GOOGL 是同一个 CIK
 - SEC submissions `https://data.sec.gov/submissions/CIK0000320193.json`：AAPL 的 163 KB；`filings.recent` 是按列存放的数组（accessionNumber、filingDate、acceptanceDateTime、form、items、primaryDocument 等），最近 1000 份或至少一年，更早的在 `filings.files` 列出的分页里。别人以这家公司为对象提交的公告（13G、13D）也列在这家公司下，表单类型 2024-12 起是 `SCHEDULE 13G`、`SCHEDULE 13D`，以前是 `SC 13G`、`SC 13D`
 - 受理时刻有偏差：AAPL 的 8-K 0000320193-26-000018 在公告页面上写"Accepted 2026-07-30 16:30:28"（美东），submissions 里是 `2026-07-31T00:30:28.000Z`；冬令时的 0000320193-26-000005 页面写 16:30:33，submissions 是 `2026-01-30T02:30:33.000Z`。10-Q、Form 4 同样如此。也就是 submissions 的值 = 真实 UTC 时刻 + 美东和 UTC 的时差
