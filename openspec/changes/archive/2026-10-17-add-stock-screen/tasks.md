@@ -70,10 +70,10 @@
 ## 8. 冒烟测试
 
 - [x] 8.1 写 `tests/integrations/moomoo/test_securities_smoke.py`（`moomoo_opend` 标记，本机没开 OpenD 时跳过）、`tests/integrations/alpaca/test_bars_smoke.py`（`alpaca_bars` 标记，缺环境变量时跳过）、`tests/integrations/test_stock_screen_smoke.py`（两个标记都带，缺一个就跳过），内容见 design D13。README「常用命令」加运行方法和需要的环境。验证：没有 OpenD 和 key 时 `uv run pytest -m "moomoo_opend or alpaca_bars"` 里这几个文件全部跳过，`uv run pytest` 不收集它们
-- [ ] 8.2 开着 OpenD、设好 Alpaca 的 key，运行一次 `uv run pytest -m "moomoo_opend or alpaca_bars"`。验证：这几个文件全部通过并且确实运行了（不是跳过）；美股覆盖、市值单位、ADR 和 ETF 的识别、查不到的代码、静态信息一批 200 个、Alpaca 日线的时间戳和拆股调整、不带 end 时的权限、空结果的格式和假设不同时，先改 spec 和 design，再改代码和 6、7 组的测试，然后重跑；把完整粗筛打印的请求次数和耗时写进完成报告
+- [x] 8.2 开着 OpenD、设好 Alpaca 的 key，运行一次 `uv run pytest -m "moomoo_opend or alpaca_bars"`。验证：这几个文件全部通过并且确实运行了（不是跳过）；美股覆盖、市值单位、ADR 和 ETF 的识别、查不到的代码、静态信息一批 200 个、Alpaca 日线的时间戳和拆股调整、不带 end 时的权限、空结果的格式和假设不同时，先改 spec 和 design，再改代码和 6、7 组的测试，然后重跑；把完整粗筛打印的请求次数和耗时写进完成报告
 
 ## 9. 收尾
 
 - [x] 9.1 对照五份 delta spec，逐条列出每个场景由哪个测试覆盖，没有遗漏（「粗筛配置」的默认值按测试约定不写测试，对照 `config.py` 核对）。验证：对应表写在完成报告里
 - [x] 9.2 运行全部检查：`uv run pytest`、`uv run ruff check`、`uv run ruff format --check`、`uv run mypy`、`uv run lint-imports`、`openspec validate add-stock-screen --strict`。验证：全部通过（要开着 OrbStack）；`git status` 里没有 `tests/` 下的文件被暂存
-- [ ] 9.3 归档前：「新闻和公告」「财报日历与板块」先归档（本变更的 state-store delta 已经包含它们的表）；确认 v0010 的 `down_revision` 是当时最新的版本、`test_app.py` 的最新版本是 `"0010"`；8.2 已经完成。验证：`openspec validate add-stock-screen --strict` 通过；归档后的主 spec 里前两个变更加的表和场景都还在
+- [x] 9.3 归档前：「新闻和公告」「财报日历与板块」先归档（本变更的 state-store delta 已经包含它们的表）；确认 v0010 的 `down_revision` 是当时最新的版本、`test_app.py` 的最新版本是 `"0010"`；8.2 已经完成。验证：`openspec validate add-stock-screen --strict` 通过；归档后的主 spec 里前两个变更加的表和场景都还在
