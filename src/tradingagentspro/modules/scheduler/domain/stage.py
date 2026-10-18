@@ -1,7 +1,8 @@
 """案件阶段：一个案件从唤醒 PM 到提交订单走到了哪一步、什么时候结束、以什么原因结束。
 
 规则见 case-stages spec。状态不可变，每个事件一个方法，返回新的状态；不读写存储。
-状态存在哪里、事件从哪里来、结束以后释放预留和写案件记录由调用方（M4 的工作流）负责。
+状态由案件工作流（workflows/case_workflow.py）在 DBOS 工作流里推进；事件从哪里来、结束以后
+写案件记录由它负责，释放预留由下单那一侧负责。
 """
 
 from dataclasses import dataclass, replace
@@ -149,13 +150,16 @@ class CaseState:
 
     # 风控、人工确认和等下单
 
-    def risk_checked(self, outcome: RiskOutcome) -> Self:
-        """风控的结果：通过和调整都进入等人工确认，拒绝时结束。"""
+    def risk_checked(self, outcome: RiskOutcome, *, confirming: bool) -> Self:
+        """风控的结果：拒绝时结束；通过和调整时，要人工确认的进入等人工确认，不要确认的（模型退出
+        自动执行）直接进入等下单。拒绝时不看 confirming。
+        """
         if self._ignores(CaseStage.RISK_CHECK):
             return self
         if outcome is RiskOutcome.REJECTED:
             return self._end(CaseEndReason.RISK_REJECTED)
-        return replace(self, stage=CaseStage.AWAITING_CONFIRMATION)
+        stage = CaseStage.AWAITING_CONFIRMATION if confirming else CaseStage.AWAITING_ORDER
+        return replace(self, stage=stage)
 
     def confirm(self) -> Self:
         """人工确认：进入等下单。"""
