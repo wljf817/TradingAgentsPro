@@ -2,12 +2,13 @@
 
 ## 1. 前提
 
-- [ ] 1.1 核对 DBOS 的用法（design D5、D6、风险的最后一条）：在 `tests/workflows/test_case_workflow.py` 的真的 DBOS 里（要开着 OrbStack）确认 `DBOS.list_workflows(name="case", status="PENDING")` 列出运行中的案件、不列子工作流 `case_task`、输入里能取到 `CaseDefinition`；`DBOS.recv` 带超时在重启以后只等剩下的时间。验证：一个临时的测试通过，结论写进 1.1 的完成说明；任何一项不对就停下，报告给人，不在本变更里绕过
+- [x] 1.1 核对 DBOS 的用法（design D5、D6、风险的最后一条）：在 `tests/workflows/test_case_workflow.py` 的真的 DBOS 里（要开着 OrbStack）确认 `DBOS.list_workflows(name="case", status="PENDING")` 列出运行中的案件、不列子工作流 `case_task`、输入里能取到 `CaseDefinition`；`DBOS.recv` 带超时在重启以后只等剩下的时间。验证：一个临时的测试通过，结论写进 1.1 的完成说明；任何一项不对就停下，报告给人，不在本变更里绕过
+  - 结论：`list_workflows(name="case", status="PENDING")` 只列出运行中的案件（子工作流的名字是 `case_task`），输入是 `{"args": (case_id, CaseDefinition, Trigger, triggered_at), "kwargs": {}}`；`recv` 的超时经 `record_sleep` 记下醒来的时刻，重放时读回它，只等剩下的时间（`_sys_db.py` 的 `record_sleep`）
 
 ## 2. 调度器的队列存储
 
-- [ ] 2.1 先写测试（design D2）：`tests/modules/scheduler/test_service.py` 用 `tests/fakes/queue.py` 的 `InMemoryQueueStore` 覆盖 queue-runner spec「排队」的分配 ID、先后、同样的触发排两次，「排队的案件的存储」的出队以后不在队列里、第二次出队报错；`tests/modules/scheduler/test_repo.py`（要开着 OrbStack）覆盖原样读回（四种触发、本机时区 UTC+14）、入队的先后、出队、读写出错、空数据库没有升级。验证：确认因为 `QueueService`、`PostgresQueueStore` 不存在而失败
-- [ ] 2.2 实现（design D2、D14）：`modules/scheduler/domain/queue.py` 的 `QueueExit`；`ports.py` 的 `QueueStore`；`repo.py` 的两张表、带种类的触发编码和 `PostgresQueueStore`；`service.py` 的 `QueueService`；`__init__.py` 导出、模块说明写上队列的存储；迁移 `v0013_create_scheduler_queue.py`；`tests/bootstrap/test_database.py` 的表的清单和最新迁移版本。验证：2.1 的测试通过；`uv run pytest tests/modules/scheduler tests/bootstrap/test_database.py`、`uv run mypy`、`uv run lint-imports` 通过
+- [x] 2.1 先写测试（design D2）：`tests/modules/scheduler/test_service.py` 用 `tests/fakes/queue.py` 的 `InMemoryQueueStore` 覆盖 queue-runner spec「排队」的分配 ID、先后、同样的触发排两次，「排队的案件的存储」的出队以后不在队列里、第二次出队报错；`tests/modules/scheduler/test_repo.py`（要开着 OrbStack）覆盖原样读回（四种触发、本机时区 UTC+14）、入队的先后、出队、读写出错、空数据库没有升级。验证：确认因为 `QueueService`、`PostgresQueueStore` 不存在而失败
+- [x] 2.2 实现（design D2、D14）：`modules/scheduler/domain/queue.py` 的 `QueueExit`；`ports.py` 的 `QueueStore`；`repo.py` 的两张表、带种类的触发编码和 `PostgresQueueStore`；`service.py` 的 `QueueService`；`__init__.py` 导出、模块说明写上队列的存储；迁移 `v0013_create_scheduler_queue.py`；`tests/bootstrap/test_database.py` 的表的清单和最新迁移版本。验证：2.1 的测试通过；`uv run pytest tests/modules/scheduler tests/bootstrap/test_database.py`、`uv run mypy`、`uv run lint-imports` 通过
 
 ## 3. 下单流程收作废
 

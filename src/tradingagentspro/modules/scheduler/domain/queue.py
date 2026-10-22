@@ -30,6 +30,13 @@ class PlanStage(StrEnum):
     AWAITING_ORDER = "awaiting_order"  # 已经确认，等开盘或下单前再校验
 
 
+class QueueExit(StrEnum):
+    """排队的案件怎样离开队列。"""
+
+    STARTED = "started"  # 开始运行
+    DROPPED = "dropped"  # 不再运行
+
+
 @dataclass(frozen=True, slots=True)
 class QueuedCase:
     """排队的案件。"""

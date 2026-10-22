@@ -64,7 +64,7 @@ deploy/tradingagentspro.env.example (改)
 - 重启以前作废了、案件还没结束的方案：重启以后再写一条方案作废、再送一次作废；下单流程已经结束的不理会
 - 调用预算用完的日志重启以后当天再写一次
 - 不再运行写了案件记录、出队以前进程退出：重启以后再写一次不再运行的程序日志，案件记录同一步只写一次（case-records spec）
-- 重启以后紧急退出流程找回正在进行的紧急退出以前（巡检第一轮以前），排队运行的第一轮看不到这只股票在紧急退出，可能启动它的案件；之后由「紧急退出中止案件」中止
+- 重启以后紧急退出流程找回正在进行的紧急退出以前（巡检第一轮以前），排队运行的第一轮看不到这只股票在紧急退出，可能启动它的案件。这个案件照常运行到结束，不会被中止：「紧急退出中止案件」只在开始紧急退出的那一次中止，重启时清仓单已经挂着的不再中止；它给出的方案照常过风控和人工确认
 - 数据库一直坏：每一轮写 ERROR，心跳停住，5 分钟以后健康监控进入降级模式
 - 触发源在 DBOS 的 step 里排队、step 重做：多排一个案件，由「触发」组处理
 - 出队表随案件数增长，不清理：每天几十行；读队列只看没出队的
@@ -103,7 +103,7 @@ class QueueStore(Protocol):
     def queued(self) -> tuple[QueuedCase, ...]:
         """排了队、还没出队的，按入队的先后。"""
 
-    def leave(self, case_id: UUID, exit: QueueExit, at: datetime) -> None:
+    def leave(self, case_id: UUID, outcome: QueueExit, at: datetime) -> None:
         """出队；同一个案件第二次出队违反主键，IntegrityError 原样抛出。"""
 
 
@@ -113,14 +113,14 @@ class QueueService:
         """新的案件 ID，入队时刻是现在。"""
 
     def queued(self) -> tuple[QueuedCase, ...]: ...
-    def leave(self, case_id: UUID, exit: QueueExit) -> None:
+    def leave(self, case_id: UUID, outcome: QueueExit) -> None:
         """出队时刻是现在。"""
 ```
 
 | 表 | 列 |
 | --- | --- |
 | `scheduler_queue` | `case_id`（主键）、`position`（`BIGINT GENERATED ALWAYS AS IDENTITY`，入队的先后）、`trigger`（JSONB）、`triggered_at`、`enqueued_at`（都带时区） |
-| `scheduler_queue_exits` | `case_id`（主键）、`exit`（`started` 或 `dropped`）、`exited_at`（带时区） |
+| `scheduler_queue_exits` | `case_id`（主键）、`outcome`（`started` 或 `dropped`）、`exited_at`（带时区） |
 
 - 读队列：`scheduler_queue LEFT JOIN scheduler_queue_exits USING (case_id) WHERE exits.case_id IS NULL ORDER BY position`
 - 和 Agent 网关的任务表、Result 表一样一行一条、不用版本表（update-task-cost-storage 的「需要人决定」第 1 条）：一个排队的案件只有两个事实（排了队、怎样出队），写入以后不变；"只出队一次"由出队表的主键保证。版本表（`VersionedStore`）读最新版本时按键排序，给不出入队的先后；测试的假时钟下入队时刻常常相同，也不能按时刻排
