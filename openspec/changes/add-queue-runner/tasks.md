@@ -27,8 +27,8 @@
 
 ## 6. 排队运行
 
-- [ ] 6.1 先写测试（design D3、D4、D10、D13）`tests/workflows/test_queue_runner.py`：`run_round` 用 `tests/fakes/cases.py` 的 `FakeCases`、内存的队列、股票池、案件记录、费用和程序日志，真的 `HealthService` 和 `FakeClock`，覆盖 queue-runner spec 的「一轮」「作废方案」「不再运行」「启动」「调度器心跳」「调用预算用完的日志」「重启以后」的场景，以及 program-log spec「调度器的动作」的排队、不再运行、方案作废和「系统的动作」的调用预算用完；`start`、`stop`、间隔和一轮出错照 `test_patrol_thread.py` 的写法测「什么时候做一轮」；`QueueRunnerConfig` 的不合法取值。并发上限、间隔从配置读取，不在测试里硬编码。验证：确认因为 `workflows/queue_runner.py` 不存在而失败
-- [ ] 6.2 实现（design D3、D4、D10、D13）：`modules/programlog/domain/entry.py` 加四个 `Action`；`names.py` 加股票状态的中文名；`workflows/queue_runner.py` 的 `QueueRunnerConfig`、`CaseControl`、`QueueParts`、`QueueRunner`（`enqueue`、`run_round`、`start`、`stop`、`heartbeat`）、`DbosCases` 和程序日志的文字，模块说明写上。验证：6.1 的测试通过；`uv run mypy`、`uv run lint-imports`、`uv run ruff check` 通过
+- [x] 6.1 先写测试（design D3、D4、D10、D13）`tests/workflows/test_queue_runner.py`：`run_round` 用 `tests/fakes/cases.py` 的 `FakeCases`、内存的队列、股票池、案件记录、费用和程序日志，真的 `HealthService` 和 `FakeClock`，覆盖 queue-runner spec 的「一轮」「作废方案」「不再运行」「启动」「调度器心跳」「调用预算用完的日志」「重启以后」的场景，以及 program-log spec「调度器的动作」的排队、不再运行、方案作废和「系统的动作」的调用预算用完；`start`、`stop`、间隔和一轮出错照 `test_patrol_thread.py` 的写法测「什么时候做一轮」；`QueueRunnerConfig` 的不合法取值。并发上限、间隔从配置读取，不在测试里硬编码。验证：确认因为 `workflows/queue_runner.py` 不存在而失败
+- [x] 6.2 实现（design D3、D4、D10、D13）：`modules/programlog/domain/entry.py` 加四个 `Action`；`names.py` 加股票状态的中文名；`workflows/queue_runner.py` 的 `QueueRunnerConfig`、`CaseControl`、`QueueParts`、`QueueRunner`（`enqueue`、`run_round`、`start`、`stop`、`heartbeat`）、`DbosCases` 和程序日志的文字，模块说明写上。验证：6.1 的测试通过；`uv run mypy`、`uv run lint-imports`、`uv run ruff check` 通过
 
 ## 7. 健康监控接线
 

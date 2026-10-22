@@ -1,5 +1,5 @@
 """几个流程的日志、告警和退回原因共用的中文名：方案动作、订单类型、订单状态、买卖方向、止损单状态，
-以及案件类型、阶段、结束原因、Critic 审核的结果、事件类别、决定、审核、回应和 agent。
+以及案件类型、阶段、结束原因、Critic 审核的结果、事件类别、决定、审核、回应、agent 和股票的状态。
 """
 
 from tradingagentspro.contracts.agent import Agent
@@ -7,6 +7,7 @@ from tradingagentspro.contracts.case import CaseEndReason, CaseType
 from tradingagentspro.contracts.conclusion import Decision
 from tradingagentspro.contracts.event import EventCategory
 from tradingagentspro.contracts.review import ResponseDecision, Verdict
+from tradingagentspro.contracts.stock_pool import StockStatus
 from tradingagentspro.contracts.trade_plan import OrderType, TradeAction
 from tradingagentspro.modules.execution import OrderSide, OrderStatus, StopStatus
 from tradingagentspro.modules.scheduler import CaseStage, CriticOutcome
@@ -116,4 +117,9 @@ AGENTS = {
     Agent.FUNDAMENTALS: "Fundamentals",
     Agent.CRITIC: "Critic",
     Agent.REVIEWER: "Reviewer",
+}
+STOCK_STATUSES = {
+    StockStatus.CANDIDATE: "候选",
+    StockStatus.WATCH: "关注",
+    StockStatus.HOLDING: "持仓",
 }

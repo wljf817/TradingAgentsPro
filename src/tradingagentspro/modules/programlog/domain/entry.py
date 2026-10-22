@@ -74,6 +74,10 @@ class Action(StrEnum):
     OPEN_CASE = "open_case"  # 开案件
     CASE_STAGE = "case_stage"  # 案件阶段变化
     WAKE_AGENT = "wake_agent"  # 唤醒 agent
+    ENQUEUE = "enqueue"  # 排队
+    DROP_CASE = "drop_case"  # 不再运行
+    VOID_PLAN = "void_plan"  # 方案作废
+    BUDGET_EXHAUSTED = "budget_exhausted"  # 调用预算用完
 
 
 ACCOUNT = "account"  # 对象：整个券商账户
