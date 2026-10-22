@@ -8,6 +8,9 @@
 案件的方案（order-flow spec「案件的方案」，update-order-flow-case-plans 的 design D1、D2、D4、D6）：
 首次检查时按确认规则决定要不要人工确认，不要的写自动执行；之后的步骤带着来源（CaseSource）：确认
 消息附上案件的意见，退出方案确认超时以后告警，订单记下来源案件。/plan 的方案来源为 None。
+
+排队运行作废案件的方案（order-flow spec「作废案件的方案」，add-queue-runner 的 design D6）：等确认时
+收到的作废由 settle 处理（Stage.VOIDED），确认以后等开盘、等重试时收到的由 void_queued 处理。
 """
 
 import logging
@@ -98,13 +101,14 @@ class Stage(StrEnum):
     REJECTED = "rejected"
     TIMED_OUT = "timed_out"
     UNSENT = "unsent"
+    VOIDED = "voided"  # 排队运行要求作废；值和 ConfirmationOutcome.VOIDED 相同
 
 
 class PlanEnd(StrEnum):
     """下单流程怎样结束：工作流的返回值。"""
 
     SUBMITTED = "submitted"  # 订单交给盘中巡检
-    VOIDED = "voided"  # 确认以后作废
+    VOIDED = "voided"  # 作废：确认以后作废，或者排队运行要求作废
     REJECTED = "rejected"  # 人工拒绝
     TIMED_OUT = "timed_out"  # 确认超时
     UNSENT = "unsent"  # 确认请求发不出去
@@ -268,7 +272,8 @@ class OrderFlow:
 
         requested 是请求确认那一步的结果，发不出去时为 None。写程序日志的人的确认、拒绝或超时，
         以及释放预留，见 program-log spec「人的动作」。案件的方案确认超时以后要告警的（退出类），
-        超时和发不出去时在释放以后推送告警，不拿锁。
+        超时和发不出去时在释放以后推送告警，不拿锁。等确认时被排队运行作废的，报告确认消息已作废、
+        释放全部预留，不告警（spec「作废案件的方案」）。
         """
         log, subject = self._services.log, str(plan.plan_id)
         trade = trade_text(plan, None)
@@ -296,6 +301,12 @@ class OrderFlow:
                 assert requested is not None  # 拒绝只发生在发出了确认消息以后
                 log.write(Actor.HUMAN, Action.REJECT, subject, trade, inputs=[requested.message_id])
                 reason = "人工拒绝"
+            case Stage.VOIDED:
+                assert requested is not None  # 作废在等确认时收到，确认消息已经发出
+                self._notification.finish_confirmation(
+                    plan.plan_id, requested.message_id, ConfirmationOutcome.VOIDED
+                )
+                reason = queued_text(plan)
             case _:
                 reason = "确认请求没有发出去，按确认超时处理"
         with self._services.lock:
@@ -359,6 +370,30 @@ class OrderFlow:
         if order is not None:
             self._hand_over(plan, order)
             return PlanEnd.SUBMITTED
+        self._notification.alert(str(plan.plan_id), void_text(plan, decision, [reason]))
+        return PlanEnd.VOIDED
+
+    def void_queued(
+        self, plan: TradePlan, decision: RiskDecision, requested: Requested | None
+    ) -> PlanEnd:
+        """确认以后等开盘、等重试时被排队运行作废，见 spec「作废案件的方案」。
+
+        拿锁看这个方案有没有订单：有就交给盘中巡检；没有就释放全部预留，放开锁以后报告确认消息已作废
+        （requested 是请求确认那一步的结果，不要确认的方案为 None）、推送作废的告警。
+        """
+        services = self._services
+        with services.lock:
+            order = services.execution.order(plan.plan_id)
+            if order is None:
+                release(services.risk, services.log, plan.plan_id, queued_text(plan))
+        if order is not None:
+            self._hand_over(plan, order)
+            return PlanEnd.SUBMITTED
+        if requested is not None:
+            self._notification.finish_confirmation(
+                plan.plan_id, requested.message_id, ConfirmationOutcome.VOIDED
+            )
+        reason = f"{plan.symbol} 有新案件排队"
         self._notification.alert(str(plan.plan_id), void_text(plan, decision, [reason]))
         return PlanEnd.VOIDED
 
@@ -467,6 +502,11 @@ def void_text(plan: TradePlan, decision: RiskDecision, reasons: Sequence[str]) -
     """方案作废的告警：动作、股票、确认的股数、方案 ID，每个原因一行。"""
     head = f"方案作废，不会下单：{trade_text(plan, decision.quantity)}（方案 ID {plan.plan_id}）"
     return "\n".join([head, *reasons])
+
+
+def queued_text(plan: TradePlan) -> str:
+    """排队运行作废时释放预留的原因。"""
+    return f"{plan.symbol} 有新案件排队，方案作废"
 
 
 def error_text(

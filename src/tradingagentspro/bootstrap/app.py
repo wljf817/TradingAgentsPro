@@ -108,7 +108,12 @@ from tradingagentspro.shared.trading_calendar import TradingCalendar
 from tradingagentspro.workflows.emergency_flow import EmergencyDecisions, EmergencyFlow
 from tradingagentspro.workflows.health import HealthMonitor, degraded_text
 from tradingagentspro.workflows.order_flow import OrderFlow, OrderFlowConfig, TradeServices
-from tradingagentspro.workflows.order_workflow import OrderPlanIntake, deliver_decision, install
+from tradingagentspro.workflows.order_workflow import (
+    OrderPlanIntake,
+    deliver_decision,
+    install,
+    wait_decision,
+)
 from tradingagentspro.workflows.patrol import PatrolConfig, SessionPatrol
 from tradingagentspro.workflows.pool_sync import PoolSync
 from tradingagentspro.workflows.reconciliation import startup_text
@@ -129,7 +134,8 @@ class QuoteContext(SnapshotContext, Protocol):
 class Externals:
     """程序和外界接触的地方。运行时用 SYSTEM_EXTERNALS，测试换成替身，其余照常装配。
 
-    sleep 是下单流程等开盘、等重试用的持久化休眠，见 add-order-flow 的 design D13。
+    wait 是下单流程等开盘、等重试用的持久化等待，期间收到作废就提前返回，见 add-order-flow 的
+    design D13 和 add-queue-runner 的 design D6。
     """
 
     clock: Clock
@@ -137,7 +143,7 @@ class Externals:
     alpaca: Callable[[AlpacaConfig], AlpacaClient]
     opend: Callable[[MoomooConfig], QuoteContext]
     discord: Callable[[DiscordConfig, PlanCommand], Gateway]
-    sleep: Callable[[float], None]
+    wait: Callable[[float], str | None]
 
 
 SYSTEM_EXTERNALS = Externals(
@@ -146,7 +152,7 @@ SYSTEM_EXTERNALS = Externals(
     alpaca=AlpacaClient,
     opend=open_quote_context,
     discord=DiscordGateway,
-    sleep=DBOS.sleep,
+    wait=wait_decision,
 )
 
 
@@ -407,7 +413,7 @@ def start(
         # enable_patching：程序更新以后照样恢复进行中的下单流程，见 add-order-flow 的 design D10
         DBOS(config={"name": APP_NAME, "system_database_url": url, "enable_patching": True})
         on_stop(stack, "DBOS", DBOS.destroy)
-        install(parts.flow, externals.sleep)
+        install(parts.flow, externals.wait)
         DBOS.launch()
         _log.info("DBOS 已启动")
     with step("开始盘中巡检"):

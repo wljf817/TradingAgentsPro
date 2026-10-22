@@ -12,8 +12,8 @@
 
 ## 3. 下单流程收作废
 
-- [ ] 3.1 先写测试（design D6）：`tests/workflows/test_order_flow.py` 覆盖 `settle` 的作废（报告已作废、释放的原因、不告警）和 `void_queued` 的两种结果（有订单交给巡检、没有订单释放并告警）及告警的文字；`tests/workflows/test_order_workflow.py`（真的 DBOS）覆盖 order-flow spec「作废案件的方案」的七个场景、「结果送回案件」的「被排队运行作废」、「告警」的「排队运行作废已经确认的方案的告警」，`FakeSleep` 改成满足 `wait` 的替身，能在指定的一次等待里交回作废。验证：确认因为 `Stage.VOIDED`、`void_plan`、`PlanEvent.VOIDED` 不存在而失败
-- [ ] 3.2 实现（design D6）：`plan_handoff.py` 的 `PlanEvent.VOIDED`；`order_flow.py` 的 `Stage.VOIDED`、`settle` 的作废分支、`void_queued`；`order_workflow.py` 的 `_EVENTS`、`install(flow, wait)`、`_execute` 的等待收作废、step `order_plan.void_queued`、`void_plan`、`wait_decision`，模块说明写上作废；`bootstrap/app.py` 的 `Externals.sleep` 改名 `wait`、`SYSTEM_EXTERNALS` 用 `wait_decision`；`tests/bootstrap/externals.py` 的 `WorldSleep` 跟着改。验证：3.1 的测试通过；原有的 `tests/workflows`、`tests/bootstrap` 测试只改替身和参数名，全部通过；`uv run mypy`、`uv run lint-imports` 通过
+- [x] 3.1 先写测试（design D6）：`tests/workflows/test_order_flow.py` 覆盖 `settle` 的作废（报告已作废、释放的原因、不告警）和 `void_queued` 的两种结果（有订单交给巡检、没有订单释放并告警）及告警的文字；`tests/workflows/test_order_workflow.py`（真的 DBOS）覆盖 order-flow spec「作废案件的方案」的七个场景、「结果送回案件」的「被排队运行作废」、「告警」的「排队运行作废已经确认的方案的告警」，`FakeSleep` 改成满足 `wait` 的替身，能在指定的一次等待里交回作废。验证：确认因为 `Stage.VOIDED`、`void_plan`、`PlanEvent.VOIDED` 不存在而失败
+- [x] 3.2 实现（design D6）：`plan_handoff.py` 的 `PlanEvent.VOIDED`；`order_flow.py` 的 `Stage.VOIDED`、`settle` 的作废分支、`void_queued`；`order_workflow.py` 的 `_EVENTS`、`install(flow, wait)`、`_execute` 的等待收作废、step `order_plan.void_queued`、`void_plan`、`wait_decision`，模块说明写上作废；`bootstrap/app.py` 的 `Externals.sleep` 改名 `wait`、`SYSTEM_EXTERNALS` 用 `wait_decision`；`tests/bootstrap/externals.py` 的 `WorldSleep` 跟着改。验证：3.1 的测试通过；原有的 `tests/workflows`、`tests/bootstrap` 测试只改替身和参数名，全部通过；`uv run mypy`、`uv run lint-imports` 通过
 
 ## 4. 案件工作流：运行中的案件和作废
 

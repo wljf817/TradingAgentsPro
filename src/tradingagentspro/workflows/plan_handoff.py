@@ -28,6 +28,7 @@ class PlanEvent(StrEnum):
     TIMED_OUT = "timed_out"  # 已超时，包括确认请求发不出去
     SUBMITTED = "submitted"  # 订单已提交
     RECHECK_VOIDED = "recheck_voided"  # 再校验作废
+    VOIDED = "voided"  # 方案被作废：排队运行要求作废，见 order-flow spec「作废案件的方案」
     FAILED = "failed"  # 出错
 
 
