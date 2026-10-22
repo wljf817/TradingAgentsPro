@@ -11,7 +11,10 @@ design D10。确认按钮的结果先送给紧急退出流程，它不在等的�
 数据库升级以后建程序日志、写启动（需要时先写崩溃恢复），关闭数据库连接以前写停止；装配好的通知、
 各流程都写进这一个程序日志，以后的流程从 TradingApp.log 取，见 add-program-log 的 design D7。
 股票池、跟进和案件记录交给下单流程（案件的方案）和巡检里的股票池跟上持仓，以后的流程从 TradingApp
-取；案件工作流和交接还不装配，见 update-order-flow-case-plans 的 design D9。
+取，见 update-order-flow-case-plans 的 design D9。案件那一侧（Agent 网关和替身、新闻和公告、公司
+数据、寻股粗筛、快照、案件工作流和交接、排队运行）也在这里装配：DBOS launch 以前装上案件工作流，
+launch 以后开始排队运行，再开始盘中巡检；健康监控读网关的模型和预算、排队运行的心跳。以后的触发源
+从 TradingApp.queue 排队。见 add-queue-runner 的 design D8、D12。
 """
 
 import logging
@@ -37,9 +40,13 @@ from tradingagentspro.bootstrap.startup import (
     record_startup,
 )
 from tradingagentspro.integrations.alpaca import (
+    AlpacaBarsConfig,
+    AlpacaBarSource,
     AlpacaBroker,
     AlpacaClient,
     AlpacaConfig,
+    AlpacaNewsConfig,
+    AlpacaNewsSource,
     AlpacaStopBroker,
     configure_account,
 )
@@ -50,9 +57,13 @@ from tradingagentspro.integrations.discord import (
     Gateway,
     PlanCommand,
 )
+from tradingagentspro.integrations.finnhub import FinnhubSource
 from tradingagentspro.integrations.moomoo import (
     MoomooConfig,
     MoomooQuoteSource,
+    MoomooSecuritiesConfig,
+    MoomooSecuritySource,
+    SecuritiesContext,
     SnapshotContext,
     open_quote_context,
 )
@@ -62,8 +73,15 @@ from tradingagentspro.integrations.nyse_calendar import (
     load_nyse_calendar,
 )
 from tradingagentspro.integrations.random_ids import RandomIdGenerator
+from tradingagentspro.integrations.sec import SecFilingSource
+from tradingagentspro.integrations.standin import StandInBackend, StandInConfig, stand_in_models
 from tradingagentspro.integrations.system_clock import SystemClock
 from tradingagentspro.modules.caserecords import CaseRecordService, PostgresCaseRecordStore
+from tradingagentspro.modules.companydata import (
+    CompanyDataConfig,
+    CompanyDataService,
+    PostgresEarningsStore,
+)
 from tradingagentspro.modules.emergency import EmergencyConfig, EmergencyService
 from tradingagentspro.modules.execution import (
     Broker,
@@ -81,8 +99,19 @@ from tradingagentspro.modules.followups import (
     FollowUpService,
     PostgresFollowUpStore,
 )
+from tradingagentspro.modules.gateway import (
+    AgentCallService,
+    CallBudgetService,
+    GatewayConfig,
+    ModelFallbackService,
+    PostgresCostStore,
+    PostgresTaskStore,
+    TaskDispatchService,
+)
 from tradingagentspro.modules.health import HealthConfig, HealthService
+from tradingagentspro.modules.heartbeat import HeartbeatConfig
 from tradingagentspro.modules.marketdata import MarketDataConfig, MarketDataService
+from tradingagentspro.modules.news import NewsService, PostgresNewsStore
 from tradingagentspro.modules.notification import (
     ConfirmationOutcome,
     DecisionHandler,
@@ -96,7 +125,9 @@ from tradingagentspro.modules.programlog import (
     ProgramLog,
 )
 from tradingagentspro.modules.risk import PostgresReservationStore, RiskConfig, RiskService
-from tradingagentspro.modules.statestore import connect
+from tradingagentspro.modules.scheduler import PostgresQueueStore, QueueService, SchedulerConfig
+from tradingagentspro.modules.screener import PostgresScreenStore, ScreenerConfig, ScreenerService
+from tradingagentspro.modules.statestore import PostgresSnapshotStore, SnapshotService, connect
 from tradingagentspro.modules.stockpool import (
     PostgresStockPoolStore,
     StockPoolConfig,
@@ -105,18 +136,28 @@ from tradingagentspro.modules.stockpool import (
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.ids import IdGenerator
 from tradingagentspro.shared.trading_calendar import TradingCalendar
+from tradingagentspro.workflows import case_workflow, order_workflow
+from tradingagentspro.workflows.case_conclusion import CheckConfigs
+from tradingagentspro.workflows.case_flow import CaseFlow, CaseFlowConfig, CaseServices
 from tradingagentspro.workflows.emergency_flow import EmergencyDecisions, EmergencyFlow
 from tradingagentspro.workflows.health import HealthMonitor, degraded_text
 from tradingagentspro.workflows.order_flow import OrderFlow, OrderFlowConfig, TradeServices
 from tradingagentspro.workflows.order_workflow import (
+    CasePlanHandoff,
     OrderPlanIntake,
     deliver_decision,
-    install,
     wait_decision,
 )
 from tradingagentspro.workflows.patrol import PatrolConfig, SessionPatrol
 from tradingagentspro.workflows.pool_sync import PoolSync
+from tradingagentspro.workflows.queue_runner import (
+    DbosCases,
+    QueueParts,
+    QueueRunner,
+    QueueRunnerConfig,
+)
 from tradingagentspro.workflows.reconciliation import startup_text
+from tradingagentspro.workflows.snapshot_flow import SnapshotConfig, SnapshotFlow
 
 _log = logging.getLogger(__name__)
 
@@ -124,8 +165,8 @@ _log = logging.getLogger(__name__)
 APP_NAME = "tradingagentspro"
 
 
-class QuoteContext(SnapshotContext, Protocol):
-    """OpenD 行情连接里装配用到的部分：取快照，退出时关闭。"""
+class QuoteContext(SnapshotContext, SecuritiesContext, Protocol):
+    """OpenD 行情连接里装配用到的部分：取快照、条件选股和股票的静态信息，退出时关闭。"""
 
     def close(self) -> None: ...
 
@@ -186,6 +227,7 @@ class TradingApp:
     stock_pool: StockPoolService
     follow_ups: FollowUpService
     case_records: CaseRecordService
+    queue: QueueRunner  # 排队运行：触发源从这里排进案件
     reconciliation: Reconciliation  # 启动对账的结果
     lock: threading.RLock  # 执行模块和风控的调用串行用的锁，见 session-patrol spec
     log: ProgramLog  # 程序日志，见 program-log spec
@@ -265,6 +307,94 @@ class _Parts:
     monitor: HealthMonitor
     patrol: SessionPatrol
     flow: OrderFlow
+    case_flow: CaseFlow
+    queue: QueueRunner
+
+
+@dataclass(frozen=True, slots=True)
+class _CaseSide:
+    """案件那一侧装配好的部件：案件工作流的用例，以及健康监控要读的备用模型和预算。"""
+
+    flow: CaseFlow
+    fallback: ModelFallbackService
+    budget: CallBudgetService
+    gateway: GatewayConfig
+    scheduler: SchedulerConfig
+
+
+def _case_side(
+    settings: Settings,
+    externals: Externals,
+    engine: Engine,
+    calendar: TradingCalendar,
+    program_log: ProgramLog,
+    trade: tuple[ExecutionService, MarketDataService, QuoteContext, NotificationService],
+    records: tuple[StockPoolService, StockPoolConfig, FollowUpService, CaseRecordService],
+) -> _CaseSide:
+    """按 bootstrap spec「模拟盘的装配」建出案件那一侧：网关（模型用替身）、新闻和公告、公司数据、
+    寻股粗筛、快照和案件工作流的用例，见 add-queue-runner 的 design D12。
+    """
+    clock, ids = externals.clock, externals.ids
+    execution, market_data, quotes, notification = trade
+    stock_pool, pool_config, follow_ups, case_records = records
+    gateway, scheduler, models = GatewayConfig(), SchedulerConfig(), stand_in_models()
+    fallback = ModelFallbackService(clock, models, gateway)
+    budget = CallBudgetService(PostgresCostStore(engine), clock, calendar, models, gateway)
+    tasks = TaskDispatchService(PostgresTaskStore(engine), clock, ids, gateway, program_log)
+    agents = AgentCallService(StandInBackend(calendar, StandInConfig()), fallback, budget, tasks)
+    alpaca = settings.alpaca
+    news = NewsService(
+        AlpacaNewsSource(AlpacaNewsConfig(key_id=alpaca.key_id, secret_key=alpaca.secret_key)),
+        SecFilingSource(settings.sec),
+        PostgresNewsStore(engine, clock),
+    )
+    company_data = CompanyDataService(
+        FinnhubSource(settings.finnhub),
+        PostgresEarningsStore(engine, clock),
+        clock,
+        CompanyDataConfig(),
+    )
+    screener = ScreenerService(
+        MoomooSecuritySource(quotes, MoomooSecuritiesConfig()),
+        AlpacaBarSource(AlpacaBarsConfig(key_id=alpaca.key_id, secret_key=alpaca.secret_key)),
+        company_data,
+        PostgresScreenStore(engine, clock),
+        clock,
+        calendar,
+        ScreenerConfig(),
+        pool_config,
+    )
+    snapshots = SnapshotService(PostgresSnapshotStore(engine, clock), program_log)
+    snapshot_flow = SnapshotFlow(
+        execution,
+        market_data,
+        stock_pool,
+        news,
+        company_data,
+        screener,
+        snapshots,
+        clock,
+        calendar,
+        SnapshotConfig(),
+    )
+    services = CaseServices(
+        agents=agents,
+        tasks=tasks,
+        budget=budget,
+        fallback=fallback,
+        records=case_records,
+        snapshots=snapshots,
+        snapshot_flow=snapshot_flow,
+        pool=stock_pool,
+        follow_ups=follow_ups,
+        notification=notification,
+        log=program_log,
+        clock=clock,
+        calendar=calendar,
+        ids=ids,
+    )
+    flow = CaseFlow(services, CheckConfigs(gateway, scheduler, HeartbeatConfig()), CaseFlowConfig())
+    return _CaseSide(flow, fallback, budget, gateway, scheduler)
 
 
 def _assemble(
@@ -309,9 +439,9 @@ def _assemble(
     decisions = EmergencyDecisions()  # 紧急退出在等的确认，按钮的回调先送到这里
     notifier = DiscordNotifier(gateway, settings.discord, clock, decision_handler(decisions))
     notification = NotificationService(notifier, clock, notification_config, program_log)
-    monitor = HealthMonitor(health, execution, market_data, notification, lock, clock, program_log)
+    pool_config = StockPoolConfig()  # 股票池和寻股粗筛共用
     stock_pool = StockPoolService(
-        PostgresStockPoolStore(engine, clock), clock, calendar, StockPoolConfig(), program_log
+        PostgresStockPoolStore(engine, clock), clock, calendar, pool_config, program_log
     )
     follow_ups = FollowUpService(
         PostgresFollowUpStore(engine, clock),
@@ -322,6 +452,51 @@ def _assemble(
         program_log,
     )
     case_records = CaseRecordService(PostgresCaseRecordStore(engine, clock), clock)
+    cases = _case_side(
+        settings,
+        externals,
+        engine,
+        calendar,
+        program_log,
+        (execution, market_data, quotes, notification),
+        (stock_pool, pool_config, follow_ups, case_records),
+    )
+    emergency_flow = EmergencyFlow(
+        services,
+        notification,
+        clock,
+        calendar,
+        emergency_config,
+        notification_config,
+        decisions,
+    )
+    queue = QueueRunner(
+        QueueParts(
+            queue=QueueService(PostgresQueueStore(engine), clock, externals.ids),
+            cases=DbosCases(),
+            pool=stock_pool,
+            health=health,
+            budget=cases.budget,
+            gateway=cases.gateway,
+            records=case_records,
+            exiting=emergency_flow.exiting,
+            scheduler=cases.scheduler,
+            log=program_log,
+            clock=clock,
+        ),
+        QueueRunnerConfig(),
+    )
+    monitor = HealthMonitor(
+        health,
+        execution,
+        market_data,
+        notification,
+        lock,
+        program_log,
+        fallback=cases.fallback,
+        budget=cases.budget,
+        heartbeat=queue.heartbeat,
+    )
     return _Parts(
         alpaca=client,
         execution=execution,
@@ -343,15 +518,7 @@ def _assemble(
             monitor,
             lock,
             PatrolConfig(),
-            emergency=EmergencyFlow(
-                services,
-                notification,
-                clock,
-                calendar,
-                emergency_config,
-                notification_config,
-                decisions,
-            ),
+            emergency=emergency_flow,
             pool=PoolSync(execution, stock_pool, follow_ups, case_records, calendar),
             log=program_log,
         ),
@@ -364,6 +531,8 @@ def _assemble(
             calendar,
             OrderFlowConfig(),
         ),
+        case_flow=cases.flow,
+        queue=queue,
     )
 
 
@@ -413,9 +582,13 @@ def start(
         # enable_patching：程序更新以后照样恢复进行中的下单流程，见 add-order-flow 的 design D10
         DBOS(config={"name": APP_NAME, "system_database_url": url, "enable_patching": True})
         on_stop(stack, "DBOS", DBOS.destroy)
-        install(parts.flow, externals.wait)
+        order_workflow.install(parts.flow, externals.wait)
+        case_workflow.install(parts.case_flow, CasePlanHandoff())
         DBOS.launch()
         _log.info("DBOS 已启动")
+    with step("开始排队运行"):
+        parts.queue.start()
+        on_stop(stack, "排队运行", parts.queue.stop)
     with step("开始盘中巡检"):
         parts.patrol.start()
         on_stop(stack, "盘中巡检", parts.patrol.stop)
@@ -432,6 +605,7 @@ def start(
         stock_pool=parts.stock_pool,
         follow_ups=parts.follow_ups,
         case_records=parts.case_records,
+        queue=parts.queue,
         reconciliation=reconciliation,
         lock=parts.lock,
         log=program_log,

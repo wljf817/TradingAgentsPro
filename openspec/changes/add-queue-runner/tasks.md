@@ -32,13 +32,13 @@
 
 ## 7. 健康监控接线
 
-- [ ] 7.1 先写测试（design D8）`tests/workflows/test_health.py`：health-monitoring spec「健康信号」改过和新加的场景（调度器心跳停了、PM 没有可用的模型、持仓保留预算用完、读预算时数据库出错、一轮做得久），模型的熔断用 `ModelFallbackService`，预算用内存的费用，心跳用给定的函数；`tests/workflows/test_patrol.py` 里构造 `HealthMonitor` 的地方跟着改。验证：确认因为 `HealthMonitor` 的新参数不存在而失败
-- [ ] 7.2 实现（design D8）：`health.py` 的 `HealthMonitor` 加 `fallback`、`budget`、`heartbeat`，`signals` 取这三项；模块说明写上。验证：7.1 的测试和原有的健康、巡检测试通过；`uv run mypy` 通过
+- [x] 7.1 先写测试（design D8）`tests/workflows/test_health.py`：health-monitoring spec「健康信号」改过和新加的场景（调度器心跳停了、PM 没有可用的模型、持仓保留预算用完、读预算时数据库出错、一轮做得久），模型的熔断用 `ModelFallbackService`，预算用内存的费用，心跳用给定的函数；`tests/workflows/test_patrol.py` 里构造 `HealthMonitor` 的地方跟着改。验证：确认因为 `HealthMonitor` 的新参数不存在而失败
+- [x] 7.2 实现（design D8）：`health.py` 的 `HealthMonitor` 加 `fallback`、`budget`、`heartbeat`，`signals` 取这三项；模块说明写上。验证：7.1 的测试和原有的健康、巡检测试通过；`uv run mypy` 通过
 
 ## 8. 装配
 
-- [ ] 8.1 先写测试（design D12）`tests/bootstrap/`：bootstrap spec 改过的「环境变量」「启动顺序」「模拟盘的装配」「第一次健康判定」「DBOS」「停止」的场景，包括缺少两个新变量、启动时持仓保留预算用完、启动时恢复等确认的案件、替身跑到下单、新案件排队时作废等确认的方案；四个数据源用 `Externals.http` 的 `MockTransport` 按地址回答；`TradingApp.queue` 存在；`tests/deploy` 的模板有两个新变量。验证：确认失败
-- [ ] 8.2 实现（design D12）：`settings.py` 的两个变量和 `Settings` 的两项；`bootstrap/app.py` 建网关、数据、快照、案件工作流、排队运行，`EmergencyFlow` 先建，一份 `StockPoolConfig` 和一份 `SchedulerConfig`，`QuoteContext` 加 `SecuritiesContext`，`Externals.http`，启动时依次 install 两个工作流、launch、开始排队运行、开始巡检，`on_stop` 的顺序，`TradingApp.queue`；`startup.py` 不变（`judge_health_at_startup` 照用 `monitor.signals`）；`deploy/tradingagentspro.env.example` 加两个变量和说明；模块说明写上。验证：8.1 的测试和 `tests/bootstrap`、`tests/deploy` 原有的测试通过；`uv run mypy`、`uv run lint-imports` 通过
+- [x] 8.1 先写测试（design D12）`tests/bootstrap/`：bootstrap spec 改过的「环境变量」「启动顺序」「模拟盘的装配」「第一次健康判定」「DBOS」「停止」的场景，包括缺少两个新变量、启动时持仓保留预算用完、启动时恢复等确认的案件、替身跑到下单、新案件排队时作废等确认的方案；`TradingApp.queue` 存在；`tests/deploy` 的模板有两个新变量。验证：确认失败
+- [x] 8.2 实现（design D12）：`settings.py` 的两个变量和 `Settings` 的两项；`bootstrap/app.py` 建网关、数据、快照、案件工作流、排队运行，`EmergencyFlow` 先建，一份 `StockPoolConfig` 和一份 `SchedulerConfig`，`QuoteContext` 加 `SecuritiesContext`（测试的 OpenD 替身补上两个方法），启动时依次 install 两个工作流、launch、开始排队运行、开始巡检，`on_stop` 的顺序，`TradingApp.queue`；`startup.py` 不变（`judge_health_at_startup` 照用 `monitor.signals`）；`deploy/README.md` 写上两个新变量；`deploy/tradingagentspro.env.example` 加两个变量和说明；模块说明写上。验证：8.1 的测试和 `tests/bootstrap`、`tests/deploy` 原有的测试通过；`uv run mypy`、`uv run lint-imports` 通过
 
 ## 9. 收尾
 

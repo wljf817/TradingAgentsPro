@@ -208,7 +208,7 @@ self._beat = parts.clock.now()
 
 `DbosCases` 在 `queue_runner.py`：`running` 是 `case_workflow.running_cases()`，`start` 是 `start_case`，`exists` 是 `DBOS.get_workflow_status(str(case_id)) is not None`，`void` 是 `order_workflow.void_plan`。
 
-### D5 运行中的案件：列出 PENDING 的案件工作流
+### D5 运行中的案件：列出 PENDING 和 ENQUEUED 的案件工作流
 
 ```python
 def running_cases() -> tuple[tuple[UUID, CaseProgress], ...]:
@@ -216,10 +216,11 @@ def running_cases() -> tuple[tuple[UUID, CaseProgress], ...]:
     已经结束的不算。"""
 ```
 
-- `DBOS.list_workflows(name="case", status="PENDING", load_output=False)`：子工作流 `case_task` 名字不同，不在里面；出错停下的是 ERROR，不在里面
+- `DBOS.list_workflows(name="case", status=["PENDING", "ENQUEUED"], load_output=False)`：子工作流 `case_task` 名字不同，不在里面；出错停下的是 ERROR，不在里面
+- 进程重启以后 DBOS 先把要恢复的工作流改成 ENQUEUED，排进它内部的恢复队列，过一会儿才接着跑、改回 PENDING（用真的 DBOS 看到的）。只列 PENDING 的话，重启以后排队运行的头几轮看不到这些案件，会把它们的股票当成空的
 - 还没发布进展（`get_event` 为 None）：`start_case` 以后、工作流的线程还没跑到第一次 `publish` 的那一会儿。这时进展取输入里的 `CaseDefinition`：`CaseProgress(definition.case_type, definition.symbol, new_case(definition.case_type), None)`，刚开始的案件在唤醒 PM 或复盘，都算在调用模型。不这样做的话，下一轮会把这只股票当成空的
 - 进展的阶段是已结束的（工作流在写结束的 step）不算运行中，和 `case_progress` 一样
-- 不另外记"排队运行启动过哪些案件"：DBOS 里 PENDING 的就是运行中的，包括重启以后恢复的
+- 不另外记"排队运行启动过哪些案件"：DBOS 里 PENDING 和 ENQUEUED 的就是运行中的，包括重启以后恢复的
 
 ### D6 作废交给下单流程
 
@@ -253,7 +254,7 @@ def running_cases() -> tuple[tuple[UUID, CaseProgress], ...]:
 ### D8 心跳和健康信号
 
 - `QueueRunner` 建好时 `_beat = clock.now()`，每一轮做完 `_beat = clock.now()`；`heartbeat()` 交回它。只有排队运行的线程写，别的线程读一个引用，不加锁
-- `HealthMonitor` 的构造参数加 `fallback: ModelFallbackService`、`budget: CallBudgetService`、`heartbeat: Callable[[], datetime]`；`signals` 里 `pm_model_available=fallback.has_available_model(Agent.PM)`、`critic_model_available=...(Agent.CRITIC)`、`reserve_budget_exhausted=Budget.RESERVE in budget.status().exhausted`、`scheduler_heartbeat_at=heartbeat()`
+- `HealthMonitor` 的构造参数加 `fallback: ModelFallbackService`、`budget: CallBudgetService`、`heartbeat: Callable[[], datetime]`，去掉只给心跳用的 `clock`；`signals` 里 `pm_model_available=fallback.has_available_model(Agent.PM)`、`critic_model_available=...(Agent.CRITIC)`、`reserve_budget_exhausted=Budget.RESERVE in budget.status().exhausted`、`scheduler_heartbeat_at=heartbeat()`
 - 启动时的第一次健康判定在 DBOS 和排队运行之前，用的是同一个 `signals`：心跳就是排队运行建好的时刻，几秒以前（bootstrap spec「第一次健康判定」）
 - 一起接上模型和持仓保留预算：网关在本变更装配，health-monitoring spec 写死的理由（"M2 还没有 Agent 网关"）不再成立；add-model-fallback 的 design 和 update-task-cost-storage 的 proposal 都把这两项留给了 M4 装配网关的时候
 - 读预算是一次数据库查询，出错时 `judge` 抛出，巡检按"健康判定出错"写 ERROR（health-monitoring spec「健康判定的失败」）
@@ -294,7 +295,8 @@ def running_cases() -> tuple[tuple[UUID, CaseProgress], ...]:
 - `EmergencyFlow` 先建出来，交给巡检和排队运行
 - OpenD 的行情连接同时是股票列表的连接：`QuoteContext` 协议加上 `SecuritiesContext`（moomoo 的 `OpenQuoteContext` 都满足）
 - `Settings` 加 `finnhub_api_key: SecretStr`、`sec_user_agent: str`，`VARIABLES` 加两项；部署的模板跟着加（deployment spec「密钥」由 `tests/deploy` 检查）
-- `Externals` 加 `http: httpx.BaseTransport | None`：交给四个数据源（Alpaca 新闻、Alpaca 日线、SEC、Finnhub）；运行时为 None（各自连真的地址），测试换成按地址回答的 `MockTransport`；`sleep` 改名 `wait`（D6）
+- 四个数据源（Alpaca 新闻、Alpaca 日线、SEC、Finnhub）建出来时不发请求；单只股票的案件生成快照时只读新闻、公告和财报的表，只有寻股才调用粗筛的数据源。所以 `Externals` 不为它们加替身，启动测试里的案件也不会访问外网；测试的 OpenD 替身补上条件选股和静态信息两个方法（返回错误）
+- `Externals.sleep` 改名 `wait`（D6）
 - 启动：`DBOS(config)` → `order_workflow.install(order_flow, externals.wait)` → `case_workflow.install(case_flow, CasePlanHandoff())` → `DBOS.launch()` → `runner.start()`（写 INFO：排队运行已开始，间隔 5 秒）→ `patrol.start()`。`on_stop` 的登记顺序是 DBOS、排队运行、巡检，关闭时反过来
 - `TradingApp` 加 `queue: QueueRunner`
 - HTTP 客户端不在停止时关闭：和现有的 Alpaca 交易客户端一样，进程退出时一起结束
@@ -317,14 +319,14 @@ def running_cases() -> tuple[tuple[UUID, CaseProgress], ...]:
 - `tests/workflows/test_order_workflow.py`（真的 DBOS）：order-flow spec「作废案件的方案」的七个场景、「结果送回案件」「告警」新加的场景；`FakeSleep` 改成满足 `wait`，能在指定的一次等待里交回作废
 - `tests/workflows/test_emergency_*.py`：`exiting` 在开始、等确认、确认以后、清仓单结束、没有可卖的股数、到收盘时的取值
 - `tests/workflows/test_health.py`：health-monitoring spec「健康信号」新加的场景，模型从 `ModelFallbackService` 的熔断、预算从内存的费用、心跳从给定的函数
-- `tests/bootstrap/`：环境变量、启动和停止的顺序、启动时持仓保留预算用完、恢复等确认的案件、替身跑到下单和作废等确认的方案（四个数据源用 `MockTransport`）；`tests/deploy` 的模板
+- `tests/bootstrap/`：环境变量、启动和停止的顺序、启动时持仓保留预算用完、恢复等确认的案件、替身跑到下单和作废等确认的方案；`tests/deploy` 的模板
 - 阈值从配置读取，不在测试里硬编码
 
 ## Risks / Trade-offs
 
 - [下单流程的等开盘、等重试换成了 `DBOS.recv`，`order_plan` 的步骤变了] → 部署前确认没有 PENDING 的 `order_plan`（Migration Plan）；`recv` 的超时和 `sleep` 一样是持久化的
 - [作废最多晚一轮（5 秒）] → 只影响方案刚进入等确认的那几秒；proposal「需要人决定」第 3 条
-- [每一轮列出 PENDING 的案件工作流并读输入] → 运行中的案件只有几个到十几个；排队运行不拿锁，慢也不挡巡检和下单
+- [每一轮列出 PENDING 和 ENQUEUED 的案件工作流并读输入] → 运行中的案件只有几个到十几个；排队运行不拿锁，慢也不挡巡检和下单
 - [正在紧急退出的股票只在内存里] → 巡检每一轮都按清仓单找回；重启后第一轮可能漏一次，见省略的情况
 - [`list_workflows` 的名字按 `@DBOS.workflow(name="case")` 过滤] → tasks 里先用真的 DBOS 核实 PENDING 的案件能按这个名字列出来、子工作流不在里面
 

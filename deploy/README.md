@@ -125,6 +125,8 @@ exit
 
 服务器、频道和你自己的 ID：Discord 的用户设置 → 高级 → 打开开发者模式，然后右键服务器、频道、自己的头像，「复制 ID」。
 
+**Finnhub**：在 Finnhub 网站注册免费档，Dashboard 里复制 API key，下一步填进环境变量文件。
+
 ### 4. 环境变量文件
 
 ```bash
@@ -143,6 +145,7 @@ openssl rand -hex 24
   - `TRADINGAGENTSPRO_DATABASE_URL=postgresql://tradingagentspro:<数据库密码>@127.0.0.1:5432/tradingagentspro`
   - 第 3 步新生成的 Alpaca key 和 secret
   - Discord 的 token 和三个 ID
+  - Finnhub 的 API key；SEC 的 User-Agent，写明联系方式（比如 `tradingagentspro 你的邮箱`）
 - `/etc/tradingagentspro/opend.env`：`MOOMOO_LOGIN_ACCOUNT=<moomoo ID>`（数字的 moomoo ID，不用手机号）
 
 检查：

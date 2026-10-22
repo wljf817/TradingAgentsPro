@@ -2,19 +2,22 @@
 
 见 health-monitoring spec 和 add-health-monitoring 的 design。取信号、判定和推送告警都不拿锁；
 恢复后的对账拿着全程序共用的那把锁。状态的变化和恢复后的对账写进程序日志，见 program-log spec
-「系统的动作」和 add-program-log 的 design D9。
+「系统的动作」和 add-program-log 的 design D9。PM 和 Critic 还有没有可用的模型取 Agent 网关的备用
+模型，持仓保留预算取网关的预算，调度器心跳取排队运行，见 add-queue-runner 的 design D8。
 """
 
 import logging
 import threading
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from datetime import UTC, datetime
 
+from tradingagentspro.contracts.agent import Agent
 from tradingagentspro.modules.execution import (
     BrokerUnavailableError,
     ExecutionService,
     Reconciliation,
 )
+from tradingagentspro.modules.gateway import Budget, CallBudgetService, ModelFallbackService
 from tradingagentspro.modules.health import (
     HealthCheck,
     HealthMode,
@@ -25,7 +28,6 @@ from tradingagentspro.modules.health import (
 from tradingagentspro.modules.marketdata import MarketDataService, QuoteUnavailableError
 from tradingagentspro.modules.notification import NotificationService
 from tradingagentspro.modules.programlog import ACCOUNT, WHOLE_SYSTEM, Action, Actor, ProgramLog
-from tradingagentspro.shared.clock import Clock
 from tradingagentspro.workflows.entries import order_changes
 from tradingagentspro.workflows.reconciliation import (
     PAUSED,
@@ -54,7 +56,8 @@ class HealthMonitor:
     """健康监控接线，见 health-monitoring spec。
 
     signals 拼一次健康信号，启动时的第一次健康判定和巡检共用；judge 是巡检每一轮的「健康判定」。
-    只在启动的线程和巡检的线程里调用，同一时刻只有一个，见 design D1。log 是程序日志。
+    只在启动的线程和巡检的线程里调用，同一时刻只有一个，见 design D1。log 是程序日志。fallback、
+    budget 给出模型和持仓保留预算，heartbeat 给出调度器最近一次心跳（排队运行的）。
     """
 
     def __init__(
@@ -64,23 +67,28 @@ class HealthMonitor:
         market_data: MarketDataService,
         notification: NotificationService,
         lock: threading.RLock,
-        clock: Clock,
         log: ProgramLog,
+        *,
+        fallback: ModelFallbackService,
+        budget: CallBudgetService,
+        heartbeat: Callable[[], datetime],
     ) -> None:
         self._health = health
         self._execution = execution
         self._market_data = market_data
         self._notification = notification
         self._lock = lock
-        self._clock = clock
         self._log = log
+        self._fallback = fallback
+        self._budget = budget
+        self._heartbeat = heartbeat
         # 程序启动以后最近一次取到的参考股票更新时刻；还没取到过时为 None，见 design D3
         self._last_quote_at: datetime | None = None
 
     def signals(self, broker_connected: bool) -> HealthSignals:
         """一次判定的健康信号，见 health-monitoring spec「健康信号」和 design D3、D4。
 
-        取不到行情时沿用最近一次取到的更新时刻，并写一条 WARNING。
+        取不到行情时沿用最近一次取到的更新时刻，并写一条 WARNING。读预算的情况出错时原样抛出。
         """
         try:
             self._last_quote_at = self._market_data.last_update()
@@ -93,12 +101,12 @@ class HealthMonitor:
             )
             _log.warning("取不到行情（%s），行情最近一次更新的时刻%s", error, kept)
         return HealthSignals(
-            pm_model_available=True,
-            critic_model_available=True,
+            pm_model_available=self._fallback.has_available_model(Agent.PM),
+            critic_model_available=self._fallback.has_available_model(Agent.CRITIC),
             broker_connected=broker_connected,
             last_quote_at=self._last_quote_at,
-            reserve_budget_exhausted=False,
-            scheduler_heartbeat_at=self._clock.now(),
+            reserve_budget_exhausted=Budget.RESERVE in self._budget.status().exhausted,
+            scheduler_heartbeat_at=self._heartbeat(),
         )
 
     def judge(self, broker_connected: bool) -> None:

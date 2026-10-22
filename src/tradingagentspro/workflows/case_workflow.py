@@ -125,13 +125,16 @@ def start_case(
 
 
 def running_cases() -> tuple[tuple[UUID, CaseProgress], ...]:
-    """运行中的案件和它们的进展：PENDING 的 case 工作流，见 add-queue-runner 的 design D5。
+    """运行中的案件和它们的进展：PENDING 和 ENQUEUED 的 case 工作流，见 add-queue-runner 的
+    design D5。
 
-    还没发布进展的（开始运行以后、工作流的线程跑到第一次发布以前）按输入里开始时确定的案件类型给出
-    刚开始的进展：唤醒 PM 或者复盘，都在调用模型。进展是已结束的不算。
+    ENQUEUED 是进程重启以后 DBOS 正在恢复、还没接着跑的。还没发布进展的（开始运行以后、工作流的
+    线程跑到第一次发布以前）按输入里开始时确定的案件类型给出刚开始的进展：唤醒 PM 或者复盘，都在
+    调用模型。进展是已结束的不算。
     """
     running: list[tuple[UUID, CaseProgress]] = []
-    for workflow in DBOS.list_workflows(name="case", status="PENDING", load_output=False):
+    statuses = ["PENDING", "ENQUEUED"]
+    for workflow in DBOS.list_workflows(name="case", status=statuses, load_output=False):
         progress: CaseProgress | None = DBOS.get_event(
             workflow.workflow_id, PROGRESS, timeout_seconds=0
         )

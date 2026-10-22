@@ -14,6 +14,8 @@ from sqlalchemy.exc import ArgumentError
 
 from tradingagentspro.integrations.alpaca import AlpacaConfig
 from tradingagentspro.integrations.discord import DiscordConfig
+from tradingagentspro.integrations.finnhub import FinnhubConfig
+from tradingagentspro.integrations.sec import SecConfig
 
 DATABASE_URL = "TRADINGAGENTSPRO_DATABASE_URL"
 VARIABLES = (
@@ -24,6 +26,8 @@ VARIABLES = (
     "DISCORD_GUILD_ID",
     "DISCORD_CHANNEL_ID",
     "DISCORD_USER_ID",
+    "FINNHUB_API_KEY",
+    "SEC_USER_AGENT",
 )
 
 # 状态库只用 PostgreSQL 和 psycopg 3；写 postgresql:// 时 SQLAlchemy 默认找 psycopg2
@@ -41,6 +45,8 @@ class Settings:
     database_url: SecretStr  # 驱动已经换成 postgresql+psycopg
     alpaca: AlpacaConfig
     discord: DiscordConfig
+    finnhub: FinnhubConfig
+    sec: SecConfig
 
     @property
     def database_label(self) -> str:
@@ -62,7 +68,11 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
         secret_key=SecretStr(environ["APCA_API_SECRET_KEY"]),
     )
     return Settings(
-        database_url=_database_url(environ[DATABASE_URL]), alpaca=alpaca, discord=discord
+        database_url=_database_url(environ[DATABASE_URL]),
+        alpaca=alpaca,
+        discord=discord,
+        finnhub=FinnhubConfig(api_key=SecretStr(environ["FINNHUB_API_KEY"])),
+        sec=SecConfig(user_agent=environ["SEC_USER_AGENT"]),
     )
 
 
