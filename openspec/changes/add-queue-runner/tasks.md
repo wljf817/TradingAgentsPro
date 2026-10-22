@@ -17,8 +17,8 @@
 
 ## 4. 案件工作流：运行中的案件和作废
 
-- [ ] 4.1 先写测试（design D5、D7）`tests/workflows/test_case_workflow.py`（真的 DBOS）：`running_cases` 给出运行中的案件的进展、还没发布进展的按输入给出刚开始的进展、结束和出错停下的不算；case-workflow spec「交给下单」的「方案被作废」（等人工确认、等下单）。验证：确认因为 `running_cases`、`_PLAN_EVENTS` 没有作废而失败
-- [ ] 4.2 实现（design D5、D7）：`case_workflow.py` 的 `running_cases`、`_PLAN_EVENTS[PlanEvent.VOIDED]`，模块说明写上作废只在 `_deliver` 里收。验证：4.1 的测试通过，原有的案件工作流测试全部通过；`uv run mypy` 通过
+- [x] 4.1 先写测试（design D5、D7）`tests/workflows/test_case_workflow.py`（真的 DBOS）：`running_cases` 给出运行中的案件的进展、还没发布进展的按输入给出刚开始的进展、结束和出错停下的不算；case-workflow spec「交给下单」的「方案被作废」（等人工确认、等下单）。验证：确认因为 `running_cases`、`_PLAN_EVENTS` 没有作废而失败
+- [x] 4.2 实现（design D5、D7）：`case_workflow.py` 的 `running_cases`、`_PLAN_EVENTS[PlanEvent.VOIDED]`，模块说明写上作废只在 `_deliver` 里收。验证：4.1 的测试通过，原有的案件工作流测试全部通过；`uv run mypy` 通过
 
 ## 5. 紧急退出流程给出正在紧急退出的股票
 

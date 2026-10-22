@@ -5,12 +5,13 @@
 状态（CaseState）、按 step 的结果分支、发布案件的进展；时间、I/O、日志和告警都在 step 里（step 调用
 case_flow.py 的 CaseFlow）。案件状态只在这里：每次变化以后用 DBOS 的事件发布进展，别人只读。
 
-- 「排队运行」：start_case 开始运行一个案件，case_progress 读一个案件的进展，组出队列快照里运行中的
-  案件和还没提交订单的方案；部件在 DBOS launch 之前经 install 交进来
+- 「排队运行」：start_case 开始运行一个案件，running_cases 列出运行中的案件和它们的进展，组出队列
+  快照里运行中的案件和还没提交订单的方案；case_progress 读一个案件的进展；部件在 DBOS launch 之前
+  经 install 交进来
 - 「方案接下单」：实现 plan_handoff.PlanHandoff；方案进入风控时案件在工作流函数里调用它，之后等下单
   流程用 plan_handoff.report_plan 送回结果
-- 「紧急退出中止案件」「排队运行」的中止和作废：经 plan_handoff.PLAN_TOPIC 送给案件，由它们的变更在
-  等待里和调用 agent 以前收（design D3）
+- 排队运行作废方案：交给下单流程，下单流程经 PLAN_TOPIC 送回方案被作废，案件在 _deliver 的等待里
+  收到（add-queue-runner 的 design D6、D7）；作废的方案只在等人工确认、等下单，这两个阶段只在这里等
 
 子 agent 的任务每个开一个子工作流 case_task 并行运行（design D8）。
 """
@@ -76,6 +77,7 @@ _PLAN_EVENTS: Final[dict[PlanEvent, Callable[[CaseState], CaseState]]] = {
     PlanEvent.TIMED_OUT: CaseState.confirmation_timed_out,
     PlanEvent.SUBMITTED: CaseState.order_submitted,
     PlanEvent.RECHECK_VOIDED: CaseState.recheck_voided,
+    PlanEvent.VOIDED: CaseState.void,
     PlanEvent.FAILED: CaseState.fail,
 }
 
@@ -120,6 +122,27 @@ def start_case(
     """以案件 ID 为工作流 ID 开始运行；这个 ID 已经开始过时什么都不做。"""
     with SetWorkflowID(str(case_id)):
         DBOS.start_workflow(run_case, case_id, definition, trigger, triggered_at)
+
+
+def running_cases() -> tuple[tuple[UUID, CaseProgress], ...]:
+    """运行中的案件和它们的进展：PENDING 的 case 工作流，见 add-queue-runner 的 design D5。
+
+    还没发布进展的（开始运行以后、工作流的线程跑到第一次发布以前）按输入里开始时确定的案件类型给出
+    刚开始的进展：唤醒 PM 或者复盘，都在调用模型。进展是已结束的不算。
+    """
+    running: list[tuple[UUID, CaseProgress]] = []
+    for workflow in DBOS.list_workflows(name="case", status="PENDING", load_output=False):
+        progress: CaseProgress | None = DBOS.get_event(
+            workflow.workflow_id, PROGRESS, timeout_seconds=0
+        )
+        if progress is None:
+            assert workflow.input is not None  # 列出时读了输入
+            definition: CaseDefinition = workflow.input["args"][1]
+            state = new_case(definition.case_type)
+            progress = CaseProgress(definition.case_type, definition.symbol, state, None)
+        if progress.state.stage is not CaseStage.ENDED:
+            running.append((UUID(workflow.workflow_id), progress))
+    return tuple(running)
 
 
 def case_progress(case_id: UUID) -> CaseProgress | None:
