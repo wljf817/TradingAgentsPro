@@ -615,7 +615,7 @@ PM 和 Critic 通过 Agent 网关使用两个只读工具：
 
 | 组件 | 选型 |
 | --- | --- |
-| 案件工作流、队列、定时心跳 | DBOS：每个案件是一个持久化工作流，PM、Critic、风控、下单各为一个步骤；用其持久化队列实现并发上限和优先级，用 cron 和持久化休眠实现定时心跳和自定义跟进，用持久化通知等待人工确认 |
+| 案件工作流、队列、定时心跳 | DBOS：每个案件是一个持久化工作流，PM、Critic、风控、下单各为一个步骤；用 cron 和持久化休眠实现定时心跳和自定义跟进，用持久化通知等待人工确认。排队的案件存在状态库里，由调度器按排队规则决定启动哪些 |
 | 调度器、Agent 网关、健康监控、事件检测 | Python 自写，同一进程内的独立模块，运行在 DBOS 之上 |
 | Agent 调用 | PydanticAI 实现 PM 的工具循环（dispatch\_tasks、submit\_conclusion）和各 agent 的模型调用；参考 TradingAgents 的 prompt |
 | Task / Result 数据格式 | Pydantic 模型，输出不合法时直接报错 |
