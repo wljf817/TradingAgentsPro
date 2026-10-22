@@ -159,7 +159,7 @@
 
 | 密钥 | 存放在哪里 | 谁能读 |
 | --- | --- | --- |
-| 数据库密码、Alpaca 的 key 和 secret、Discord token | 部署机器上的环境变量文件 | 只有 root；systemd 读取后作为环境变量交给服务进程 |
+| 数据库密码、Alpaca 的 key 和 secret、Discord token、Finnhub 的 API key | 部署机器上的环境变量文件 | 只有 root；systemd 读取后作为环境变量交给服务进程 |
 | PostgreSQL 超级用户的密码 | 部署机器上 PostgreSQL 的环境变量文件 | 只有 root |
 | moomoo 的登录密码 | 不写进任何文件；OpenD 第一次交互登录时记住 | OpenD（服务用户） |
 | 克隆仓库用的 Deploy key | 服务用户的 SSH 目录 | 只有服务用户；在 GitHub 上只读 |

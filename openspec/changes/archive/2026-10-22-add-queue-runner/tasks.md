@@ -42,5 +42,5 @@
 
 ## 9. 收尾
 
-- [ ] 9.1 对照本变更的八份 delta spec，逐条列出每个新增和修改的场景由哪个测试覆盖，没有遗漏；修改的要求里原有的场景仍由原来的测试覆盖。验证：对应表写在完成报告里
-- [ ] 9.2 运行全部检查：`uv run pytest`、`uv run ruff check`、`uv run ruff format --check`、`uv run mypy`、`uv run lint-imports`、`openspec validate --all --strict`。验证：全部通过
+- [x] 9.1 对照本变更的八份 delta spec，逐条列出每个新增和修改的场景由哪个测试覆盖，没有遗漏；修改的要求里原有的场景仍由原来的测试覆盖。验证：对应表写在完成报告里
+- [x] 9.2 运行全部检查：`uv run pytest`、`uv run ruff check`、`uv run ruff format --check`、`uv run mypy`、`uv run lint-imports`、`openspec validate --all --strict`。验证：全部通过
