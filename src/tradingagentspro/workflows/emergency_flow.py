@@ -11,6 +11,9 @@ report 只在释放预留时拿锁；推送告警都在锁外。
 
 熔断、紧急风险退出、撤单、作废的方案、清仓方案的检查和提交、人的确认结果写进程序日志；等订单结束的
 轮次不写，见 program-log spec 和 add-program-log 的 design D9。
+
+exiting 给出正在紧急退出的股票，排队运行据此不启动它们的案件，见 queue-runner spec「一轮」和
+add-queue-runner 的 design D9。
 """
 
 import logging
@@ -235,6 +238,7 @@ class EmergencyFlow:
         self._decisions = decisions
         self._records: dict[UUID, _Record] = {}  # 当天开始的紧急退出，按清仓方案 ID
         self._breaker_day: date | None = None  # 推送过熔断告警的交易日
+        self._exiting: frozenset[str] = frozenset()  # 正在紧急退出的股票，见 exiting
 
     def judge(self) -> Judgement | None:
         """判定这一轮，见 spec「判定的输入」「要清仓的股票」和 design D3。
@@ -271,6 +275,7 @@ class EmergencyFlow:
         breaker = None
         if emergency.breaker_tripped():
             breaker = Breaker(account.equity, account.previous_close_equity)
+        self._publish()
         return Judgement(
             day=day,
             snapshot=account_snapshot(account, quotes),
@@ -343,6 +348,17 @@ class EmergencyFlow:
             self._notify(plan.symbol, no_shares_text(plan.symbol))
         if step.kind is StepKind.NO_SHARES:
             record.ended = True
+        self._publish()
+
+    def exiting(self) -> frozenset[str]:
+        """正在紧急退出的股票：当天的紧急退出已经开始（不用确认的从触发起，要确认的从确认以后起）、
+        还没结束（清仓单结束、没有可卖的股数、到收盘还没有清仓单）。见 add-queue-runner 的
+        design D9。
+
+        记录只在巡检线程里改，judge、advance、report 末尾各重算一次换上新的集合；排队运行在自己的
+        线程里读这个不可变的集合。
+        """
+        return self._exiting
 
     def report(self) -> None:
         """报告结果，见 spec「告警」和 design D8：清仓单进入终态时告警；收盘以后还没有清仓单的，
@@ -371,6 +387,7 @@ class EmergencyFlow:
                     )
                 record.ended = True
                 self._notify(symbol, missed_text(symbol))
+        self._publish()
 
     def trigger_of(self, plan: TradePlan) -> Trigger | None:
         """这次运行里这个清仓方案第一次触发的原因；没有记录、或者是重启后找回的为 None。"""
@@ -600,6 +617,12 @@ class EmergencyFlow:
             if r.day == day and not r.ended and execution.order(r.plan.plan_id) is None
         )
         return tuple(sorted(plans, key=lambda p: p.symbol))
+
+    def _publish(self) -> None:
+        """重算正在紧急退出的股票，换上新的集合。"""
+        self._exiting = frozenset(
+            r.plan.symbol for r in self._records.values() if r.gate is Gate.OPEN and not r.ended
+        )
 
     def _forget_before(self, day: date) -> None:
         """删掉更早交易日的记录；正常都已经在 report 里结束，没结束的写一条 WARNING。"""

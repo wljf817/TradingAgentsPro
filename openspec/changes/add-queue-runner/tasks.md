@@ -22,8 +22,8 @@
 
 ## 5. 紧急退出流程给出正在紧急退出的股票
 
-- [ ] 5.1 先写测试（design D9）`tests/workflows/test_emergency_rounds.py`、`test_emergency_confirmation.py`：`exiting` 在开始紧急退出、在等确认、确认以后、被拒绝和超时、清仓单结束、没有可卖的股数、到收盘还没有清仓单时的取值，重启以后按清仓单找回。验证：确认因为 `exiting` 不存在而失败
-- [ ] 5.2 实现（design D9）：`emergency_flow.py` 的 `exiting` 和 `judge`、`advance`、`report` 末尾重算；模块说明写上。验证：5.1 的测试和原有的紧急退出测试通过；`uv run mypy` 通过
+- [x] 5.1 先写测试（design D9）`tests/workflows/test_emergency_rounds.py`、`test_emergency_confirmation.py`：`exiting` 在开始紧急退出、在等确认、确认以后、被拒绝和超时、清仓单结束、没有可卖的股数、到收盘还没有清仓单时的取值，重启以后按清仓单找回。验证：确认因为 `exiting` 不存在而失败
+- [x] 5.2 实现（design D9）：`emergency_flow.py` 的 `exiting` 和 `judge`、`advance`、`report` 末尾重算；模块说明写上。验证：5.1 的测试和原有的紧急退出测试通过；`uv run mypy` 通过
 
 ## 6. 排队运行
 
