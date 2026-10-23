@@ -24,7 +24,7 @@ workflows/
   emergency_flow.py   (改) RunningCases 端口；开始紧急退出时取得决定、交出中止；start_text 写中止的案件
   case_workflow.py    (改) _PLAN_EVENTS 加中止；_aborted 各处收中止；被中止时交回方案；abort_case；queue_view
   plan_handoff.py     (改) PlanEvent.ABORTED；PlanHandoff.abandon
-  order_flow.py       (改) VoidCause；settle、void_queued 按原因释放、告警
+  order_flow.py       (改) VoidCause、void_reason；void_waiting（等确认时的作废）、void_queued 按原因释放、告警
   order_workflow.py   (改) void_plan 带原因；收到交回的作废以后不送回；CasePlanHandoff.abandon
   queue_runner.py     (改) DbosCases.abort；DbosCases.void 写明新案件排队；run_round 用 queue_view
 bootstrap/app.py      (改) 一个 DbosCases 交给紧急退出流程和排队运行
@@ -159,7 +159,7 @@ def void_plan(plan_id: UUID, cause: VoidCause) -> None:
 | 已经确认的告警（`void_queued`） | 推送 | 不推送 |
 | 送回案件 | `PlanEvent.VOIDED`；已经有订单的送订单已提交 | 不送 |
 
-- `OrderFlow.settle`、`void_queued` 多一个 `cause` 参数；`order_workflow` 解码 `DECISION_TOPIC` 的消息：确认、拒绝是 `Stage`，两种作废是 `VoidCause`
+- 等确认时收到的作废由 `OrderFlow.void_waiting(plan, requested, cause)`（step `order_plan.void_waiting`）处理，`settle` 只处理确认的结果；`void_queued` 多一个 `cause` 参数。释放的说明由 `void_reason(symbol, cause)` 给出，紧急退出第 2 步也用它。`order_workflow` 解码 `DECISION_TOPIC` 的消息：确认、拒绝是 `Stage`，两种作废是 `VoidCause`
 - 收到 `ABORTED` 以后不再送回任何结果，包括之后的步骤出了意外的错误时的出错：`order_plan` 的工作流函数在收到它的那一刻记下"已经交回"，`_report` 和出错时的送回都看它。这个标志由 `recv` 的结果决定，重放时同样重建
 - 释放通常什么也不改（D3），`release` 只在有有效预留时写释放预留（program-log spec「风控引擎的动作」），program-log spec 不改
 
@@ -217,9 +217,9 @@ class RunningCases(Protocol):
 
 - `tests/modules/scheduler/domain/test_queue.py`、`test_queue_machine.py`：`emergency_decision` 换参数，场景不变
 - `tests/workflows/test_case_workflow.py`（真的 DBOS，要开着 OrbStack）：case-workflow spec「紧急退出中止」的场景和「交给下单」新加的「等的时候收到中止」；交回用记下调用的 `PlanHandoff` 替身；中止用 `abort_case`
-- `tests/workflows/test_order_workflow.py`（真的 DBOS）：order-flow spec「案件中止时作废它的方案」的六个场景、「结果送回案件」的「案件中止交回的方案不送回」；`tests/workflows/test_order_flow.py`：`settle`、`void_queued` 两种原因的释放原因和告警
+- `tests/workflows/test_order_workflow.py`（真的 DBOS）：order-flow spec「案件中止时作废它的方案」的六个场景、「结果送回案件」的「案件中止交回的方案不送回」；`tests/workflows/test_order_flow.py`：`void_waiting`、`void_queued` 两种原因的释放原因和告警
 - `tests/workflows/test_emergency_abort.py`（新）：emergency-exit-flow spec「中止这只股票的案件」的场景，用 `tests/fakes/cases.py` 的 `FakeCases`（加 `abort`，记下中止的案件 ID 和先后）；`tests/workflows/builders.py` 建 `EmergencyFlow` 时交 `FakeCases`
-- `tests/workflows/test_queue_runner.py`：`DbosCases.void` 写明新案件排队（D5），原有场景不变
+- `tests/workflows/test_queue_runner.py`：原有场景不变（`run_round` 改用 `queue_view`）；`DbosCases` 是 DBOS 的实现，由 `tests/bootstrap/` 原有的「新案件排队时作废等确认的方案」覆盖
 - `tests/bootstrap/`：替身的案件在等人工确认时这只股票紧急退出：案件结束：紧急退出中止，确认消息已作废
 - 测试只在本地（tests/ 被 gitignore）
 
