@@ -28,11 +28,12 @@ modules/events/     (新，对应架构图的「事件检测层」)
   config.py         EventRulesConfig、KeywordRule、FilingTiers
   domain/
     price.py        价格异动、成交量异动、行情要是当天的
-    news.py         新闻的初筛、关键词匹配
+    news.py         新闻的初筛、关键词匹配、没成为事件的原因，新闻和公告共用的级别判断
     filings.py      公告的初筛
-    earnings.py     预计发布时刻、财报发布的间隔
-    ids.py          事件 ID
-    text.py         事件的说明、程序日志的文字
+    earnings.py     预计发布时刻、财报日历这一路、8-K 的财报发布事件、财报发布的间隔的起点
+    ids.py          事件 ID、检测时刻和它的交易日
+    text.py         数值、比例、级别和发布时段的写法
+    entries.py      程序日志的说明：检测到事件、丢弃事件
   ports.py          EventStore
   repo.py           events_detected 表，PostgresEventStore
   service.py        EventService：记下、丢弃、读取
@@ -41,12 +42,12 @@ modules/execution/  (改) ExecutionService.sales(since)
 modules/programlog/domain/entry.py  (改) Actor.EVENT_DETECTION，Action.DETECT_EVENT、DISCARD_EVENT
 integrations/standin/conclusions.py (改) 读 context.event.category
 workflows/
-  event_detection.py (新) EventDetector、EventDetectionConfig、CaseIntake
+  event_detection.py (新) EventDetector、EventDetectionConfig、DetectionParts、CaseIntake
   queue_runner.py    (改) QueueRunner.queued_sales
   case_entries.py    (改) 触发原因带事件 ID、客户端订单 ID
   case_flow.py       (改) 案件上下文读事件
   snapshot_flow.py   (改) 快照带事件
-bootstrap/app.py     (改) 装配、开始和停止的顺序
+bootstrap/app.py     (改) 装配、开始和停止的顺序；Externals 加新闻源和公告源
 bootstrap/migrations/versions/v0014_create_events.py (新)
 ```
 
@@ -94,36 +95,48 @@ bootstrap/migrations/versions/v0014_create_events.py (新)
 domain 的函数签名（示意）：
 
 ```python
+def detection(at: datetime, calendar: TradingCalendar) -> Detection: ...
 def price_event(
     stock: PricedStock,
     reading: Reading,
-    now: datetime,
-    session: TradingSession,
+    at: Detection,
+    calendar: TradingCalendar,
     config: EventRulesConfig,
 ) -> Event | None: ...
 def volume_event(
     stock: PricedStock,
     reading: Reading,
-    now: datetime,
-    session: TradingSession,
+    at: Detection,
+    calendar: TradingCalendar,
     config: EventRulesConfig,
 ) -> Event | None: ...
-def screen_article(
-    article: NewsArticle, symbol: str, status: StockStatus, config: EventRulesConfig
-) -> Screened | Discarded: ...
-def screen_filing(
-    filing: Filing, symbol: str, status: StockStatus, config: EventRulesConfig
-) -> Screened | IsEarnings | Discarded: ...
+def judge_article(
+    article: NewsArticle, stock: Monitored, at: Detection, config: EventRulesConfig
+) -> Event | Discard: ...
+def judge_filing(
+    filing: Filing, stock: Monitored, at: Detection, config: EventRulesConfig
+) -> Event | Discard: ...
 def expected_release(
     day: date, time: EarningsTime | None, calendar: TradingCalendar, config: EventRulesConfig
 ) -> datetime: ...
-def earnings_window_start(now: datetime, calendar: TradingCalendar, sessions: int) -> datetime: ...
-def event_id(symbol: str, day: date, kind: str) -> str: ...
+def release_event(
+    release: CalendarRelease,
+    at: Detection,
+    since: datetime,
+    calendar: TradingCalendar,
+    config: EventRulesConfig,
+) -> Event | None: ...
+def earnings_window_start(at: datetime, calendar: TradingCalendar, sessions: int) -> datetime: ...
+def event_id(symbol: str, day: date, kind: EventKind) -> str: ...
 ```
 
+- `Detection`：这一轮开始时读的时刻和它归属的交易日，事件 ID 的交易日、检测时刻都取它
 - `PricedStock`：股票、状态、持仓的紧急阈值和今天开仓成交的均价（不是持仓时为 None）
 - `Reading`：最新价、前一交易日收盘价、量比、更新时刻
-- 两者都是 domain 的 frozen dataclass。domain 是纯区域，只 import contracts 和 shared：行情的 `Quote`、执行模块的 `HeldPosition`、公司数据的 `EarningsRelease` 由 workflow 取出数值传进来；发布时段用 contracts 里已有的 `EarningsTime`（取值和公司数据的 `ReleaseTime` 相同）
+- `Monitored`：一只监控股票、它这一轮的状态和加入股票池的时刻（判断加入以前发布的新闻和公告）
+- `CalendarRelease`：财报日历上一次发布的股票、财年季度、发布日和发布时段
+- 这些都是 domain 的 frozen dataclass。domain 是纯区域，只 import contracts 和 shared：行情的 `Quote`、执行模块的 `HeldPosition`、公司数据的 `EarningsRelease`、股票池的 `PoolEntry` 由 workflow 取出数值传进来；发布时段用 contracts 里已有的 `EarningsTime`（取值和公司数据的 `ReleaseTime` 相同）
+- 新闻和公告判断出的不是事件时是 `Discard`，带 `DiscardReason`；8-K 的 item 2.02 直接给出类别是财报发布的事件。要读已经记下的事件的规则（当天已有、财报发布的间隔）由 workflow 判断，原因用同一个 `DiscardReason`
 - "现在"作为参数传入
 
 考虑过：把规则写在 workflow 里。规则表多、阈值边界多，纯函数才能逐行测。
@@ -222,6 +235,7 @@ Proposal 把止损单成交列在事件来源里，但它开的是卖出复盘�
 - 只看标题：Benzinga 的摘要常常为空，正文是 HTML，标题已经写明事件
 - 标注的股票超过 2 只的是综述稿（"X stocks moving in Tuesday's session"）
 - 配置：`KeywordRule(keyword: str, level: Literal[1, 2], negative: bool)` 的元组，默认表在 `config.py`
+- 每种状态的最低级别（持仓和关注一般、候选重大）是 spec 的规则，写在 domain 里，不做成配置；新闻和公告共用这一条判断（`screened_event`）
 
 考虑过：按命中个数打分、按来源加权。没有数据支持权重，等 M6 评估再说。
 
@@ -289,12 +303,13 @@ class CaseIntake(Protocol):
 
 ### D14 程序日志
 
-行为者 `EVENT_DETECTION`（事件检测层），动作 `DETECT_EVENT`（检测到事件）、`DISCARD_EVENT`（丢弃事件），由 `EventService` 写（每个模块写自己的行为者，和股票池一样）。文字在 `domain/text.py`：检测到事件写类别、股票和状态、是否持仓风险级别、来源、强度、说明、处理；丢弃事件写标题或表单和 item、原因。
+行为者 `EVENT_DETECTION`（事件检测层），动作 `DETECT_EVENT`（检测到事件）、`DISCARD_EVENT`（丢弃事件），由 `EventService` 写（每个模块写自己的行为者，和股票池一样）。文字在 `domain/entries.py`（它要读 `news.py` 的 `DiscardReason`，放进 `text.py` 会和 `news.py` 互相 import）：检测到事件写类别、股票和状态、是否持仓风险级别、来源、强度、说明、处理；丢弃事件写标题或表单和 item、原因。
 
 ### D15 装配
 
-- `EventService(PostgresEventStore(engine), log)`；`EventRulesConfig()`；`EventDetector(EventSources(pool, execution, market_data, news, company_data, events, intake=queue, clock, calendar), rules, EventDetectionConfig())`
-- 快照流程和案件工作流多拿一个 `EventService`
+- `EventService(PostgresEventStore(engine), log)`；`EventDetector(DetectionParts(pool, execution, market_data, news, company_data, events, intake=queue, clock, calendar, rules=EventRulesConfig()), EventDetectionConfig())`
+- 快照流程和案件工作流多拿一个 `EventService`；案件那一侧装配好的新闻和公告、公司数据、事件交给事件检测
+- `Externals` 加 `news`、`filings` 两个工厂（生产是 `AlpacaNewsSource`、`SecFilingSource`）：事件检测在运行中真的取新闻和公告，启动的测试要换成替身，不能连 Alpaca 和 SEC
 - 启动：排队运行开始以后开始事件检测，再开始盘中巡检；停止：巡检 → 事件检测 → 排队运行
 - 不用全程序的锁：只读执行模块（`account()`、`sales()`），和快照流程一样
 
