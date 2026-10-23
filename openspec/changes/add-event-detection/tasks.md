@@ -12,8 +12,8 @@
 
 ## 3. 事件规则
 
-- [ ] 3.1 先写测试 `tests/modules/events/domain/` 和 `tests/modules/events/test_config.py`（design D1、D3、D7 到 D11）：event-rules spec 每个 requirement 的全部场景，规则表每一行一个测试，阈值两侧的值从配置算出来、不在测试里写死（比如参考价乘以 1 加价格阈值）；关键词默认表的每一行；预计发布时刻的四种时段、发布日是周末；事件 ID 的交易日（盘前、盘中、收盘以后、休市日）；事件的说明写明 spec 要求的各项；配置的默认值和非法取值。验证：确认因为 `tradingagentspro.modules.events` 不存在而失败
-- [ ] 3.2 实现 `modules/events/config.py`（`EventRulesConfig`、`KeywordRule`、`FilingTiers`，默认的关键词表和公告分级）和 `domain/`（`price.py`、`news.py`、`filings.py`、`earnings.py`、`ids.py`、`text.py`），`__init__.py` 写模块说明并导出（design 的模块边界）。验证：3.1 的测试通过；`uv run pytest tests/architecture`、`uv run mypy`、`uv run lint-imports` 通过，纯区域白名单没有改
+- [x] 3.1 先写测试 `tests/modules/events/domain/` 和 `tests/modules/events/test_config.py`（design D1、D3、D7 到 D11）：event-rules spec 每个 requirement 的全部场景，规则表每一行一个测试，阈值两侧的值从配置算出来、不在测试里写死（比如参考价乘以 1 加价格阈值）；关键词默认表的每一行；预计发布时刻的四种时段、发布日是周末；事件 ID 的交易日（盘前、盘中、收盘以后、休市日）；事件的说明写明 spec 要求的各项；配置的默认值和非法取值。验证：确认因为 `tradingagentspro.modules.events` 不存在而失败
+- [x] 3.2 实现 `modules/events/config.py`（`EventRulesConfig`、`KeywordRule`、`FilingTiers`，默认的关键词表和公告分级）和 `domain/`（`price.py`、`news.py`、`filings.py`、`earnings.py`、`ids.py`、`text.py`），`__init__.py` 写模块说明并导出（design 的模块边界）。验证：3.1 的测试通过；`uv run pytest tests/architecture`、`uv run mypy`、`uv run lint-imports` 通过，纯区域白名单没有改
 
 ## 4. 事件的存储、用例和程序日志
 
