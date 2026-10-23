@@ -22,13 +22,13 @@
 
 ## 5. 紧急退出流程中止案件
 
-- [ ] 5.1 先写测试（design D1、D7、D8）`tests/workflows/test_emergency_abort.py`（新）：emergency-exit-flow spec「中止这只股票的案件」的十个场景，用 `tests/fakes/cases.py` 的 `FakeCases`（加 `abort`，记下中止的案件 ID 和相对程序日志的先后）；`tests/workflows/builders.py` 建 `EmergencyFlow` 时交 `FakeCases`；原有的紧急退出测试只改构造参数。验证：确认因为 `EmergencyFlow` 没有 `cases` 参数而失败
-- [ ] 5.2 实现（design D1、D7、D8）：`emergency_flow.py` 的 `RunningCases`、`EmergencyFlow` 的 `cases`、`advance` 开始那一段取得决定和交出中止、`start_text` 写中止的案件，模块说明写上；`queue_runner.py` 的 `DbosCases.abort`。验证：5.1 的测试和原有的 `tests/workflows/test_emergency_*.py`、`test_patrol*.py` 通过；`uv run mypy`、`uv run lint-imports` 通过
+- [x] 5.1 先写测试（design D1、D7、D8）`tests/workflows/test_emergency_abort.py`（新）：emergency-exit-flow spec「中止这只股票的案件」的十个场景，用 `tests/fakes/cases.py` 的 `FakeCases`（加 `abort`，记下中止的案件 ID 和相对程序日志的先后）；`tests/workflows/builders.py` 建 `EmergencyFlow` 时交 `FakeCases`；原有的紧急退出测试只改构造参数。验证：确认因为 `EmergencyFlow` 没有 `cases` 参数而失败
+- [x] 5.2 实现（design D1、D7、D8）：`emergency_flow.py` 的 `RunningCases`、`EmergencyFlow` 的 `cases`、`advance` 开始那一段取得决定和交出中止、`start_text` 写中止的案件，模块说明写上；`queue_runner.py` 的 `DbosCases.abort`。验证：5.1 的测试和原有的 `tests/workflows/test_emergency_*.py`、`test_patrol*.py` 通过；`uv run mypy`、`uv run lint-imports` 通过
 
 ## 6. 装配
 
-- [ ] 6.1 先写测试（design D7）`tests/bootstrap/`：替身的案件在等人工确认时这只股票紧急退出，案件结束：紧急退出中止，确认消息已作废、没有有效预留。验证：确认失败
-- [ ] 6.2 实现（design D7）：`bootstrap/app.py` 先建一个 `DbosCases()`，交给 `EmergencyFlow` 和 `QueueParts`。验证：6.1 的测试和 `tests/bootstrap` 原有的测试通过；`uv run mypy`、`uv run lint-imports` 通过
+- [x] 6.1 先写测试（design D7）`tests/bootstrap/`：替身的案件在等人工确认时这只股票紧急退出，案件结束：紧急退出中止，确认消息已作废、没有有效预留。验证：确认失败
+- [x] 6.2 实现（design D7）：`bootstrap/app.py` 先建一个 `DbosCases()`，交给 `EmergencyFlow` 和 `QueueParts`。验证：6.1 的测试和 `tests/bootstrap` 原有的测试通过；`uv run mypy`、`uv run lint-imports` 通过
 
 ## 7. 收尾
 

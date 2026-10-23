@@ -14,6 +14,11 @@ report 只在释放预留时拿锁；推送告警都在锁外。
 
 exiting 给出正在紧急退出的股票，排队运行据此不启动它们的案件，见 queue-runner spec「一轮」和
 add-queue-runner 的 design D9。
+
+一只股票开始紧急退出时（推送开始的告警的那一次处理，要确认的在确认以后），写完紧急风险退出、拿锁
+以前，读运行中的案件（RunningCases），取得紧急退出的决定，把中止交给决定里的案件；案件的方案由中止
+的案件交回下单流程作废，预留照旧在锁里释放。见 emergency-exit-flow spec「中止这只股票的案件」和
+update-emergency-abort-case 的 design D1、D2、D7、D8。
 """
 
 import logging
@@ -23,6 +28,7 @@ from dataclasses import dataclass
 from datetime import UTC, date
 from decimal import Decimal
 from enum import StrEnum
+from typing import Protocol
 from uuid import UUID
 
 from tradingagentspro.contracts.account import AccountSnapshot
@@ -52,9 +58,11 @@ from tradingagentspro.modules.notification import (
     PendingConfirmation,
 )
 from tradingagentspro.modules.programlog import ACCOUNT, Action, Actor
+from tradingagentspro.modules.scheduler import RunningCase, emergency_decision
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.trading_calendar import TradingCalendar
 from tradingagentspro.workflows.account_snapshot import account_snapshot
+from tradingagentspro.workflows.case_workflow import CaseProgress, queue_view
 from tradingagentspro.workflows.entries import (
     check_text,
     log_submit,
@@ -62,8 +70,8 @@ from tradingagentspro.workflows.entries import (
     recheck_text,
     release,
 )
-from tradingagentspro.workflows.names import ACTIONS, ORDER_STATUSES, SIDES
-from tradingagentspro.workflows.order_flow import TradeServices
+from tradingagentspro.workflows.names import ACTIONS, CASE_TYPES, ORDER_STATUSES, SIDES
+from tradingagentspro.workflows.order_flow import TradeServices, VoidCause, void_reason
 
 _log = logging.getLogger(__name__)
 
@@ -157,6 +165,18 @@ class _Record:
     pending: PendingConfirmation | None = None
 
 
+class RunningCases(Protocol):
+    """紧急退出对运行中的案件的那两下；生产是 queue_runner.DbosCases，测试换成内存的替身。"""
+
+    def running(self) -> tuple[tuple[UUID, CaseProgress], ...]:
+        """运行中的案件和它们的进展。"""
+        ...
+
+    def abort(self, case_id: UUID) -> None:
+        """按案件 ID 把中止交给这个案件。"""
+        ...
+
+
 class EmergencyDecisions:
     """紧急退出在等的确认和送到的按钮结果，见 update-confirmation-rules 的 design D4。
 
@@ -228,6 +248,7 @@ class EmergencyFlow:
         config: EmergencyConfig,
         notification_config: NotificationConfig,
         decisions: EmergencyDecisions,
+        cases: RunningCases,
     ) -> None:
         self._services = services
         self._notification = notification
@@ -236,6 +257,7 @@ class EmergencyFlow:
         self._config = config
         self._confirm = notification_config.confirm_emergency_exits
         self._decisions = decisions
+        self._cases = cases
         self._records: dict[UUID, _Record] = {}  # 当天开始的紧急退出，按清仓方案 ID
         self._breaker_day: date | None = None  # 推送过熔断告警的交易日
         self._exiting: frozenset[str] = frozenset()  # 正在紧急退出的股票，见 exiting
@@ -321,7 +343,8 @@ class EmergencyFlow:
         """一只股票的清仓，见 spec「一只股票的清仓」「紧急退出的人工确认」和 design D5。
 
         要确认的先请求确认、等结果，确认的那一轮接着清仓（update-confirmation-rules 的 design D3）。
-        锁里做事，锁外告警和请求确认。
+        开始紧急退出的那一次，拿锁以前先中止这只股票的案件（spec「中止这只股票的案件」）。锁里做事，
+        锁外中止、告警和请求确认。
         """
         record = self._records[plan.plan_id]
         if record.gate is Gate.ASKING:
@@ -329,6 +352,7 @@ class EmergencyFlow:
             return
         if record.gate is Gate.WAITING and not self._settle(record):
             return
+        aborted: RunningCase | None = None
         if not record.announced:
             assert record.trigger is not None  # 只有找回来的记录没有触发的原因，它们一开始就告警过
             self._services.log.write(
@@ -338,12 +362,13 @@ class EmergencyFlow:
                 record.trigger.detail,
                 outputs=[str(plan.plan_id)],
             )
+            aborted = self._abort(plan.symbol)
         with self._services.lock:
             step = self._advance(plan, judgement.snapshot)
         if not record.announced:
             assert record.trigger is not None  # 只有找回来的记录没有触发的原因，它们一开始就告警过
             record.announced = True
-            self._notify(plan.symbol, start_text(record.trigger, step))
+            self._notify(plan.symbol, start_text(record.trigger, step, aborted))
         elif step.kind is StepKind.NO_SHARES:
             self._notify(plan.symbol, no_shares_text(plan.symbol))
         if step.kind is StepKind.NO_SHARES:
@@ -393,6 +418,18 @@ class EmergencyFlow:
         """这次运行里这个清仓方案第一次触发的原因；没有记录、或者是重启后找回的为 None。"""
         record = self._records.get(plan.plan_id)
         return None if record is None else record.trigger
+
+    def _abort(self, symbol: str) -> RunningCase | None:
+        """开始紧急退出：读运行中的案件，取得这只股票的紧急退出的决定，把中止交给决定里的案件，
+        交回这个案件；没有时为 None。决定里作废的方案不另外交出：它们随中止的案件结束或者由它交回
+        （design D2）。不拿锁。
+        """
+        running, plans = queue_view(self._cases.running())
+        decision = emergency_decision(running, plans, symbol)
+        if decision.abort is None:
+            return None
+        self._cases.abort(decision.abort)
+        return next(case for case in running if case.case_id == decision.abort)
 
     def _ask(self, record: _Record, judgement: Judgement) -> None:
         """请求紧急退出的确认，不拿锁；发不出去按超时处理。
@@ -505,7 +542,7 @@ class EmergencyFlow:
             and execution.order(p.plan_id) is None
         )
         for other in voided:
-            release(risk, log, other.plan_id, f"{plan.symbol} 紧急退出：作废还没下单的方案")
+            release(risk, log, other.plan_id, void_reason(plan.symbol, VoidCause.ABORTED))
         waiting = tuple(o for o in execution.open_orders() if o.symbol == plan.symbol)
         if waiting:
             cancelled = tuple(o for o in waiting if not o.cancel_wanted)
@@ -646,10 +683,16 @@ def _cause_text(cause: ExitCause, holding: Holding) -> str:
     )
 
 
-def start_text(trigger: Trigger, step: ExitStep) -> str:
-    """开始紧急退出的告警：原因，加上这一项做了什么，见 design D8。"""
+def start_text(trigger: Trigger, step: ExitStep, aborted: RunningCase | None) -> str:
+    """开始紧急退出的告警：原因，加上这一项做了什么（中止的案件、作废的方案、撤掉的订单、清仓单），
+    见 add-emergency-exit-flow 的 design D8 和 update-emergency-abort-case 的 design D8。
+    """
     symbol = trigger.plan.symbol
     parts = [f"紧急退出 {symbol}：{trigger.detail}。"]
+    if aborted is not None:
+        parts.append(
+            f"中止运行中的案件：{CASE_TYPES[aborted.case_type]}（案件 {aborted.case_id}）。"
+        )
     if step.voided:
         plans = "、".join(
             f"{ACTIONS[p.action]} {p.symbol}（方案 {p.plan_id}）" for p in step.voided

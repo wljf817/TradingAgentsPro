@@ -461,6 +461,8 @@ def _assemble(
         (execution, market_data, quotes, notification),
         (stock_pool, pool_config, follow_ups, case_records),
     )
+    # 案件工作流和下单流程的 DBOS 实现：紧急退出读运行中的案件、交出中止，排队运行启动和作废
+    running = DbosCases()
     emergency_flow = EmergencyFlow(
         services,
         notification,
@@ -469,11 +471,12 @@ def _assemble(
         emergency_config,
         notification_config,
         decisions,
+        running,
     )
     queue = QueueRunner(
         QueueParts(
             queue=QueueService(PostgresQueueStore(engine), clock, externals.ids),
-            cases=DbosCases(),
+            cases=running,
             pool=stock_pool,
             health=health,
             budget=cases.budget,

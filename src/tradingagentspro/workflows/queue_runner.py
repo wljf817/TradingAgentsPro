@@ -43,6 +43,7 @@ from tradingagentspro.shared.clock import Clock
 from tradingagentspro.workflows.case_entries import case_trigger
 from tradingagentspro.workflows.case_workflow import (
     CaseProgress,
+    abort_case,
     queue_view,
     running_cases,
     start_case,
@@ -94,7 +95,9 @@ class CaseControl(Protocol):
 
 
 class DbosCases:
-    """满足 CaseControl：案件工作流和下单流程的 DBOS 实现，见 design D4、D5、D6。"""
+    """满足 CaseControl 和 emergency_flow.RunningCases：案件工作流和下单流程的 DBOS 实现，见
+    add-queue-runner 的 design D4、D5、D6 和 update-emergency-abort-case 的 design D7。
+    """
 
     def running(self) -> tuple[tuple[UUID, CaseProgress], ...]:
         return running_cases()
@@ -107,6 +110,9 @@ class DbosCases:
 
     def void(self, plan_id: UUID) -> None:
         void_plan(plan_id, VoidCause.NEW_CASE)
+
+    def abort(self, case_id: UUID) -> None:
+        abort_case(case_id)
 
 
 @dataclass(frozen=True, slots=True)
