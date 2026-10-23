@@ -18,6 +18,7 @@ moomoo（2026-10-06 查阅文档、读 moomoo-api 10.11.7108 源码，并在本�
 - 市场快照 `get_market_snapshot(code_list)`：按需拉取，不需要订阅、不占订阅额度；每 30 秒最多 60 次，每次最多 400 只；返回 `(ret, DataFrame)`，`ret` 不是 `RET_OK` 时第二项是错误信息
 - 快照的 `update_time` 是美东时间的字符串，文档写 `yyyy-MM-dd HH:mm:ss`，实际带毫秒（`2026-10-06 17:53:59.407`）。盘后它还在更新
 - `last_price`、`volume` 只算常规时段：盘前、盘后、夜盘的价格和成交量在 `pre_*`、`after_*`、`overnight_*` 里。盘后实测 `last_price` 是当天收盘价，`after_price` 另有其值
+- 开盘前的切换（2026-10-15 和 10-19 实测）：OpenD 在美东 09:25 把常规时段的字段切到当天，`prev_close_price` 换成上一个交易日的收盘价，`open_price` 和 `volume` 清零，`last_price` 不变。切换以前这些字段全是上一个交易日的：`last_price` 是上一个交易日的收盘价，`prev_close_price` 落后一天。切换以后、开盘以前 `volume` 就可能不为 0（10-19 的 QQQ 有 190 万股）。开盘以后 `open_price` 先有值，`last_price` 可能再过几秒才更新（10-19 的 BRK.B 6 秒）
 - 不存在的代码不报错：这一行 `update_time` 为空、价格全为 0、`sec_status` 是 N/A。代码缺 `US.` 前缀、或者列表为空，整次调用报错
 - SDK 用自己的网络线程和回调线程，没有用 asyncio；所有线程默认不是 daemon 线程
 - `OpenQuoteContext(...)` 默认在构造函数里循环重连，直到连上 OpenD 为止；`is_async_connect=True` 时构造立即返回，在后台连接。同步调用在没连上时默认无限等待，`set_sync_query_connect_timeout(秒)` 设上限，超时返回错误 `Connect timeout`
@@ -168,14 +169,20 @@ def _quote(symbol: str, row: Mapping[str, Any]) -> Quote | None:
 ```
 
 - 价格：`Decimal(repr(float(value)))`。SDK 给的是 numpy 的 float64，先转成 Python 的 float，再取最短的十进制写法，333.63 得到 `Decimal("333.63")`；`Decimal(float)` 会得到 333.62999999999999545…
-- 最新价：`volume` 为 0 时为 None，否则是 `last_price`。用成交量判断"当天常规时段有没有成交"，因为 `volume` 只算常规时段。开盘前 OpenD 已经把成交量清零，这一点没有文档，由冒烟测试在开盘前验证（D8）
+- 快照处在哪一段，按 `open_price` 和 `update_time` 判断（moomoo-quotes spec「快照的映射」的表）。开盘时刻取 `update_time` 那天美东 09:30（`updated.replace(hour=9, minute=30, ...)`），纽交所每个交易日都是这个时刻开盘，不用交易日历：
+  - `open_price` 不为 0、`update_time` 早于开盘时刻：还没切换，前一交易日收盘价取 `last_price`
+  - `open_price` 为 0：切换以后、开盘成交以前，没有最新价
+  - `open_price` 不为 0、`update_time` 不早于开盘后 1 分钟（`_SETTLING`）：最新价取 `last_price`；1 分钟以内 `last_price` 可能还是上一个交易日的收盘价，不给
+- 没有最新价时，下单流程等重试间隔、紧急退出和事件检测跳过这只股票，都已经是现有的行为；开盘以后最多晚 1 分钟
+- 周末和休市日的快照是上一个交易日盘后的，`update_time` 在那天开盘 1 分钟以后，照常给出那天的收盘价
 - 更新时刻：`datetime.fromisoformat(text)`，带不带毫秒都能解析；`.replace(tzinfo=NEW_YORK)` 按当天的夏令时或冬令时解读，再 `.astimezone(UTC)`。不依赖本机时区，测试进程在 UTC+14 运行也能验证
 - 代码：请求时 `f"US.{symbol}"`；按请求时建的「代码 → 股票」表把返回的行对应回股票
 
 考虑过：
 
-- 用 `open_price` 是否为 0 判断开盘后有没有成交：和成交量一样没有文档，而成交量和"有没有成交"的含义更直接
+- 用成交量判断开盘后有没有成交：切换以后、开盘以前成交量就可能不为 0，这时 `last_price` 还是上一个交易日的收盘价
 - 比较 `update_time` 的日期和今天：盘前盘后它也在更新，分不出常规时段有没有成交
+- 按 `last_price` 是否等于 `prev_close_price` 判断它有没有更新：开盘以后真的成交在昨收上时会误判
 
 ### D6 适配器和连接
 
@@ -227,18 +234,18 @@ mypy：SDK 没有类型标注，`pyproject.toml` 对 `moomoo`、`moomoo.*` 设 `
 - 「OpenD 没开」用真的 SDK：先绑定一个空闲端口再关掉，得到一个没有服务的端口，超时 1 秒。构造和取行情都放进线程里跑，`join(timeout=5)` 以后线程必须已经结束（`time` 被禁用，不直接计时）；结束后 `close()`
 - 每个 spec 场景一个测试，名字或说明里写明场景；`source: QuoteSource = MoomooQuoteSource(...)` 让 mypy 检查适配器满足端口
 - 冒烟测试 `tests/integrations/moomoo/test_opend_smoke.py`，加 `moomoo_opend` 标记，默认不运行（`addopts` 改为 `-m "not alpaca_paper and not moomoo_opend"`）；本机 127.0.0.1:11111 连不上时跳过。用系统时钟和纽交所日历判断当前在哪个时段：
-  - 任何时候：AAPL、SPY 都有行情，前一交易日收盘价大于 0；ZZZZQQ 不在结果里；`last_update()` 等于 SPY 的更新时刻
-  - 常规交易时段内：SPY 有最新价，更新时刻和现在相差不超过 10 秒（证明拿到的是实时行情）
-  - 当天开盘前 30 分钟内：SPY 没有最新价（验证 D5 的"开盘前成交量已清零"）
+  - 任何时候：AAPL、SPY 都有行情，前一交易日收盘价大于 0；ZZZZQQ 不在结果里；`last_update()` 不早于 SPY 的更新时刻减 5 秒（OpenD 的 `update_time` 两次快照之间偶尔倒退 1 秒）
+  - 常规交易时段内、开盘 1 分钟以后：SPY 有最新价，更新时刻和现在相差不超过 10 秒（证明拿到的是实时行情）；有量比，大于 0；前一交易日收盘价等于 OpenD 日 K 线（不复权）上一个交易日的收盘价
+  - 当天开盘前 30 分钟内：SPY 没有最新价和量比，前一交易日收盘价等于日 K 线上一个交易日的收盘价。09:25 切换以前和以后各跑一次，验证 D5 的两段
   - 不在对应时段时跳过那一项
 
 ### D9 量比
 
-事件检测（add-event-detection）要按量比判断成交量异动，量比放进行情：`Quote` 加 `volume_ratio: Decimal | None`，取快照的 `volume_ratio`，按价格同样的办法读成十进制。成交量为 0 时为 None，和最新价一样：开盘后还没有成交时不给前一天的量比。moomoo 文档的量比是当天平均每分钟成交量和过去 5 个交易日平均每分钟成交量之比，已经按一天里的时间归一，不用自己算；字段名和含义在真实 OpenD 上录一行核对。
+事件检测（add-event-detection）要按量比判断成交量异动，量比放进行情：`Quote` 加 `volume_ratio: Decimal | None`，取快照的 `volume_ratio`，按价格同样的办法读成十进制。没有最新价时为 None：开盘前和开盘后的头 1 分钟不给前一天的量比。moomoo 文档的量比是当天平均每分钟成交量和过去 5 个交易日平均每分钟成交量之比，已经按一天里的时间归一，不用自己算；字段名和含义在真实 OpenD 上录一行核对。
 
 ## Risks / Trade-offs
 
-- [开盘前 OpenD 的成交量是否已经清零，没有文档] → 冒烟测试在开盘前 30 分钟内运行一次验证；不符时先改 spec 和 design（比如改用开盘价判断），再改代码
+- [开盘前的切换时刻和字段的变化没有文档，是实测的] → 冒烟测试在开盘前 30 分钟内、切换前后各跑一次；OpenD 改了行为时冒烟测试会失败。开盘后 1 分钟的等待按 10-19 录到的最长 6 秒留了余量
 - [推广期结束、或者行情权限被别的设备占走以后，OpenD 是报错还是给延时行情，没有验证] → 两种都会被发现：报错时取不到更新时刻，给延时行情时更新时刻落后，数据延迟检查都会在超过上限后进入降级并告警
 - [模拟盘的行情来自 moomoo，成交在 Alpaca，两边价格可能差几分钱] → 只影响价格偏离检查和备用止损在边界上的判断；实盘的行情和成交都在 moomoo
 - [SDK 没有类型标注、带进 pandas 等依赖、import 时写用户目录] → 只在 `integrations/moomoo` 里用，结果马上转成 `Quote`

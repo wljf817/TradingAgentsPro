@@ -20,6 +20,9 @@ NEW_YORK = ZoneInfo("America/New_York")
 # OpenD 的美股代码是股票代码加上这个前缀，比如 US.AAPL
 _US_PREFIX = "US."
 
+# 开盘后 last_price 可能还停在前一交易日收盘价上，这么久以内不给最新价，见 design D5
+_SETTLING = timedelta(minutes=1)
+
 
 class MoomooConfig(BaseModel):
     """连接 OpenD 的配置，含义见 moomoo-quotes spec「连接配置」。"""
@@ -76,18 +79,24 @@ def open_quote_context(config: MoomooConfig) -> OpenQuoteContext:
 def _quote(symbol: str, row: Mapping[str, Any]) -> Quote | None:
     """快照的一行；update_time 为空（OpenD 查不到这只股票，价格全为 0）时为 None。
 
-    成交量只算常规时段，为 0 时当天开盘后还没有成交，没有最新价和量比，见 design D5、D9。
+    按开盘价和更新时刻判断快照处在哪一段，见 design D5、D9：开盘前还没切换到当天时，常规时段的
+    字段都是上一个交易日的，last_price 就是前一交易日收盘价；有了开盘价、更新到开盘 1 分钟以后
+    才给最新价和量比。
     """
     update_time = row["update_time"]
     if not update_time:
         return None
-    traded = row["volume"] != 0
+    updated = datetime.fromisoformat(update_time).replace(tzinfo=NEW_YORK)
+    opening = updated.replace(hour=9, minute=30, second=0, microsecond=0)
+    opened = row["open_price"] != 0
+    stale = opened and updated < opening
+    priced = opened and updated >= opening + _SETTLING
     return Quote(
         symbol=symbol,
-        last_price=_price(row["last_price"]) if traded else None,
-        previous_close=_price(row["prev_close_price"]),
-        volume_ratio=_price(row["volume_ratio"]) if traded else None,
-        updated_at=datetime.fromisoformat(update_time).replace(tzinfo=NEW_YORK).astimezone(UTC),
+        last_price=_price(row["last_price"]) if priced else None,
+        previous_close=_price(row["last_price"] if stale else row["prev_close_price"]),
+        volume_ratio=_price(row["volume_ratio"]) if priced else None,
+        updated_at=updated.astimezone(UTC),
     )
 
 

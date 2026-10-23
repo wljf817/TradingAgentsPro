@@ -32,6 +32,8 @@
 
 - [x] 4.1 写 `tests/integrations/moomoo/test_opend_smoke.py`（design D8），全部加 `moomoo_opend` 标记，本机 127.0.0.1:11111 连不上时跳过；用系统时钟和纽交所日历判断时段，分为任何时候、常规交易时段内、开盘前 30 分钟内三组，不在对应时段时跳过那一组。README 的「常用命令」加一行运行方法，写明要先开着 OpenD 并登录。验证：OpenD 没开时 `uv run pytest -m moomoo_opend` 全部跳过，`uv run pytest` 不收集这些测试
 - [ ] 4.2 本机 OpenD 登录着的时候，在常规交易时段内运行一次 `uv run pytest -m moomoo_opend`，再在某个交易日开盘前 30 分钟内运行一次。验证：两次都通过，并且对应时段那一组确实运行了（不是跳过）；和 spec 不符的地方先改 spec 和 design，再改代码和 2、3 组的测试
+  - 2026-10-15 开盘前那一组失败：开盘前的快照还是上一个交易日的。按 10-15 和 10-19 的录制改了 spec「快照的映射」、design D5、D8 和代码（开盘价和更新时刻判断切换，开盘 1 分钟以后才给最新价），冒烟测试加了前一交易日收盘价对日 K 线的核对
+  - 2026-10-23 盘中那一组通过（经隧道连主机的 OpenD）。还差某个交易日 09:00–09:25 和 09:25–09:30 各跑一次开盘前那一组
 
 ## 5. 收尾
 
@@ -45,4 +47,4 @@
   - 实现：`modules/marketdata/domain/quote.py` 的 `Quote.volume_ratio`，`integrations/moomoo/quotes.py` 映射 `volume_ratio`；已有用到 `Quote` 的测试补上量比
   - 核对：常规交易时段里在真实 OpenD 上录一次 SPY、AAPL 的快照，确认有 `volume_ratio` 列、有成交时是正数、和 moomoo App 的量比一致；录到的一行补进 `payloads.py`，结论写进本条的完成说明。字段不存在或含义不同就停下，报告给人
   - 验证：上面的测试和原有的行情、快照、紧急退出、下单流程测试通过；`uv run mypy`、`uv run ruff check` 通过
-  - 结论（2026-10-23）：字段名按 SDK 源码核对，`moomoo/quote/quote_query.py` 把快照的 `volumeRatio` 存为 `volume_ratio`，文档写的是量比。本机 OpenD 没开，当时又是美东凌晨，录不到盘中的行：`payloads.py` 里的量比是 spec 场景取的值；冒烟测试盘中那一组加了"SPY 有量比、大于 0"，和 4.2 的盘中运行一起核对
+  - 结论（2026-10-23）：字段名按 SDK 源码核对，`moomoo/quote/quote_query.py` 把快照的 `volumeRatio` 存为 `volume_ratio`，文档写的是量比。本机 OpenD 没开，当时又是美东凌晨，录不到盘中的行：`payloads.py` 里的量比是 spec 场景取的值；冒烟测试盘中那一组加了"SPY 有量比、大于 0"，和 4.2 的盘中运行一起核对。2026-10-23 盘中在真实 OpenD 上读到 SPY 的 `volume_ratio` 0.574，冒烟测试盘中那一组通过；没有和 moomoo App 对照
