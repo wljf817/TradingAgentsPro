@@ -37,8 +37,8 @@
 
 ## 8. 装配
 
-- [ ] 8.1 先写测试 `tests/bootstrap/`：bootstrap spec 改过的「启动顺序」（日志里有事件检测已开始）、「模拟盘的装配」（排进的案件由替身跑到下单、新案件排队时作废等确认的方案、事件检测排进的案件跑起来、事件检测给止损单成交排卖出复盘）、「停止」（SIGTERM 的关闭顺序、停止时巡检正在跟进订单）；`tests/bootstrap/externals.py` 的行情和新闻替身跟着改。验证：确认失败
-- [ ] 8.2 实现（design D15）：`bootstrap/app.py` 装配 `EventService`、`EventDetector`，快照流程和案件工作流拿 `EventService`；启动时排队运行之后开始事件检测，停止时在巡检之后关闭。验证：8.1 的测试和原有的 `tests/bootstrap` 测试通过；`uv run mypy`、`uv run lint-imports` 通过
+- [x] 8.1 先写测试 `tests/bootstrap/`：bootstrap spec 改过的「启动顺序」（日志里有事件检测已开始）、「模拟盘的装配」（排进的案件由替身跑到下单、新案件排队时作废等确认的方案、事件检测排进的案件跑起来、事件检测给止损单成交排卖出复盘）、「停止」（SIGTERM 的关闭顺序、停止时巡检正在跟进订单）；`tests/bootstrap/externals.py` 的行情和新闻替身跟着改。验证：确认失败
+- [x] 8.2 实现（design D15）：`bootstrap/app.py` 装配 `EventService`、`EventDetector`，快照流程和案件工作流拿 `EventService`；启动时排队运行之后开始事件检测，停止时在巡检之后关闭。验证：8.1 的测试和原有的 `tests/bootstrap` 测试通过；`uv run mypy`、`uv run lint-imports` 通过
 
 ## 9. 收尾
 

@@ -73,7 +73,7 @@ from tradingagentspro.integrations.nyse_calendar import (
     load_nyse_calendar,
 )
 from tradingagentspro.integrations.random_ids import RandomIdGenerator
-from tradingagentspro.integrations.sec import SecFilingSource
+from tradingagentspro.integrations.sec import SecConfig, SecFilingSource
 from tradingagentspro.integrations.standin import StandInBackend, StandInConfig, stand_in_models
 from tradingagentspro.integrations.system_clock import SystemClock
 from tradingagentspro.modules.caserecords import CaseRecordService, PostgresCaseRecordStore
@@ -83,7 +83,7 @@ from tradingagentspro.modules.companydata import (
     PostgresEarningsStore,
 )
 from tradingagentspro.modules.emergency import EmergencyConfig, EmergencyService
-from tradingagentspro.modules.events import EventService, PostgresEventStore
+from tradingagentspro.modules.events import EventRulesConfig, EventService, PostgresEventStore
 from tradingagentspro.modules.execution import (
     Broker,
     ExecutionConfig,
@@ -112,7 +112,7 @@ from tradingagentspro.modules.gateway import (
 from tradingagentspro.modules.health import HealthConfig, HealthService
 from tradingagentspro.modules.heartbeat import HeartbeatConfig
 from tradingagentspro.modules.marketdata import MarketDataConfig, MarketDataService
-from tradingagentspro.modules.news import NewsService, PostgresNewsStore
+from tradingagentspro.modules.news import FilingSource, NewsService, NewsSource, PostgresNewsStore
 from tradingagentspro.modules.notification import (
     ConfirmationOutcome,
     DecisionHandler,
@@ -141,6 +141,11 @@ from tradingagentspro.workflows import case_workflow, order_workflow
 from tradingagentspro.workflows.case_conclusion import CheckConfigs
 from tradingagentspro.workflows.case_flow import CaseFlow, CaseFlowConfig, CaseServices
 from tradingagentspro.workflows.emergency_flow import EmergencyDecisions, EmergencyFlow
+from tradingagentspro.workflows.event_detection import (
+    DetectionParts,
+    EventDetectionConfig,
+    EventDetector,
+)
 from tradingagentspro.workflows.health import HealthMonitor, degraded_text
 from tradingagentspro.workflows.order_flow import OrderFlow, OrderFlowConfig, TradeServices
 from tradingagentspro.workflows.order_workflow import (
@@ -177,7 +182,8 @@ class Externals:
     """程序和外界接触的地方。运行时用 SYSTEM_EXTERNALS，测试换成替身，其余照常装配。
 
     wait 是下单流程等开盘、等重试用的持久化等待，期间收到作废就提前返回，见 add-order-flow 的
-    design D13 和 add-queue-runner 的 design D6。
+    design D13 和 add-queue-runner 的 design D6。news、filings 是新闻源和公告源：事件检测在运行中
+    取新闻和公告，测试换成替身，见 add-event-detection 的 design D15。
     """
 
     clock: Clock
@@ -186,6 +192,8 @@ class Externals:
     opend: Callable[[MoomooConfig], QuoteContext]
     discord: Callable[[DiscordConfig, PlanCommand], Gateway]
     wait: Callable[[float], str | None]
+    news: Callable[[AlpacaNewsConfig], NewsSource]
+    filings: Callable[[SecConfig], FilingSource]
 
 
 SYSTEM_EXTERNALS = Externals(
@@ -195,6 +203,8 @@ SYSTEM_EXTERNALS = Externals(
     opend=open_quote_context,
     discord=DiscordGateway,
     wait=wait_decision,
+    news=AlpacaNewsSource,
+    filings=SecFilingSource,
 )
 
 
@@ -310,17 +320,23 @@ class _Parts:
     flow: OrderFlow
     case_flow: CaseFlow
     queue: QueueRunner
+    detector: EventDetector
 
 
 @dataclass(frozen=True, slots=True)
 class _CaseSide:
-    """案件那一侧装配好的部件：案件工作流的用例，以及健康监控要读的备用模型和预算。"""
+    """案件那一侧装配好的部件：案件工作流的用例，健康监控要读的备用模型和预算，以及事件检测要用的
+    新闻和公告、公司数据和事件。
+    """
 
     flow: CaseFlow
     fallback: ModelFallbackService
     budget: CallBudgetService
     gateway: GatewayConfig
     scheduler: SchedulerConfig
+    news: NewsService
+    company_data: CompanyDataService
+    events: EventService
 
 
 def _case_side(
@@ -345,8 +361,8 @@ def _case_side(
     agents = AgentCallService(StandInBackend(calendar, StandInConfig()), fallback, budget, tasks)
     alpaca = settings.alpaca
     news = NewsService(
-        AlpacaNewsSource(AlpacaNewsConfig(key_id=alpaca.key_id, secret_key=alpaca.secret_key)),
-        SecFilingSource(settings.sec),
+        externals.news(AlpacaNewsConfig(key_id=alpaca.key_id, secret_key=alpaca.secret_key)),
+        externals.filings(settings.sec),
         PostgresNewsStore(engine, clock),
     )
     company_data = CompanyDataService(
@@ -398,7 +414,7 @@ def _case_side(
         ids=ids,
     )
     flow = CaseFlow(services, CheckConfigs(gateway, scheduler, HeartbeatConfig()), CaseFlowConfig())
-    return _CaseSide(flow, fallback, budget, gateway, scheduler)
+    return _CaseSide(flow, fallback, budget, gateway, scheduler, news, company_data, events)
 
 
 def _assemble(
@@ -493,6 +509,21 @@ def _assemble(
         ),
         QueueRunnerConfig(),
     )
+    detector = EventDetector(
+        DetectionParts(
+            pool=stock_pool,
+            execution=execution,
+            market_data=market_data,
+            news=cases.news,
+            company_data=cases.company_data,
+            events=cases.events,
+            intake=queue,
+            clock=clock,
+            calendar=calendar,
+            rules=EventRulesConfig(),
+        ),
+        EventDetectionConfig(),
+    )
     monitor = HealthMonitor(
         health,
         execution,
@@ -540,6 +571,7 @@ def _assemble(
         ),
         case_flow=cases.flow,
         queue=queue,
+        detector=detector,
     )
 
 
@@ -596,6 +628,9 @@ def start(
     with step("开始排队运行"):
         parts.queue.start()
         on_stop(stack, "排队运行", parts.queue.stop)
+    with step("开始事件检测"):
+        parts.detector.start()
+        on_stop(stack, "事件检测", parts.detector.stop)
     with step("开始盘中巡检"):
         parts.patrol.start()
         on_stop(stack, "盘中巡检", parts.patrol.stop)
