@@ -37,3 +37,11 @@
 
 - [x] 5.1 对照两份 spec，确认每个场景都有对应的测试，测试名或说明里写明场景。验证：逐条列出场景和测试的对应关系，没有遗漏
 - [x] 5.2 运行全部检查：`uv run pytest`、`uv run ruff check`、`uv run ruff format --check`、`uv run mypy`、`uv run lint-imports`、`openspec validate --all --strict`，全部通过
+
+## 6. 量比
+
+- [ ] 6.1 先写测试再实现量比（design D9）：
+  - 测试：`tests/modules/marketdata/test_service.py` 照 market-data spec「取行情」的基准数据和场景加量比；`tests/integrations/moomoo/test_quotes.py` 照 moomoo-quotes spec「快照的映射」的夏令时的快照、开盘后还没有成交（没有量比）、量比精确读取；`payloads.py` 的行加 `volume_ratio`；`tests/fakes/quotes.py` 的行情带量比。确认因为 `Quote.volume_ratio` 不存在而失败
+  - 实现：`modules/marketdata/domain/quote.py` 的 `Quote.volume_ratio`，`integrations/moomoo/quotes.py` 映射 `volume_ratio`；已有用到 `Quote` 的测试补上量比
+  - 核对：常规交易时段里在真实 OpenD 上录一次 SPY、AAPL 的快照，确认有 `volume_ratio` 列、有成交时是正数、和 moomoo App 的量比一致；录到的一行补进 `payloads.py`，结论写进本条的完成说明。字段不存在或含义不同就停下，报告给人
+  - 验证：上面的测试和原有的行情、快照、紧急退出、下单流程测试通过；`uv run mypy`、`uv run ruff check` 通过

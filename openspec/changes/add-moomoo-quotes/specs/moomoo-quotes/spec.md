@@ -45,17 +45,20 @@ moomoo 行情源通过 OpenD 读取市场快照，实现行情模块的行情源
 | --- | --- |
 | 最新价 | last_price；成交量（volume，只算常规交易时段）为 0 时没有最新价 |
 | 前一交易日收盘价 | prev_close_price |
+| 量比 | volume_ratio；成交量为 0 时没有量比 |
 | 更新时刻 | update_time：美东时间，格式 `yyyy-MM-dd HH:mm:ss`，可能带毫秒；换成 UTC |
 
-- 价格 SHALL 按十进制读取，取浮点数最短的十进制写法：快照里的 333.63 就是 333.63
+- 价格和量比 SHALL 按十进制读取，取浮点数最短的十进制写法：快照里的 333.63 就是 333.63
 - 美东时间按当天是夏令时还是冬令时换算，不依赖本机时区
 - 盘前（pre_price）、盘后（after_price）、夜盘（overnight_price）的价格不用
+
+"OpenD 返回 US.AAPL"没写 volume_ratio 时，volume_ratio 是 1.37。
 
 #### Scenario: 夏令时的快照
 
 - **GIVEN** OpenD 返回 US.AAPL
 - **WHEN** 取 AAPL 的行情
-- **THEN** 最新价 333.63，前一交易日收盘价 332.89，更新时刻 2026-10-06 21:53:59.407Z
+- **THEN** 最新价 333.63，前一交易日收盘价 332.89，量比 1.37，更新时刻 2026-10-06 21:53:59.407Z
 - **AND** 盘后价 333.85 和盘前价 332.01 都没有用到
 
 #### Scenario: 冬令时、不带毫秒的更新时刻
@@ -66,15 +69,21 @@ moomoo 行情源通过 OpenD 读取市场快照，实现行情模块的行情源
 
 #### Scenario: 开盘后还没有成交
 
-- **GIVEN** OpenD 返回 US.AAPL，成交量 0，last_price 仍是 333.63，update_time 2026-10-07 09:29:58.120
+- **GIVEN** OpenD 返回 US.AAPL，成交量 0，last_price 仍是 333.63，volume_ratio 0，update_time 2026-10-07 09:29:58.120
 - **WHEN** 取 AAPL 的行情
-- **THEN** 没有最新价，前一交易日收盘价 332.89，更新时刻 2026-10-07 13:29:58.120Z
+- **THEN** 没有最新价，没有量比，前一交易日收盘价 332.89，更新时刻 2026-10-07 13:29:58.120Z
 
 #### Scenario: 低价股的价格精确读取
 
 - **GIVEN** OpenD 返回 US.AAPL，last_price 0.1234，prev_close_price 0.1199
 - **WHEN** 取 AAPL 的行情
 - **THEN** 最新价正好是 0.1234，前一交易日收盘价正好是 0.1199
+
+#### Scenario: 量比精确读取
+
+- **GIVEN** OpenD 返回 US.AAPL，volume_ratio 3.05
+- **WHEN** 取 AAPL 的行情
+- **THEN** 量比正好是 3.05
 
 ### Requirement: 查不到的股票
 

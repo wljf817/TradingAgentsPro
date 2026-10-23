@@ -87,12 +87,14 @@ class Quote:
 
     - last_price：当前交易日常规交易时段的最新成交价；开盘后还没有成交时为 None
     - previous_close：前一交易日常规交易时段的收盘价
+    - volume_ratio：行情源算好的量比；开盘后还没有成交时为 None，见 D9
     - updated_at：行情源最近一次更新这只股票行情的时刻，UTC
     """
 
     symbol: str
     last_price: Decimal | None
     previous_close: Decimal
+    volume_ratio: Decimal | None
     updated_at: datetime
 ```
 
@@ -229,6 +231,10 @@ mypy：SDK 没有类型标注，`pyproject.toml` 对 `moomoo`、`moomoo.*` 设 `
   - 常规交易时段内：SPY 有最新价，更新时刻和现在相差不超过 10 秒（证明拿到的是实时行情）
   - 当天开盘前 30 分钟内：SPY 没有最新价（验证 D5 的"开盘前成交量已清零"）
   - 不在对应时段时跳过那一项
+
+### D9 量比
+
+事件检测（add-event-detection）要按量比判断成交量异动，量比放进行情：`Quote` 加 `volume_ratio: Decimal | None`，取快照的 `volume_ratio`，按价格同样的办法读成十进制。成交量为 0 时为 None，和最新价一样：开盘后还没有成交时不给前一天的量比。moomoo 文档的量比是当天平均每分钟成交量和过去 5 个交易日平均每分钟成交量之比，已经按一天里的时间归一，不用自己算；字段名和含义在真实 OpenD 上录一行核对。
 
 ## Risks / Trade-offs
 
