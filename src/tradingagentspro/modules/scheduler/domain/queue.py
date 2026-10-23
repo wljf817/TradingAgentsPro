@@ -179,17 +179,18 @@ def queue_decision(snapshot: QueueSnapshot, config: SchedulerConfig) -> QueueDec
     return QueueDecision(start=start, drop=tuple(drop), void=void)
 
 
-def emergency_decision(snapshot: QueueSnapshot, symbol: str) -> EmergencyDecision:
-    """symbol 触发紧急风险退出时，中止哪个案件、作废哪些方案；不看降级模式、预算和并发上限。"""
+def emergency_decision(
+    running: tuple[RunningCase, ...], plans: tuple[PendingPlan, ...], symbol: str
+) -> EmergencyDecision:
+    """symbol 触发紧急风险退出时，中止哪个案件、作废哪些方案。
+
+    只看运行中的案件和还没提交订单的方案：排队的案件不动，降级模式、预算和并发上限都不看。
+    """
     # 一只股票最多一个复盘以外的案件在运行；复盘案件不中止
     abort = next(
-        (
-            r.case_id
-            for r in snapshot.running
-            if r.symbol == symbol and r.case_type not in _RETROSPECTIVES
-        ),
+        (r.case_id for r in running if r.symbol == symbol and r.case_type not in _RETROSPECTIVES),
         None,
     )
-    # 这只股票的方案不论动作和阶段全部作废；排队的案件不动
-    void = tuple(p.plan_id for p in snapshot.plans if p.symbol == symbol)
+    # 这只股票的方案不论动作和阶段全部作废
+    void = tuple(p.plan_id for p in plans if p.symbol == symbol)
     return EmergencyDecision(abort=abort, void=void)
