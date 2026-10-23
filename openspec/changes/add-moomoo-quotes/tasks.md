@@ -40,8 +40,9 @@
 
 ## 6. 量比
 
-- [ ] 6.1 先写测试再实现量比（design D9）：
+- [x] 6.1 先写测试再实现量比（design D9）：
   - 测试：`tests/modules/marketdata/test_service.py` 照 market-data spec「取行情」的基准数据和场景加量比；`tests/integrations/moomoo/test_quotes.py` 照 moomoo-quotes spec「快照的映射」的夏令时的快照、开盘后还没有成交（没有量比）、量比精确读取；`payloads.py` 的行加 `volume_ratio`；`tests/fakes/quotes.py` 的行情带量比。确认因为 `Quote.volume_ratio` 不存在而失败
   - 实现：`modules/marketdata/domain/quote.py` 的 `Quote.volume_ratio`，`integrations/moomoo/quotes.py` 映射 `volume_ratio`；已有用到 `Quote` 的测试补上量比
   - 核对：常规交易时段里在真实 OpenD 上录一次 SPY、AAPL 的快照，确认有 `volume_ratio` 列、有成交时是正数、和 moomoo App 的量比一致；录到的一行补进 `payloads.py`，结论写进本条的完成说明。字段不存在或含义不同就停下，报告给人
   - 验证：上面的测试和原有的行情、快照、紧急退出、下单流程测试通过；`uv run mypy`、`uv run ruff check` 通过
+  - 结论（2026-10-23）：字段名按 SDK 源码核对，`moomoo/quote/quote_query.py` 把快照的 `volumeRatio` 存为 `volume_ratio`，文档写的是量比。本机 OpenD 没开，当时又是美东凌晨，录不到盘中的行：`payloads.py` 里的量比是 spec 场景取的值；冒烟测试盘中那一组加了"SPY 有量比、大于 0"，和 4.2 的盘中运行一起核对

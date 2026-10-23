@@ -1,6 +1,6 @@
 """moomoo 行情源：用 OpenD 的市场快照实现行情模块的 QuoteSource。
 
-见 moomoo-quotes spec 和 add-moomoo-quotes 的 design D4 到 D6。
+见 moomoo-quotes spec 和 add-moomoo-quotes 的 design D4 到 D6、D9。
 """
 
 from collections.abc import Mapping, Sequence
@@ -76,19 +76,23 @@ def open_quote_context(config: MoomooConfig) -> OpenQuoteContext:
 def _quote(symbol: str, row: Mapping[str, Any]) -> Quote | None:
     """快照的一行；update_time 为空（OpenD 查不到这只股票，价格全为 0）时为 None。
 
-    成交量只算常规时段，为 0 时当天开盘后还没有成交，没有最新价，见 design D5。
+    成交量只算常规时段，为 0 时当天开盘后还没有成交，没有最新价和量比，见 design D5、D9。
     """
     update_time = row["update_time"]
     if not update_time:
         return None
+    traded = row["volume"] != 0
     return Quote(
         symbol=symbol,
-        last_price=None if row["volume"] == 0 else _price(row["last_price"]),
+        last_price=_price(row["last_price"]) if traded else None,
         previous_close=_price(row["prev_close_price"]),
+        volume_ratio=_price(row["volume_ratio"]) if traded else None,
         updated_at=datetime.fromisoformat(update_time).replace(tzinfo=NEW_YORK).astimezone(UTC),
     )
 
 
 def _price(value: Any) -> Decimal:
-    """numpy 的 float64 先转成 float，再取最短的十进制写法：333.63 得到 Decimal("333.63")。"""
+    """价格和量比：numpy 的 float64 先转成 float，再取最短的十进制写法：333.63 得到
+    Decimal("333.63")。
+    """
     return Decimal(repr(float(value)))
