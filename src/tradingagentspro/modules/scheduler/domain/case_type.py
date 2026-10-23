@@ -91,11 +91,14 @@ _REQUIRED_AGENTS: Final = {
 
 @dataclass(frozen=True, slots=True)
 class EventTrigger:
-    """事件。holding_risk 是事件检测标注的持仓风险级别，只对持仓有效。"""
+    """事件。holding_risk 是事件检测标注的持仓风险级别，只对持仓有效；event_id 是事件检测记下的
+    事件（event-rules spec「事件 ID 和去重」），案件开始时按它读出事件的内容。
+    """
 
     symbol: str
     category: EventCategory
     holding_risk: bool
+    event_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,9 +128,12 @@ class FollowUpTrigger:
 
 @dataclass(frozen=True, slots=True)
 class SellTrigger:
-    """卖出成交：止损单成交、紧急风险退出、PM 发起的减仓和清仓都算。"""
+    """卖出成交：每笔已经结束、有成交的卖单和止损单都算，包括止损单成交、紧急风险退出、PM 发起的
+    减仓和清仓、`/plan` 的卖出。order_id 是这笔卖出的交易记录的客户端订单 ID。
+    """
 
     symbol: str
+    order_id: str
 
 
 type Trigger = EventTrigger | HeartbeatTrigger | FollowUpTrigger | SellTrigger
@@ -163,7 +169,7 @@ def define_case(trigger: Trigger, status: StockStatus | None) -> CaseDefinition 
     status 是这只股票现在的状态，不在股票池也不是持仓时为 None；寻股和复盘不看它。
     """
     match trigger:
-        case EventTrigger(symbol, category, holding_risk):
+        case EventTrigger(symbol, category, holding_risk, _):
             if status is None:
                 return None
             if status is _HOLDING and holding_risk:
@@ -180,7 +186,7 @@ def define_case(trigger: Trigger, status: StockStatus | None) -> CaseDefinition 
             if status is None or status is _CANDIDATE:
                 return None
             return _definition(_FOLLOW_UP_TYPES[status], symbol, question)
-        case SellTrigger(symbol):
+        case SellTrigger(symbol, _):
             return _definition(CaseType.SELL_RETROSPECTIVE, symbol)
 
 

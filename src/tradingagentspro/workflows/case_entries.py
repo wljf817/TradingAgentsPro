@@ -63,10 +63,13 @@ _HEARTBEAT_ITEMS: Final = {
 
 
 def case_trigger(trigger: Trigger, triggered_at: datetime) -> CaseTrigger:
-    """调度器的触发换成案件记录的触发：种类、触发原因、股票和触发时刻（add-case-records D8）。"""
+    """调度器的触发换成案件记录的触发：种类、触发原因、股票和触发时刻（add-case-records D8）。
+
+    事件的触发原因带事件 ID，卖出成交的带客户端订单 ID（add-event-detection 的 design D12）。
+    """
     match trigger:
-        case EventTrigger(symbol, category, holding_risk):
-            reason = f"{symbol} 的{EVENT_CATEGORIES[category]}事件"
+        case EventTrigger(symbol, category, holding_risk, event_id):
+            reason = f"{symbol} 的{EVENT_CATEGORIES[category]}事件（{event_id}）"
             if holding_risk:
                 reason += "，持仓风险级别"
             return CaseTrigger(TriggerKind.EVENT, reason, symbol, triggered_at)
@@ -77,8 +80,9 @@ def case_trigger(trigger: Trigger, triggered_at: datetime) -> CaseTrigger:
         case FollowUpTrigger(symbol, question):
             reason = f"{symbol} 的跟进：{question}"
             return CaseTrigger(TriggerKind.FOLLOW_UP, reason, symbol, triggered_at)
-        case SellTrigger(symbol):
-            return CaseTrigger(TriggerKind.SELL, f"{symbol} 卖出成交", symbol, triggered_at)
+        case SellTrigger(symbol, order_id):
+            reason = f"{symbol} 卖出成交（{order_id}）"
+            return CaseTrigger(TriggerKind.SELL, reason, symbol, triggered_at)
 
 
 # 退回 PM 的原因

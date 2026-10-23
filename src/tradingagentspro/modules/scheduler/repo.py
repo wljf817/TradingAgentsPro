@@ -97,6 +97,13 @@ class PostgresQueueStore:
         with self._engine.begin() as connection:
             connection.execute(insert(EXITS).values(values))
 
+    def sales(self) -> frozenset[str]:
+        """排队表里种类是卖出成交的触发带的客户端订单 ID，不看出队表。"""
+        trigger = QUEUE.c.trigger
+        query = select(trigger["order_id"].astext).where(trigger["kind"].astext == "sell")
+        with self._engine.connect() as connection:
+            return frozenset(connection.execute(query).scalars())
+
 
 def _encode(trigger: Trigger) -> dict[str, Any]:
     """触发的种类加上它的字段。"""

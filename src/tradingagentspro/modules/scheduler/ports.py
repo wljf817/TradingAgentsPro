@@ -25,3 +25,7 @@ class QueueStore(Protocol):
     def leave(self, case_id: UUID, outcome: QueueExit, at: datetime) -> None:
         """这个案件出队；同一个案件第二次出队报错。"""
         ...
+
+    def sales(self) -> frozenset[str]:
+        """排过的卖出成交的客户端订单 ID：全部排过的，出没出队都算。"""
+        ...

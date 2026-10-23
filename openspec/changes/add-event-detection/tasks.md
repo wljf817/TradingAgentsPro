@@ -2,13 +2,13 @@
 
 ## 1. 前提
 
-- [ ] 1.1 先做 add-moomoo-quotes 新加的量比任务（它的 tasks 6.1、design D9；本变更的 design D10）：按那一条先写测试、再实现 `Quote.volume_ratio` 和 moomoo 的映射，在真实 OpenD 上核对 `volume_ratio`。做完在 `openspec/changes/add-moomoo-quotes/tasks.md` 里勾掉 6.1。add-moomoo-quotes 不用先归档，开盘切换的修正也不挡本变更的 apply。验证：那一条写的验证全部通过；字段不存在或含义不同就停下，报告给人
+- [x] 1.1 先做 add-moomoo-quotes 新加的量比任务（它的 tasks 6.1、design D9；本变更的 design D10）：按那一条先写测试、再实现 `Quote.volume_ratio` 和 moomoo 的映射，在真实 OpenD 上核对 `volume_ratio`。做完在 `openspec/changes/add-moomoo-quotes/tasks.md` 里勾掉 6.1。add-moomoo-quotes 不用先归档，开盘切换的修正也不挡本变更的 apply。验证：那一条写的验证全部通过；字段不存在或含义不同就停下，报告给人
 - [x] 1.2 按 proposal「需要人决定」第 8 条修改完整版 Proposal 的三句话（2026-10-23 用户同意，propose 时已改）。验证：`grep -n "8-K 的 item 2.02\|每个交易日最多开一个案件\|价格和成交量异动只在常规交易时段判断" "docs/AI Agent 美股交易系统需求 Proposal.md"` 找到改过的三处；简版不改
 
 ## 2. 事件的格式和触发
 
-- [ ] 2.1 先写测试：`tests/contracts/test_event.py`（`Event` 原样序列化和读回、`extra` 报错、强度的 Decimal 不丢位）；`tests/modules/scheduler/domain/test_case_type.py` 加 case-types spec「触发」的「事件和卖出成交带的内容」；`tests/workflows/test_case_entries.py` 的触发原因带事件 ID 和客户端订单 ID（design D12）；`tests/modules/scheduler/test_service.py`、`test_repo.py`（OrbStack）和 `tests/workflows/test_queue_runner.py` 覆盖 queue-runner spec「排过的卖出成交」的三个场景，`tests/fakes/queue.py` 加 `sales`。验证：确认因为 `Event`、`EventTrigger.event_id`、`SellTrigger.order_id`、`sales` 不存在而失败
-- [ ] 2.2 实现（design D2、D4、D12）：`contracts/event.py` 的 `EventSource`、`EventOutcome`、`Event`，模块说明改为事件的格式在这里；`modules/scheduler/domain/case_type.py` 的 `EventTrigger.event_id`、`SellTrigger.order_id`；`ports.py` 的 `QueueStore.sales`、`repo.py` 读 JSONB 的 `order_id`、`service.py` 的 `QueueService.sales`；`workflows/queue_runner.py` 的 `QueueRunner.queued_sales`；`workflows/case_entries.py` 的触发原因。已有测试里构造这两种触发的地方补上新字段。验证：2.1 的测试通过；`uv run pytest tests/modules/scheduler tests/workflows tests/contracts`、`uv run mypy`、`uv run lint-imports` 通过
+- [x] 2.1 先写测试：`tests/contracts/test_event.py`（`Event` 原样序列化和读回、`extra` 报错、强度的 Decimal 不丢位）；`tests/modules/scheduler/domain/test_case_type.py` 加 case-types spec「触发」的「事件和卖出成交带的内容」；`tests/workflows/test_case_entries.py` 的触发原因带事件 ID 和客户端订单 ID（design D12）；`tests/modules/scheduler/test_service.py`、`test_repo.py`（OrbStack）和 `tests/workflows/test_queue_runner.py` 覆盖 queue-runner spec「排过的卖出成交」的三个场景，`tests/fakes/queue.py` 加 `sales`。验证：确认因为 `Event`、`EventTrigger.event_id`、`SellTrigger.order_id`、`sales` 不存在而失败
+- [x] 2.2 实现（design D2、D4、D12）：`contracts/event.py` 的 `EventSource`、`EventOutcome`、`Event`，模块说明改为事件的格式在这里；`modules/scheduler/domain/case_type.py` 的 `EventTrigger.event_id`、`SellTrigger.order_id`；`ports.py` 的 `QueueStore.sales`、`repo.py` 读 JSONB 的 `order_id`、`service.py` 的 `QueueService.sales`；`workflows/queue_runner.py` 的 `QueueRunner.queued_sales`；`workflows/case_entries.py` 的触发原因。已有测试里构造这两种触发的地方补上新字段。验证：2.1 的测试通过；`uv run pytest tests/modules/scheduler tests/workflows tests/contracts`、`uv run mypy`、`uv run lint-imports` 通过
 
 ## 3. 事件规则
 

@@ -160,6 +160,10 @@ class QueueRunner:
         )
         return case.case_id
 
+    def queued_sales(self) -> frozenset[str]:
+        """排过的卖出成交的客户端订单 ID，见 spec「排过的卖出成交」。"""
+        return self._parts.queue.sales()
+
     def heartbeat(self) -> datetime:
         """调度器最近一次心跳的时刻，见 spec「调度器心跳」。"""
         return self._beat

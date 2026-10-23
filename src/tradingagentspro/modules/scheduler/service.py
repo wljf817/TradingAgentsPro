@@ -1,6 +1,7 @@
-"""排队的案件的用例：排队（分配案件 ID）、读队列、出队。
+"""排队的案件的用例：排队（分配案件 ID）、读队列、出队、排过的卖出成交。
 
-规则见 queue-runner spec「排队」「排队的案件的存储」和 add-queue-runner 的 design D2。排队时不确定
+规则见 queue-runner spec「排队」「排队的案件的存储」「排过的卖出成交」和 add-queue-runner 的
+design D2。排队时不确定
 案件类型、不看股票的状态；程序日志由调用方（排队运行）写。
 """
 
@@ -35,3 +36,7 @@ class QueueService:
     def leave(self, case_id: UUID, outcome: QueueExit) -> None:
         """这个案件出队，出队时刻是现在；同一个案件只出队一次。"""
         self._store.leave(case_id, outcome, self._clock.now())
+
+    def sales(self) -> frozenset[str]:
+        """排过的卖出成交的客户端订单 ID，出没出队都算；事件检测用它让每笔卖出只排一次。"""
+        return self._store.sales()
