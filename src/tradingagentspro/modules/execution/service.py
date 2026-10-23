@@ -56,7 +56,7 @@ from tradingagentspro.modules.execution.domain.reconciliation import (
     position_explained,
     stray_orders,
 )
-from tradingagentspro.modules.execution.domain.trade import trade_of_order, trade_of_stop
+from tradingagentspro.modules.execution.domain.trade import Trade, trade_of_order, trade_of_stop
 from tradingagentspro.modules.execution.ports import (
     Broker,
     BrokerUnavailableError,
@@ -321,6 +321,18 @@ class ExecutionService:
         """
         positions = self._broker.all_positions()
         return tuple(sorted(set(positions) | {p.symbol for p in self._protections.active()}))
+
+    def sales(self, since: date) -> tuple[Trade, ...]:
+        """已经结束的卖出：类型是卖出或止损单、全部成交或者有成交以后撤销、过期，成交日不早于
+        since，按成交日、再按客户端订单 ID。只读交易记录，不调用券商；见 trade-records spec
+        「已经结束的卖出」。
+        """
+        ended = [t for t in self._trades.traded() if t.is_sale and t.status.is_terminal]
+        recent = [
+            (t.traded_on, t) for t in ended if t.traded_on is not None and t.traded_on >= since
+        ]
+        ordered = sorted(recent, key=lambda pair: (pair[0], pair[1].client_order_id))
+        return tuple(trade for _, trade in ordered)
 
     def account(self) -> Account:
         """账户数据：券商账户加上本系统的记录，见 trade-records spec「账户数据」和 design D7。

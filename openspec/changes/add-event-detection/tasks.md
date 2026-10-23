@@ -22,8 +22,8 @@
 
 ## 5. 已经结束的卖出
 
-- [ ] 5.1 先写测试 `tests/modules/execution/test_trade_service.py`：trade-records spec「已经结束的卖出」的两个场景。验证：确认因为 `ExecutionService.sales` 不存在而失败
-- [ ] 5.2 实现（design D4）：`ExecutionService.sales(since: date)`，只读交易记录存储的 `traded()`。验证：5.1 的测试通过；`uv run pytest tests/modules/execution`、`uv run mypy` 通过
+- [x] 5.1 先写测试 `tests/modules/execution/test_trade_service.py`：trade-records spec「已经结束的卖出」的两个场景。验证：确认因为 `ExecutionService.sales` 不存在而失败
+- [x] 5.2 实现（design D4）：`ExecutionService.sales(since: date)`，只读交易记录存储的 `traded()`。验证：5.1 的测试通过；`uv run pytest tests/modules/execution`、`uv run mypy` 通过
 
 ## 6. 快照和案件上下文带上事件
 
