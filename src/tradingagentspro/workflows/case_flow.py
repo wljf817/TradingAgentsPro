@@ -44,6 +44,7 @@ from tradingagentspro.contracts.task import Dispatcher, TaskRequest
 from tradingagentspro.contracts.thesis import Catalyst, InvestmentThesis, WatchThesis
 from tradingagentspro.contracts.trade_plan import TradePlan
 from tradingagentspro.modules.caserecords import CaseRecord, CaseRecordService
+from tradingagentspro.modules.events import EventService
 from tradingagentspro.modules.execution import BrokerUnavailableError
 from tradingagentspro.modules.followups import FollowUpRejection, FollowUpService
 from tradingagentspro.modules.gateway import (
@@ -120,6 +121,7 @@ class CaseServices:
     snapshot_flow: SnapshotFlow
     pool: StockPoolService
     follow_ups: FollowUpService
+    events: EventService
     notification: NotificationService
     log: ProgramLog
     clock: Clock
@@ -175,7 +177,7 @@ class CaseFlow:
         return version
 
     def context(self, definition: CaseDefinition, trigger: Trigger) -> CaseContext:
-        """组出案件上下文，见 spec「案件上下文」。"""
+        """组出案件上下文，见 spec「案件上下文」：事件案件的事件按触发里的事件 ID 读出。"""
         assert definition.question is not None  # 由 PM 处理的案件都有问题
         symbol = definition.symbol
         entry = None if symbol is None else self._s.pool.entry(symbol)
@@ -184,9 +186,13 @@ class CaseFlow:
         if symbol is not None:
             recent = self._s.records.recent_ended(symbol, self._config.recent_cases)
             pending = tuple(f.request for f in self._s.follow_ups.pending(symbol))
+        event = None
+        if isinstance(trigger, EventTrigger):
+            event = self._s.events.event(trigger.event_id)
+            assert event is not None  # 事件检测先记下事件、再排进案件
         return CaseContext(
             question=definition.question,
-            event=trigger.category if isinstance(trigger, EventTrigger) else None,
+            event=event,
             required_agent=definition.required_agent,
             watch_thesis=None if entry is None else entry.watch_thesis,
             investment_thesis=None if entry is None else entry.investment_thesis,

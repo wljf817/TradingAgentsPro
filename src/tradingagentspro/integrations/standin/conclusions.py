@@ -73,7 +73,7 @@ def researched(snapshot: Snapshot, context: CaseContext) -> bool:
         case CaseType.CANDIDATE_EVALUATION:
             return True
         case CaseType.WATCH_EVENT:
-            return context.event is EventCategory.ENTRY
+            return _entry(context)
         case _:
             return False
 
@@ -115,7 +115,7 @@ def conclusion(
             return _holding(
                 snapshot, results, config, Decision.CLOSE, plan=close, after_close=AfterClose.REMOVE
             )
-        case CaseType.WATCH_EVENT if context.event is EventCategory.ENTRY:
+        case CaseType.WATCH_EVENT if _entry(context):
             return _buy(snapshot, results, calendar, config)
         case CaseType.WATCH_EVENT | CaseType.WATCH_FOLLOW_UP:
             return _watch(snapshot, results, config)
@@ -318,3 +318,8 @@ def _symbol(snapshot: Snapshot) -> str:
     if snapshot.symbol is None:
         raise ValueError(f"{snapshot.case_type} 的快照没有股票")
     return snapshot.symbol
+
+
+def _entry(context: CaseContext) -> bool:
+    """事件案件的事件是入场条件满足。"""
+    return context.event is not None and context.event.category is EventCategory.ENTRY

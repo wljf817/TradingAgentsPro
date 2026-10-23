@@ -15,6 +15,7 @@ from uuid import UUID
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from tradingagentspro.contracts.case import CaseType
+from tradingagentspro.contracts.event import Event
 from tradingagentspro.contracts.listing import Listing
 from tradingagentspro.contracts.news import Filing, NewsArticle
 from tradingagentspro.contracts.signal import EntryId
@@ -32,6 +33,7 @@ class EntryKind(StrEnum):
     FILING = "filing"  # 一份公告
     EARNINGS = "earnings"  # 一次财报发布
     SURPRISES = "surprises"  # 一只股票的 surprise
+    EVENT = "event"  # 一个事件
     SCREEN = "screen"  # 粗筛结果
 
 
@@ -179,6 +181,12 @@ class SurprisesEntry(SnapshotEntry):
     quarters: tuple[SurpriseQuarter, ...]  # 按报告期从新到旧
 
 
+class EventEntry(SnapshotEntry):
+    """一个事件，原样复制；键是事件 ID。"""
+
+    event: Event
+
+
 class ScreenCondition(StrEnum):
     """粗筛的条件，取值和寻股粗筛模块的 Condition 相同。"""
 
@@ -233,13 +241,15 @@ class Snapshot(BaseModel):
     filings: tuple[FilingEntry, ...]  # 按受理时刻、accession number
     earnings: tuple[EarningsEntry, ...]  # 按发布日
     surprises: SurprisesEntry | None
+    events: tuple[EventEntry, ...]  # 按检测时刻、事件 ID
     screen: ScreenEntry | None
 
     def entries(self) -> tuple[SnapshotEntry, ...]:
         """全部条目，按 spec「条目和条目 ID」的先后。"""
-        optional = tuple(e for e in (self.surprises, self.screen) if e is not None)
-        listed = (*self.quotes, *self.news, *self.filings, *self.earnings)
-        return (self.account, self.market, self.pool, *listed, *optional)
+        surprises = () if self.surprises is None else (self.surprises,)
+        screen = () if self.screen is None else (self.screen,)
+        listed = (*self.quotes, *self.news, *self.filings, *self.earnings, *surprises)
+        return (self.account, self.market, self.pool, *listed, *self.events, *screen)
 
     def entry(self, entry_id: str) -> SnapshotEntry | None:
         """这一版里 ID 是 entry_id 的条目；没有时为 None。"""

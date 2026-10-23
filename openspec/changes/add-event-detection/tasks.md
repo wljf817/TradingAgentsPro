@@ -27,8 +27,8 @@
 
 ## 6. 快照和案件上下文带上事件
 
-- [ ] 6.1 先写测试：`tests/workflows/test_snapshot_flow.py` 照 state-snapshot spec 改过的「条目和条目 ID」「案件股票的事实」（事件的条目排在 surprise 之后、事件的回看起点和内容、没有事件）；`tests/contracts/test_snapshot.py` 的事件条目和条目 ID；`tests/workflows/test_case_flow.py` 照 case-workflow spec「案件上下文」（事件是整个事件、读不到事件时报错、跟进没有事件）；`tests/modules/gateway/test_agent_calls.py` 里 agent-calls spec「每个 agent 的输入和输出」的持仓的案件上下文；`tests/integrations/standin/test_backend.py` 里入场条件满足的事件仍然给出开仓方案。验证：确认因为 `EventEntry`、`Snapshot.events`、`CaseContext.event` 的新类型不存在而失败
-- [ ] 6.2 实现（design D13）：`contracts/snapshot.py` 的 `EntryKind.EVENT`、`EventEntry`、`Snapshot.events` 和 `entries()` 的先后；`contracts/agent_call.py` 的 `CaseContext.event: Event | None`；`workflows/snapshot_flow.py` 读这只股票的事件；`workflows/case_flow.py` 的 `CaseServices.events` 和 `context` 读事件；`integrations/standin/conclusions.py` 读 `context.event.category`。已有构造快照和案件上下文的测试补上事件。验证：6.1 的测试和原有的快照、案件工作流、替身、网关测试通过；`uv run mypy`、`uv run lint-imports` 通过
+- [x] 6.1 先写测试：`tests/workflows/test_snapshot_flow.py` 照 state-snapshot spec 改过的「条目和条目 ID」「案件股票的事实」（事件的条目排在 surprise 之后、事件的回看起点和内容、没有事件）；`tests/contracts/test_snapshot.py` 的事件条目和条目 ID；`tests/workflows/test_case_flow.py` 照 case-workflow spec「案件上下文」（事件是整个事件、读不到事件时报错、跟进没有事件）；`tests/modules/gateway/test_agent_calls.py` 里 agent-calls spec「每个 agent 的输入和输出」的持仓的案件上下文；`tests/integrations/standin/test_backend.py` 里入场条件满足的事件仍然给出开仓方案。验证：确认因为 `EventEntry`、`Snapshot.events`、`CaseContext.event` 的新类型不存在而失败
+- [x] 6.2 实现（design D13）：`contracts/snapshot.py` 的 `EntryKind.EVENT`、`EventEntry`、`Snapshot.events` 和 `entries()` 的先后；`contracts/agent_call.py` 的 `CaseContext.event: Event | None`；`workflows/snapshot_flow.py` 读这只股票的事件；`workflows/case_flow.py` 的 `CaseServices.events` 和 `context` 读事件；`integrations/standin/conclusions.py` 读 `context.event.category`。已有构造快照和案件上下文的测试补上事件。验证：6.1 的测试和原有的快照、案件工作流、替身、网关测试通过；`uv run mypy`、`uv run lint-imports` 通过
 
 ## 7. 事件检测的运行
 

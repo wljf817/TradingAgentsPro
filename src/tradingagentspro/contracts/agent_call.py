@@ -20,7 +20,7 @@ from tradingagentspro.contracts.conclusion import (
     HoldingConclusion,
     WatchConclusion,
 )
-from tradingagentspro.contracts.event import EventCategory
+from tradingagentspro.contracts.event import Event
 from tradingagentspro.contracts.review import CriticReview, PlanResponse, Verdict
 from tradingagentspro.contracts.snapshot import Snapshot
 from tradingagentspro.contracts.task import Result, Task, TaskRequest
@@ -47,7 +47,7 @@ class CaseContext(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", str_strip_whitespace=True)
 
     question: str = Field(min_length=1)  # 案件要回答的问题；跟进是申请时写下的问题
-    event: EventCategory | None  # 事件案件的事件类别
+    event: Event | None  # 事件案件的事件
     required_agent: SubAgent | None  # 事件案件至少要派给的子 agent
     watch_thesis: WatchThesis | None  # 关注股现在的关注论点
     investment_thesis: InvestmentThesis | None  # 持仓现在的投资论点

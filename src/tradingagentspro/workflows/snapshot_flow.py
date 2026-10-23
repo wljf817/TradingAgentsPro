@@ -14,12 +14,14 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from tradingagentspro.contracts.case import CaseType
+from tradingagentspro.contracts.event import Event
 from tradingagentspro.contracts.news import Filing, NewsArticle
 from tradingagentspro.contracts.snapshot import (
     AccountEntry,
     EarningsEntry,
     EarningsTime,
     EntryKind,
+    EventEntry,
     FilingEntry,
     HeldStock,
     MarketEntry,
@@ -41,6 +43,7 @@ from tradingagentspro.modules.companydata import (
     EarningsRelease,
     SurpriseHistory,
 )
+from tradingagentspro.modules.events import EventService
 from tradingagentspro.modules.execution import Account, ExecutionService
 from tradingagentspro.modules.marketdata import MarketDataService, Quote
 from tradingagentspro.modules.news import NewsService
@@ -87,12 +90,13 @@ class _StockFacts:
     filings: tuple[FilingEntry, ...] = ()
     earnings: tuple[EarningsEntry, ...] = ()
     surprises: SurprisesEntry | None = None
+    events: tuple[EventEntry, ...] = ()
 
 
 class SnapshotFlow:
     """生成快照：读各模块的事实，组成一版快照存下，见 state-snapshot spec。
 
-    只读执行模块、股票池、新闻和公告、公司数据，不拿锁；寻股的粗筛写的是粗筛模块自己的表。
+    只读执行模块、股票池、新闻和公告、公司数据、事件，不拿锁；寻股的粗筛写的是粗筛模块自己的表。
     """
 
     def __init__(
@@ -103,6 +107,7 @@ class SnapshotFlow:
         news: NewsService,
         company_data: CompanyDataService,
         screener: ScreenerService,
+        events: EventService,
         snapshots: SnapshotService,
         clock: Clock,
         calendar: TradingCalendar,
@@ -114,6 +119,7 @@ class SnapshotFlow:
         self._news = news
         self._company_data = company_data
         self._screener = screener
+        self._events = events
         self._snapshots = snapshots
         self._clock = clock
         self._calendar = calendar
@@ -165,15 +171,19 @@ class SnapshotFlow:
             filings=facts.filings,
             earnings=facts.earnings,
             surprises=facts.surprises,
+            events=facts.events,
             screen=screen,
         )
         self._snapshots.save(snapshot)
         return snapshot
 
     def _stock_facts(self, version: int, symbol: str, now: datetime) -> _StockFacts:
-        """案件股票在状态库里的新闻、公告（各自的回看起点以来）、财报发布和 surprise。"""
+        """案件股票在状态库里的新闻、公告（各自的回看起点以来）、财报发布、surprise 和事件（新闻的
+        回看起点以来）。
+        """
         config, calendar = self._config, self._calendar
-        articles = self._news.articles(symbol, lookback_start(calendar, now, config.news_sessions))
+        news_since = lookback_start(calendar, now, config.news_sessions)
+        articles = self._news.articles(symbol, news_since)
         filings = self._news.filings(symbol, lookback_start(calendar, now, config.filing_sessions))
         history = self._company_data.surprises(symbol)
         return _StockFacts(
@@ -181,6 +191,7 @@ class SnapshotFlow:
             filings=tuple(_filing(version, f) for f in filings),
             earnings=tuple(_earnings(version, r) for r in self._company_data.releases(symbol)),
             surprises=None if history is None else _surprises(version, history),
+            events=tuple(_event(version, e) for e in self._events.events(symbol, news_since)),
         )
 
     def _market(self, version: int, now: datetime) -> MarketEntry:
@@ -254,6 +265,11 @@ def _news(version: int, article: NewsArticle) -> NewsEntry:
 def _filing(version: int, filing: Filing) -> FilingEntry:
     key = filing.accession_number
     return FilingEntry(entry_id=entry_id(version, EntryKind.FILING, key), filing=filing)
+
+
+def _event(version: int, event: Event) -> EventEntry:
+    key = event.event_id
+    return EventEntry(entry_id=entry_id(version, EntryKind.EVENT, key), event=event)
 
 
 def _earnings(version: int, release: EarningsRelease) -> EarningsEntry:

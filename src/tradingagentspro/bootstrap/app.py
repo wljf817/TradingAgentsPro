@@ -83,6 +83,7 @@ from tradingagentspro.modules.companydata import (
     PostgresEarningsStore,
 )
 from tradingagentspro.modules.emergency import EmergencyConfig, EmergencyService
+from tradingagentspro.modules.events import EventService, PostgresEventStore
 from tradingagentspro.modules.execution import (
     Broker,
     ExecutionConfig,
@@ -365,6 +366,7 @@ def _case_side(
         pool_config,
     )
     snapshots = SnapshotService(PostgresSnapshotStore(engine, clock), program_log)
+    events = EventService(PostgresEventStore(engine), program_log)
     snapshot_flow = SnapshotFlow(
         execution,
         market_data,
@@ -372,6 +374,7 @@ def _case_side(
         news,
         company_data,
         screener,
+        events,
         snapshots,
         clock,
         calendar,
@@ -387,6 +390,7 @@ def _case_side(
         snapshot_flow=snapshot_flow,
         pool=stock_pool,
         follow_ups=follow_ups,
+        events=events,
         notification=notification,
         log=program_log,
         clock=clock,
