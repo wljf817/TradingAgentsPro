@@ -32,8 +32,8 @@
 
 ## 7. 事件检测的运行
 
-- [ ] 7.1 先写测试 `tests/workflows/test_event_detection.py`（design D5、D6、D11、D12）：`run_round` 用 fakes 的股票池、执行模块的券商和交易记录、行情、新闻源和公告源（真的 `NewsService` 加内存存储）、公司数据、事件存储、程序日志和一个记下排队的 `CaseIntake` 替身，`FakeClock`；覆盖 event-detection spec 全部 requirement 的场景，以及 program-log spec「事件检测层的动作」的四个场景；`start`、`stop`、间隔和一轮出错照 `test_queue_runner.py` 的线程写法测「什么时候做一轮」；`EventDetectionConfig` 的默认值和非法取值。间隔、回看时长从配置读取。验证：确认因为 `workflows/event_detection.py` 不存在而失败
-- [ ] 7.2 实现 `workflows/event_detection.py`：`EventDetectionConfig`、`CaseIntake`、`EventSources`、`EventDetector`（`run_round` 的五部分、公告间隔、读不到时的处理和 WARNING、`start`、`stop`），模块说明写上它在哪个线程、读什么、为什么不拿锁。验证：7.1 的测试通过；`uv run mypy`、`uv run lint-imports`、`uv run ruff check` 通过
+- [x] 7.1 先写测试 `tests/workflows/test_event_detection.py`（design D5、D6、D11、D12）：`run_round` 用 fakes 的股票池、执行模块的券商和交易记录、行情、新闻源和公告源（真的 `NewsService` 加内存存储）、公司数据、事件存储、程序日志和一个记下排队的 `CaseIntake` 替身，`FakeClock`；覆盖 event-detection spec 全部 requirement 的场景，以及 program-log spec「事件检测层的动作」的四个场景；`start`、`stop`、间隔和一轮出错照 `test_queue_runner.py` 的线程写法测「什么时候做一轮」；`EventDetectionConfig` 的默认值和非法取值。间隔、回看时长从配置读取。验证：确认因为 `workflows/event_detection.py` 不存在而失败
+- [x] 7.2 实现 `workflows/event_detection.py`：`EventDetectionConfig`、`CaseIntake`、`EventSources`、`EventDetector`（`run_round` 的五部分、公告间隔、读不到时的处理和 WARNING、`start`、`stop`），模块说明写上它在哪个线程、读什么、为什么不拿锁。验证：7.1 的测试通过；`uv run mypy`、`uv run lint-imports`、`uv run ruff check` 通过
 
 ## 8. 装配
 
