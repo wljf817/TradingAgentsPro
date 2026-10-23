@@ -20,6 +20,7 @@ class Actor(StrEnum):
     STOCK_POOL = "stock_pool"  # 股票池
     SCHEDULER = "scheduler"  # 调度器
     GATEWAY = "gateway"  # Agent 网关
+    EVENT_DETECTION = "event_detection"  # 事件检测层
 
 
 class Action(StrEnum):
@@ -78,6 +79,8 @@ class Action(StrEnum):
     DROP_CASE = "drop_case"  # 不再运行
     VOID_PLAN = "void_plan"  # 方案作废
     BUDGET_EXHAUSTED = "budget_exhausted"  # 调用预算用完
+    DETECT_EVENT = "detect_event"  # 检测到事件
+    DISCARD_EVENT = "discard_event"  # 丢弃事件
 
 
 ACCOUNT = "account"  # 对象：整个券商账户

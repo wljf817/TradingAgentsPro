@@ -17,8 +17,8 @@
 
 ## 4. 事件的存储、用例和程序日志
 
-- [ ] 4.1 先写测试：`tests/fakes/events.py`（`InMemoryEventStore`：按事件 ID 去重、按股票和时刻读、可以安排下一次读写报错）；`tests/modules/events/test_service.py` 覆盖 event-detection spec「事件的存储」的同一个事件 ID 只写一次、「读取事件」的场景，以及 program-log spec「事件检测层的动作」里检测到事件和丢弃事件的条目内容（对象、引用、说明、没有案件 ID）；`tests/modules/events/test_repo.py`（要开着 OrbStack）覆盖原样读回（本机时区 UTC+14）、主键冲突、两个线程同时记下、读写出错、空数据库没有升级；`tests/bootstrap/test_database.py` 的表清单和最新迁移版本加上 `events_detected`、v0014。验证：确认因为 `EventService`、`PostgresEventStore` 不存在而失败
-- [ ] 4.2 实现（design D3、D14、D16）：`modules/events/ports.py`（`EventStore`）、`repo.py`（`events_detected` 表和 `PostgresEventStore`，`INSERT ... ON CONFLICT DO NOTHING RETURNING`）、`service.py`（`EventService.record(event, status) -> bool`、`discard(...)`、`event(event_id)`、`events(symbol, since)`）；`modules/programlog/domain/entry.py` 加 `Actor.EVENT_DETECTION`、`Action.DETECT_EVENT`、`Action.DISCARD_EVENT`；迁移 `v0014_create_events.py`。验证：4.1 的测试通过；`uv run mypy`、`uv run lint-imports` 通过
+- [x] 4.1 先写测试：`tests/fakes/events.py`（`InMemoryEventStore`：按事件 ID 去重、按股票和时刻读、可以安排下一次读写报错）；`tests/modules/events/test_service.py` 覆盖 event-detection spec「事件的存储」的同一个事件 ID 只写一次、「读取事件」的场景，以及 program-log spec「事件检测层的动作」里检测到事件和丢弃事件的条目内容（对象、引用、说明、没有案件 ID）；`tests/modules/events/test_repo.py`（要开着 OrbStack）覆盖原样读回（本机时区 UTC+14）、主键冲突、两个线程同时记下、读写出错、空数据库没有升级；`tests/bootstrap/test_database.py` 的表清单和最新迁移版本加上 `events_detected`、v0014。验证：确认因为 `EventService`、`PostgresEventStore` 不存在而失败
+- [x] 4.2 实现（design D3、D14、D16）：`modules/events/ports.py`（`EventStore`）、`repo.py`（`events_detected` 表和 `PostgresEventStore`，`INSERT ... ON CONFLICT DO NOTHING RETURNING`）、`service.py`（`EventService.record(event, status) -> bool`、`discard(...)`、`event(event_id)`、`events(symbol, since)`）；`modules/programlog/domain/entry.py` 加 `Actor.EVENT_DETECTION`、`Action.DETECT_EVENT`、`Action.DISCARD_EVENT`；迁移 `v0014_create_events.py`。验证：4.1 的测试通过；`uv run mypy`、`uv run lint-imports` 通过
 
 ## 5. 已经结束的卖出
 
