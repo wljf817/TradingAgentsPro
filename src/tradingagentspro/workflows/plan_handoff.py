@@ -30,6 +30,9 @@ class PlanEvent(StrEnum):
     RECHECK_VOIDED = "recheck_voided"  # 再校验作废
     VOIDED = "voided"  # 方案被作废：排队运行要求作废，见 order-flow spec「作废案件的方案」
     FAILED = "failed"  # 出错
+    # 紧急退出中止：不是下单那一侧送的，由紧急退出流程按案件 ID 送来（case_workflow.abort_case），
+    # 见 case-workflow spec「紧急退出中止」
+    ABORTED = "aborted"
 
 
 @dataclass(frozen=True, slots=True)

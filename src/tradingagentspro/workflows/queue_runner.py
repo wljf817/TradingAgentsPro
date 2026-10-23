@@ -30,12 +30,10 @@ from tradingagentspro.modules.health import HealthService
 from tradingagentspro.modules.programlog import WHOLE_SYSTEM, Action, Actor, ProgramLog
 from tradingagentspro.modules.scheduler import (
     CaseDefinition,
-    PendingPlan,
     QueuedCase,
     QueueExit,
     QueueService,
     QueueSnapshot,
-    RunningCase,
     SchedulerConfig,
     Trigger,
     queue_decision,
@@ -43,7 +41,12 @@ from tradingagentspro.modules.scheduler import (
 from tradingagentspro.modules.stockpool import StockPoolService
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.workflows.case_entries import case_trigger
-from tradingagentspro.workflows.case_workflow import CaseProgress, running_cases, start_case
+from tradingagentspro.workflows.case_workflow import (
+    CaseProgress,
+    queue_view,
+    running_cases,
+    start_case,
+)
 from tradingagentspro.workflows.names import ACTIONS, STOCK_STATUSES
 from tradingagentspro.workflows.order_flow import VoidCause
 from tradingagentspro.workflows.order_workflow import void_plan
@@ -194,17 +197,11 @@ class QueueRunner:
         self._report_budget(budget)
         statuses = {entry.symbol: entry.status for entry in parts.pool.entries()}
         queued = parts.queue.queued()
+        in_progress, pending = queue_view(running)
         snapshot = QueueSnapshot(
             queued=queued,
-            running=tuple(
-                RunningCase(case_id, p.case_type, p.symbol, p.state.calling_models)
-                for case_id, p in running
-            ),
-            plans=tuple(
-                PendingPlan(p.plan.plan_id, p.plan.symbol, p.plan.action, p.state.plan_stage)
-                for _, p in running
-                if p.plan is not None and p.state.plan_stage is not None
-            ),
+            running=in_progress,
+            plans=pending,
             statuses=statuses,
             exiting=parts.exiting(),
             degraded=parts.health.status.degraded,

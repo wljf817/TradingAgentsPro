@@ -12,6 +12,11 @@ case_flow.py 的 CaseFlow）。案件状态只在这里：每次变化以后用 
   流程用 plan_handoff.report_plan 送回结果
 - 排队运行作废方案：交给下单流程，下单流程经 PLAN_TOPIC 送回方案被作废，案件在 _deliver 的等待里
   收到（add-queue-runner 的 design D6、D7）；作废的方案只在等人工确认、等下单，这两个阶段只在这里等
+- 紧急退出中止（case-workflow spec「紧急退出中止」，update-emergency-abort-case 的 design D4、D5）：
+  紧急退出流程用 abort_case 经 PLAN_TOPIC 送中止；案件在每次调用 PM、Critic 以前，每次派发任务以前，
+  交给下单以前各收一次（_aborted，不等），等下单那一侧时在 _deliver 的等待里收，收到时把方案交回
+  （PlanHandoff.abandon）。正在进行的一步不打断。queue_view 把运行中的案件换成队列的类型，排队运行
+  和紧急退出流程都用
 
 子 agent 的任务每个开一个子工作流 case_task 并行运行（design D8）。
 """
@@ -50,6 +55,8 @@ from tradingagentspro.modules.scheduler import (
     CaseDefinition,
     CaseStage,
     CaseState,
+    PendingPlan,
+    RunningCase,
     Trigger,
     new_case,
 )
@@ -70,7 +77,7 @@ PROGRESS = "progress"  # 工作流的事件：案件的进展
 # 等下单那一侧送回结果时每次等这么久，等不到就接着等，不设时限（design D4）
 _WAIT_SECONDS: Final = 24 * 60 * 60
 
-# spec「交给下单」的第二张表：送回的结果和案件状态的转换
+# spec「交给下单」的第二张表：送回的结果和案件状态的转换；加上紧急退出流程送来的中止
 _PLAN_EVENTS: Final[dict[PlanEvent, Callable[[CaseState], CaseState]]] = {
     PlanEvent.CONFIRMED: CaseState.confirm,
     PlanEvent.DECLINED: CaseState.decline,
@@ -79,6 +86,7 @@ _PLAN_EVENTS: Final[dict[PlanEvent, Callable[[CaseState], CaseState]]] = {
     PlanEvent.RECHECK_VOIDED: CaseState.recheck_voided,
     PlanEvent.VOIDED: CaseState.void,
     PlanEvent.FAILED: CaseState.fail,
+    PlanEvent.ABORTED: CaseState.abort,
 }
 
 
@@ -146,6 +154,33 @@ def running_cases() -> tuple[tuple[UUID, CaseProgress], ...]:
         if progress.state.stage is not CaseStage.ENDED:
             running.append((UUID(workflow.workflow_id), progress))
     return tuple(running)
+
+
+def queue_view(
+    running: Sequence[tuple[UUID, CaseProgress]],
+) -> tuple[tuple[RunningCase, ...], tuple[PendingPlan, ...]]:
+    """运行中的案件换成队列的类型（queue-runner spec「一轮」的表）：每个案件一个 RunningCase；
+    有方案、方案有阶段的一个 PendingPlan。见 update-emergency-abort-case 的 design D6。
+    """
+    cases = tuple(
+        RunningCase(case_id, p.case_type, p.symbol, p.state.calling_models)
+        for case_id, p in running
+    )
+    plans = tuple(
+        PendingPlan(p.plan.plan_id, p.plan.symbol, p.plan.action, p.state.plan_stage)
+        for _, p in running
+        if p.plan is not None and p.state.plan_stage is not None
+    )
+    return cases, plans
+
+
+def abort_case(case_id: UUID) -> None:
+    """紧急退出中止这个案件：按案件 ID 经 PLAN_TOPIC 送中止，在工作流以外调用（巡检线程）。
+
+    案件在下一个收中止的地方结束；已经结束的没人读，什么也不改。见 case-workflow spec
+    「紧急退出中止」。
+    """
+    DBOS.send(str(case_id), PlanEvent.ABORTED.value, topic=PLAN_TOPIC)
 
 
 def case_progress(case_id: UUID) -> CaseProgress | None:
@@ -223,12 +258,16 @@ def _research(case: _Case) -> None:
     config = _parts().flow.scheduler_config
     why = START_RESEARCH
     while case.state.stage is CaseStage.CONCLUDING:
+        if _aborted(case):
+            return
         called = _call_pm(case.id, case.version, case.ctx, tuple(case.pm_turns), why)
         if called is None:
             case.advance(case.state.fail())
             return
         reply = called.output
         if isinstance(reply, DispatchTasks):
+            if _aborted(case):
+                return
             outcomes = _run_tasks(case, Dispatcher.PM, reply.requests)
             case.pm_turns.append(PmTurn(reply=reply, feedback=TaskResults(outcomes=outcomes)))
             why = TASKS_RETURNED
@@ -259,6 +298,8 @@ def _review(case: _Case) -> None:
     research: tuple[TaskOutcome, ...] = ()  # 这一次审核里补充研究的 Task 和 Result
     challenged: SubmitReview | None = None  # 交给 PM 回应的那次质询
     while case.state.stage in (CaseStage.CRITIC_REVIEW, CaseStage.PM_RESPONSE):
+        if _aborted(case):
+            return
         if case.state.stage is CaseStage.PM_RESPONSE:
             assert challenged is not None
             _respond(case, challenged)
@@ -276,6 +317,8 @@ def _review(case: _Case) -> None:
             continue
         reply = called.output
         if isinstance(reply, DispatchTasks):
+            if _aborted(case):
+                return
             researches += 1
             version = _snapshot(
                 case.id, case.definition, case.version + 1, research_reason(researches)
@@ -324,8 +367,10 @@ def _respond(case: _Case, challenged: SubmitReview) -> None:
 
 
 def _deliver(case: _Case) -> None:
-    """交给下单：在工作流函数里调用交接（它会启动下单流程），再等送回的结果直到案件结束。"""
-    if case.state.stage is not CaseStage.RISK_CHECK:
+    """交给下单：先收一次中止；在工作流函数里调用交接（它会启动下单流程），再等送回的结果直到案件
+    结束。等的时候收到中止，把方案交回下单那一侧。
+    """
+    if case.state.stage is not CaseStage.RISK_CHECK or _aborted(case):
         return
     assert case.plan is not None and case.state.critic is not None
     handoff = _parts().handoff.submit(case.id, case.plan, case.state.critic)
@@ -337,8 +382,24 @@ def _deliver(case: _Case) -> None:
     case.advance(case.state.risk_checked(outcome, confirming=handoff.confirming))
     while case.state.stage in (CaseStage.AWAITING_CONFIRMATION, CaseStage.AWAITING_ORDER):
         message = DBOS.recv(PLAN_TOPIC, timeout_seconds=_WAIT_SECONDS)
-        if message is not None:
-            case.advance(_PLAN_EVENTS[PlanEvent(message)](case.state))
+        if message is None:
+            continue
+        event = PlanEvent(message)
+        case.advance(_PLAN_EVENTS[event](case.state))
+        if event is PlanEvent.ABORTED:
+            _parts().handoff.abandon(case.plan.plan_id)
+
+
+def _aborted(case: _Case) -> bool:
+    """收一次中止，不等；收到就结束：紧急退出中止。交回案件是否已经结束。
+
+    交给下单以前 PLAN_TOPIC 上只会有中止；别的结果送到这里，_PLAN_EVENTS 里对应的转换在这些阶段
+    抛 ValueError，案件出错停下。
+    """
+    message = DBOS.recv(PLAN_TOPIC, timeout_seconds=0)
+    if message is not None:
+        case.advance(_PLAN_EVENTS[PlanEvent(message)](case.state))
+    return case.state.stage is CaseStage.ENDED
 
 
 def _retrospective(case: _Case) -> None:

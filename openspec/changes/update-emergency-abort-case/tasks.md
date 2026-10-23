@@ -17,8 +17,8 @@
 
 ## 4. 案件工作流收中止
 
-- [ ] 4.1 先写测试（design D4、D6）`tests/workflows/test_case_workflow.py`（真的 DBOS）：case-workflow spec「紧急退出中止」的八个场景、「交给下单」的「等的时候收到中止」；交回用记下 `abandon` 调用的 `PlanHandoff` 替身，中止用 `abort_case`；`queue_view` 给出运行中的案件和有阶段的方案。验证：确认因为 `PlanEvent.ABORTED`、`abort_case`、`queue_view` 不存在而失败
-- [ ] 4.2 实现（design D4、D6）：`plan_handoff.py` 的 `PlanEvent.ABORTED`；`case_workflow.py` 的 `_PLAN_EVENTS[PlanEvent.ABORTED]`、`_aborted` 和各处的调用、`_deliver` 等待里收到中止时 `abandon`、`abort_case`、`queue_view`，模块说明写上中止；`queue_runner.py` 的 `run_round` 改用 `queue_view`。验证：4.1 的测试、原有的案件工作流测试和 `tests/workflows/test_queue_runner.py` 通过；`uv run mypy` 通过
+- [x] 4.1 先写测试（design D4、D6）`tests/workflows/test_case_workflow.py`（真的 DBOS）：case-workflow spec「紧急退出中止」的八个场景、「交给下单」的「等的时候收到中止」；交回用记下 `abandon` 调用的 `PlanHandoff` 替身，中止用 `abort_case`；`queue_view` 给出运行中的案件和有阶段的方案。验证：确认因为 `PlanEvent.ABORTED`、`abort_case`、`queue_view` 不存在而失败
+- [x] 4.2 实现（design D4、D6）：`plan_handoff.py` 的 `PlanEvent.ABORTED`；`case_workflow.py` 的 `_PLAN_EVENTS[PlanEvent.ABORTED]`、`_aborted` 和各处的调用、`_deliver` 等待里收到中止时 `abandon`、`abort_case`、`queue_view`，模块说明写上中止；`queue_runner.py` 的 `run_round` 改用 `queue_view`。验证：4.1 的测试、原有的案件工作流测试和 `tests/workflows/test_queue_runner.py` 通过；`uv run mypy` 通过
 
 ## 5. 紧急退出流程中止案件
 
