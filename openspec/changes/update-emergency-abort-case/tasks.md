@@ -2,18 +2,18 @@
 
 ## 1. 前提
 
-- [ ] 1.1 核对 add-queue-runner 已经归档、代码在 main 上（design「Context」）：`case_workflow.running_cases`、`_PLAN_EVENTS[PlanEvent.VOIDED]`、`order_workflow.void_plan`、下单流程在等确认、等开盘、等重试时收作废、`queue_runner.DbosCases`、`EmergencyFlow.exiting`。验证：`openspec list` 里没有 add-queue-runner，上面的名字都能在 `src/` 里找到；任何一项不在就停下，报告给人
-- [ ] 1.2 核对 DBOS 的用法（design D4、D5）：在 `tests/workflows/test_case_workflow.py` 的真的 DBOS 里（要开着 OrbStack）确认工作流里 `DBOS.recv(topic, timeout_seconds=0)` 没有消息时立即交回 None、重放时交回同样的值；先送到的消息先收；`DBOS.send` 给已经结束的工作流不报错。验证：一个临时的测试通过，结论写进 1.2 的完成说明；任何一项不对就停下，报告给人
+- [x] 1.1 核对 add-queue-runner 已经归档、代码在 main 上（design「Context」）：`case_workflow.running_cases`、`_PLAN_EVENTS[PlanEvent.VOIDED]`、`order_workflow.void_plan`、下单流程在等确认、等开盘、等重试时收作废、`queue_runner.DbosCases`、`EmergencyFlow.exiting`。验证：`openspec list` 里没有 add-queue-runner，上面的名字都能在 `src/` 里找到；任何一项不在就停下，报告给人
+- [x] 1.2 核对 DBOS 的用法（design D4、D5）：在 `tests/workflows/test_case_workflow.py` 的真的 DBOS 里（要开着 OrbStack）确认工作流里 `DBOS.recv(topic, timeout_seconds=0)` 没有消息时立即交回 None、重放时交回同样的值；先送到的消息先收；`DBOS.send` 给已经结束的工作流不报错。验证：一个临时的测试通过，结论写进 1.2 的完成说明；任何一项不对就停下，报告给人。完成说明：临时测试通过（真的 DBOS）：没有消息时 `recv(timeout_seconds=0)` 立即交回 None；先送的 a、b 依次收到；进程在记下结果以后、工作流结束以前退出，重启以后三次 recv 交回同样的 None、a、b；给已经结束的工作流 send 不报错
 
 ## 2. 紧急退出的决定的参数
 
-- [ ] 2.1 先改测试（design D6）：`tests/modules/scheduler/domain/test_queue.py` 的「紧急退出」场景和 `test_queue_machine.py` 改为只交运行中的案件和方案。验证：确认因为 `emergency_decision` 的参数不对而失败
-- [ ] 2.2 实现（design D6）：`modules/scheduler/domain/queue.py` 的 `emergency_decision(running, plans, symbol)`，docstring 跟着改。验证：2.1 的测试和 `tests/modules/scheduler` 全部通过；`uv run mypy` 通过
+- [x] 2.1 先改测试（design D6）：`tests/modules/scheduler/domain/test_queue.py` 的「紧急退出」场景和 `test_queue_machine.py` 改为只交运行中的案件和方案。验证：确认因为 `emergency_decision` 的参数不对而失败
+- [x] 2.2 实现（design D6）：`modules/scheduler/domain/queue.py` 的 `emergency_decision(running, plans, symbol)`，docstring 跟着改。验证：2.1 的测试和 `tests/modules/scheduler` 全部通过；`uv run mypy` 通过
 
 ## 3. 下单流程按原因作废
 
-- [ ] 3.1 先写测试（design D5）：`tests/workflows/test_order_flow.py` 覆盖 `settle`、`void_queued` 两种原因的释放原因和告警（中止的不告警，预留已经释放时不写释放预留）；`tests/workflows/test_order_workflow.py`（真的 DBOS）覆盖 order-flow spec「案件中止时作废它的方案」的六个场景和「结果送回案件」的「案件中止交回的方案不送回」，包括交回以后的步骤出了意外的错误也不送回出错；原有的排队运行作废的场景改为带 `VoidCause.NEW_CASE`。验证：确认因为 `VoidCause` 不存在而失败
-- [ ] 3.2 实现（design D5）：`order_flow.py` 的 `VoidCause`，`settle`、`void_queued` 的 `cause`；`order_workflow.py` 的 `void_plan(plan_id, cause)`、解码作废的消息、收到 `ABORTED` 以后不再送回、`CasePlanHandoff.abandon`；`plan_handoff.py` 的 `PlanHandoff.abandon`；`queue_runner.py` 的 `DbosCases.void` 写明 `NEW_CASE`；模块说明写上中止的作废。验证：3.1 的测试和原有的 `tests/workflows` 测试通过；`uv run mypy`、`uv run lint-imports` 通过
+- [x] 3.1 先写测试（design D5）：`tests/workflows/test_order_flow.py` 覆盖 `settle`、`void_queued` 两种原因的释放原因和告警（中止的不告警，预留已经释放时不写释放预留）；`tests/workflows/test_order_workflow.py`（真的 DBOS）覆盖 order-flow spec「案件中止时作废它的方案」的六个场景和「结果送回案件」的「案件中止交回的方案不送回」，包括交回以后的步骤出了意外的错误也不送回出错；原有的排队运行作废的场景改为带 `VoidCause.NEW_CASE`。验证：确认因为 `VoidCause` 不存在而失败
+- [x] 3.2 实现（design D5）：`order_flow.py` 的 `VoidCause`，`settle`、`void_queued` 的 `cause`；`order_workflow.py` 的 `void_plan(plan_id, cause)`、解码作废的消息、收到 `ABORTED` 以后不再送回、`CasePlanHandoff.abandon`；`plan_handoff.py` 的 `PlanHandoff.abandon`；`queue_runner.py` 的 `DbosCases.void` 写明 `NEW_CASE`；模块说明写上中止的作废。验证：3.1 的测试和原有的 `tests/workflows` 测试通过；`uv run mypy`、`uv run lint-imports` 通过
 
 ## 4. 案件工作流收中止
 

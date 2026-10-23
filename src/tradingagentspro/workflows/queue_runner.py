@@ -45,6 +45,7 @@ from tradingagentspro.shared.clock import Clock
 from tradingagentspro.workflows.case_entries import case_trigger
 from tradingagentspro.workflows.case_workflow import CaseProgress, running_cases, start_case
 from tradingagentspro.workflows.names import ACTIONS, STOCK_STATUSES
+from tradingagentspro.workflows.order_flow import VoidCause
 from tradingagentspro.workflows.order_workflow import void_plan
 
 _log = logging.getLogger(__name__)
@@ -102,7 +103,7 @@ class DbosCases:
         return DBOS.get_workflow_status(str(case_id)) is not None
 
     def void(self, plan_id: UUID) -> None:
-        void_plan(plan_id)
+        void_plan(plan_id, VoidCause.NEW_CASE)
 
 
 @dataclass(frozen=True, slots=True)

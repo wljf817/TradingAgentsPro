@@ -10,9 +10,12 @@ design D1）：首次检查是案件工作流里的一个 step，下单流程是
 （CaseSource）。下单流程在每个结局用 plan_handoff.report_plan 把结果送回案件，意料之外的错误让它
 停下以前送回出错（order-flow spec「结果送回案件」，design D3）。/plan 的方案来源为 None，不送回。
 
-排队运行用 void_plan 作废案件的方案（order-flow spec「作废案件的方案」，add-queue-runner 的
-design D6）：作废和按钮的结果走同一个主题 DECISION_TOPIC。等确认时收到的按 Stage.VOIDED 处理；确认
-以后等开盘、等重试用 install 交进来的 wait，期间收到作废就结束。都送回案件 PlanEvent.VOIDED。
+作废案件的方案用 void_plan，带着原因（VoidCause，order-flow spec「作废案件的方案」「案件中止时作废
+它的方案」，add-queue-runner 的 design D6，update-emergency-abort-case 的 design D5）：排队运行要求
+作废，或者案件被紧急退出中止、经 CasePlanHandoff.abandon 把方案交回。作废和按钮的结果走同一个主题
+DECISION_TOPIC：按钮的结果是 Stage 的值，作废是 VoidCause 的值。等确认时收到的确认的进展改为
+Stage.VOIDED；确认以后等开盘、等重试用 install 交进来的 wait，期间收到作废就结束。新案件排队的送回
+案件 PlanEvent.VOIDED；案件交回的之后什么都不送回（_Reports），包括出错。
 """
 
 from collections.abc import Callable
@@ -38,6 +41,7 @@ from tradingagentspro.workflows.order_flow import (
     Stage,
     Timing,
     TradeServices,
+    VoidCause,
     check_plan,
 )
 from tradingagentspro.workflows.plan_handoff import Handoff, PlanEvent, report_plan
@@ -56,7 +60,6 @@ _EVENTS = {
     Stage.REJECTED: PlanEvent.DECLINED,
     Stage.TIMED_OUT: PlanEvent.TIMED_OUT,
     Stage.UNSENT: PlanEvent.TIMED_OUT,
-    Stage.VOIDED: PlanEvent.VOIDED,
 }
 
 
@@ -68,7 +71,7 @@ def wait_decision(seconds: float) -> str | None:
     """满足 Wait：在工作流函数里等 DECISION_TOPIC 的消息，最多等 seconds 秒。
 
     DBOS 的 recv 带持久化的超时：重启以后只等剩下的时间，和 DBOS.sleep 一样（add-queue-runner 的
-    design D6）。确认以后这个主题只会收到作废。
+    design D6）。确认以后这个主题只会收到作废（VoidCause 的值）。
     """
     message: str | None = DBOS.recv(DECISION_TOPIC, timeout_seconds=seconds)
     return message
@@ -146,13 +149,20 @@ class CasePlanHandoff:
             DBOS.start_workflow(order_plan, plan, checked.decision, checked.source)
         return Handoff(checked.decision, confirming=checked.source.confirmation.required)
 
+    def abandon(self, plan_id: UUID) -> None:
+        """案件被紧急退出中止，把方案交回：这个方案的下单流程按中止作废，见 order-flow spec「案件
+        中止时作废它的方案」。在案件工作流的工作流函数里调用，送出记成案件的一步，重放时不重送。
+        """
+        void_plan(plan_id, VoidCause.ABORTED)
 
-def void_plan(plan_id: UUID) -> None:
-    """排队运行要求作废这个案件的方案：送给它的下单流程，见 order-flow spec「作废案件的方案」。
+
+def void_plan(plan_id: UUID, cause: VoidCause) -> None:
+    """作废这个案件的方案：按原因送给它的下单流程，见 order-flow spec「作废案件的方案」「案件中止时
+    作废它的方案」。
 
     下单流程在等的时候收下；已经结束的没人读，什么也不改。
     """
-    DBOS.send(str(plan_id), Stage.VOIDED.value, topic=DECISION_TOPIC)
+    DBOS.send(str(plan_id), cause.value, topic=DECISION_TOPIC)
 
 
 def deliver_decision(plan_id: UUID, outcome: ConfirmationOutcome) -> None:
@@ -163,37 +173,74 @@ def deliver_decision(plan_id: UUID, outcome: ConfirmationOutcome) -> None:
     DBOS.send(workflow_id, outcome.value, topic=DECISION_TOPIC)
 
 
+@dataclass(slots=True)
+class _Reports:
+    """这个下单流程把结果送回哪个案件，见 order-flow spec「结果送回案件」。
+
+    /plan 的方案（source 为 None）不送。案件被中止、把方案交回以后（handed_back）什么都不送，包括
+    出错：案件已经结束。handed_back 由收到的作废决定，重放时同样重建。
+    """
+
+    source: CaseSource | None
+    handed_back: bool = False
+
+    def voided(self, cause: VoidCause) -> None:
+        """收到作废；案件交回的，之后不再送回。"""
+        self.handed_back = cause is VoidCause.ABORTED
+
+    def send(self, event: PlanEvent) -> None:
+        """在工作流函数里调用，重放时不重送。"""
+        if self.source is not None and not self.handed_back:
+            report_plan(self.source.case_id, event)
+
+
 @DBOS.workflow(name="order_plan")
 def order_plan(plan: TradePlan, decision: RiskDecision, source: CaseSource | None) -> PlanEnd:
     """一个方案的下单流程，见 order-flow spec。只按 step 的结果分支，不读时间、不写日志。
 
     source 是案件的方案的来源，/plan 的为 None。案件的方案意料之外的错误让流程停下以前，把出错
-    送回案件，再原样抛出（design D3）。
+    送回案件，再原样抛出（design D3）；案件已经把方案交回的不送。
     """
+    reports = _Reports(source)
     try:
-        return _run(plan, decision, source)
+        return _run(plan, decision, source, reports)
     except Exception:
-        _report(source, PlanEvent.FAILED)
+        reports.send(PlanEvent.FAILED)
         raise
 
 
-def _run(plan: TradePlan, decision: RiskDecision, source: CaseSource | None) -> PlanEnd:
+def _run(
+    plan: TradePlan, decision: RiskDecision, source: CaseSource | None, reports: _Reports
+) -> PlanEnd:
     """要确认的请求确认、等按钮或作废；不要确认的（模型退出自动执行）直接执行。每个结局送回案件。"""
     if source is not None and not source.confirmation.required:
-        return _executed(plan, decision, source, None)
+        return _executed(plan, decision, source, None, reports)
     DBOS.set_event(CONFIRMATION, Stage.WAITING)
     requested = _request_confirmation(plan, decision, source)
     if requested is None:
         stage = Stage.UNSENT
     else:
         choice = DBOS.recv(DECISION_TOPIC, timeout_seconds=requested.wait_seconds)
+        if choice is not None and choice in VoidCause:
+            return _voided_while_confirming(plan, requested, VoidCause(choice), reports)
         stage = Stage.TIMED_OUT if choice is None else Stage(choice)
     DBOS.set_event(CONFIRMATION, stage)
     _settle(plan, decision, stage, requested, source)
-    _report(source, _EVENTS[stage])
+    reports.send(_EVENTS[stage])
     if stage is not Stage.CONFIRMED:
         return PlanEnd(stage.value)
-    return _executed(plan, decision, source, requested)
+    return _executed(plan, decision, source, requested, reports)
+
+
+def _voided_while_confirming(
+    plan: TradePlan, requested: Requested, cause: VoidCause, reports: _Reports
+) -> PlanEnd:
+    """等确认时收到作废：确认的进展改为已作废，报告确认消息已作废、释放，送回方案被作废。"""
+    DBOS.set_event(CONFIRMATION, Stage.VOIDED)
+    reports.voided(cause)
+    _void_waiting(plan, requested, cause)
+    reports.send(PlanEvent.VOIDED)
+    return PlanEnd.VOIDED
 
 
 def _executed(
@@ -201,19 +248,14 @@ def _executed(
     decision: RiskDecision,
     source: CaseSource | None,
     requested: Requested | None,
+    reports: _Reports,
 ) -> PlanEnd:
     """等开盘、再校验、提交，结局送回案件：订单交给巡检是订单已提交，作废是再校验作废，等的时候被
-    排队运行作废是方案被作废。requested 是请求确认那一步的结果，不要确认的方案为 None。
+    作废是方案被作废。requested 是请求确认那一步的结果，不要确认的方案为 None。
     """
-    end, event = _execute(plan, decision, source, requested)
-    _report(source, event)
+    end, event = _execute(plan, decision, source, requested, reports)
+    reports.send(event)
     return end
-
-
-def _report(source: CaseSource | None, event: PlanEvent) -> None:
-    """案件的方案把结果送回案件；/plan 的不送。在工作流函数里调用，重放时不重送。"""
-    if source is not None:
-        report_plan(source.case_id, event)
 
 
 def _execute(
@@ -221,6 +263,7 @@ def _execute(
     decision: RiskDecision,
     source: CaseSource | None,
     requested: Requested | None,
+    reports: _Reports,
 ) -> tuple[PlanEnd, PlanEvent]:
     """确认以后：等开盘、再校验、提交，直到订单交给巡检或者方案作废；给出怎样结束和送回案件的结果。"""
     failure: str | None = None  # 最近一次没能下单的原因
@@ -230,8 +273,9 @@ def _execute(
         if timing.expired:
             return _recheck_end(_void_expired(plan, decision, failure))
         if timing.wait_seconds > 0:
-            if _voided_while_waiting(timing.wait_seconds):
-                return _queued_end(_void_queued(plan, decision, requested))
+            cause = _voided_while_waiting(timing.wait_seconds)
+            if cause is not None:
+                return _void_end(plan, decision, requested, cause, reports)
             continue
         attempt = _attempt(plan, decision, source, not alerted)
         if attempt.kind is AttemptKind.SUBMITTED:
@@ -241,18 +285,17 @@ def _execute(
         failure = attempt.reason
         alerted = alerted or attempt.alerted
         if attempt.kind is AttemptKind.RETRY:
-            if _voided_while_waiting(_parts().flow.config.retry_delay.total_seconds()):
-                return _queued_end(_void_queued(plan, decision, requested))
+            cause = _voided_while_waiting(_parts().flow.config.retry_delay.total_seconds())
+            if cause is not None:
+                return _void_end(plan, decision, requested, cause, reports)
 
 
-def _voided_while_waiting(seconds: float) -> bool:
-    """等开盘或者等重试；期间收到作废时为 True。确认以后这个主题只会收到作废，收到别的是错误。"""
+def _voided_while_waiting(seconds: float) -> VoidCause | None:
+    """等开盘或者等重试；期间收到作废时交回它的原因。确认以后这个主题只会收到作废，收到别的值时
+    VoidCause 抛 ValueError。
+    """
     message = _parts().wait(seconds)
-    if message is None:
-        return False
-    if Stage(message) is not Stage.VOIDED:
-        raise ValueError(f"确认以后收到了 {message}")
-    return True
+    return None if message is None else VoidCause(message)
 
 
 def _recheck_end(end: PlanEnd) -> tuple[PlanEnd, PlanEvent]:
@@ -260,8 +303,16 @@ def _recheck_end(end: PlanEnd) -> tuple[PlanEnd, PlanEvent]:
     return end, PlanEvent.SUBMITTED if end is PlanEnd.SUBMITTED else PlanEvent.RECHECK_VOIDED
 
 
-def _queued_end(end: PlanEnd) -> tuple[PlanEnd, PlanEvent]:
-    """被排队运行作废的结局：已经有订单的是订单已提交，否则是方案被作废。"""
+def _void_end(
+    plan: TradePlan,
+    decision: RiskDecision,
+    requested: Requested | None,
+    cause: VoidCause,
+    reports: _Reports,
+) -> tuple[PlanEnd, PlanEvent]:
+    """等的时候被作废：已经有订单的是订单已提交，否则是方案被作废；案件交回的之后不送回。"""
+    reports.voided(cause)
+    end = _void_queued(plan, decision, requested, cause)
     return end, PlanEvent.SUBMITTED if end is PlanEnd.SUBMITTED else PlanEvent.VOIDED
 
 
@@ -291,6 +342,11 @@ def _settle(
     _parts().flow.settle(plan, decision, stage, requested, source)
 
 
+@DBOS.step(name="order_plan.void_waiting")
+def _void_waiting(plan: TradePlan, requested: Requested, cause: VoidCause) -> None:
+    _parts().flow.void_waiting(plan, requested, cause)
+
+
 @DBOS.step(name="order_plan.timing")
 def _timing(plan: TradePlan, decision: RiskDecision) -> Timing:
     return _parts().flow.timing(plan, decision)
@@ -309,5 +365,7 @@ def _void_expired(plan: TradePlan, decision: RiskDecision, failure: str | None) 
 
 
 @DBOS.step(name="order_plan.void_queued")
-def _void_queued(plan: TradePlan, decision: RiskDecision, requested: Requested | None) -> PlanEnd:
-    return _parts().flow.void_queued(plan, decision, requested)
+def _void_queued(
+    plan: TradePlan, decision: RiskDecision, requested: Requested | None, cause: VoidCause
+) -> PlanEnd:
+    return _parts().flow.void_queued(plan, decision, requested, cause)

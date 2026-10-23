@@ -47,6 +47,12 @@ class PlanHandoff(Protocol):
         """在工作流函数里调用：检查并预留，通过或调整时启动下单流程；读不到券商账户时为 None。"""
         ...
 
+    def abandon(self, plan_id: UUID) -> None:
+        """在工作流函数里调用：案件在等下单那一侧时被紧急退出中止，把方案交回作废，见
+        update-emergency-abort-case 的 design D5。
+        """
+        ...
+
 
 def report_plan(case_id: UUID, event: PlanEvent) -> None:
     """把一个结果送给案件 case_id，在下单流程的工作流函数里调用。"""
