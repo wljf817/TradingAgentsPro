@@ -1,6 +1,7 @@
 """moomoo 行情源：用 OpenD 的市场快照实现行情模块的 QuoteSource。
 
-见 moomoo-quotes spec 和 add-moomoo-quotes 的 design D4 到 D6、D9。
+见 moomoo-quotes spec、add-moomoo-quotes 的 design D4 到 D6、D9 和
+add-thesis-conditions-and-price-alerts 的 design D4。
 """
 
 from collections.abc import Mapping, Sequence
@@ -81,7 +82,7 @@ def _quote(symbol: str, row: Mapping[str, Any]) -> Quote | None:
 
     按开盘价和更新时刻判断快照处在哪一段，见 design D5、D9：开盘前还没切换到当天时，常规时段的
     字段都是上一个交易日的，last_price 就是前一交易日收盘价；有了开盘价、更新到开盘 1 分钟以后
-    才给最新价和量比。
+    才给最新价、量比和成交量。
     """
     update_time = row["update_time"]
     if not update_time:
@@ -96,6 +97,7 @@ def _quote(symbol: str, row: Mapping[str, Any]) -> Quote | None:
         last_price=_price(row["last_price"]) if priced else None,
         previous_close=_price(row["last_price"] if stale else row["prev_close_price"]),
         volume_ratio=_price(row["volume_ratio"]) if priced else None,
+        volume=int(row["volume"]) if priced else None,
         updated_at=updated.astimezone(UTC),
     )
 

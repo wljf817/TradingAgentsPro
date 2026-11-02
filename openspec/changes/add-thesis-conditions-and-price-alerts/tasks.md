@@ -6,8 +6,8 @@
 
 ## 2. 行情的成交量
 
-- [ ] 2.1 先写测试：`tests/modules/marketdata/test_service.py` 照 market-data spec 改过的「取行情」（成交量、没有最新价时没有成交量）；`tests/integrations/moomoo/test_quotes.py` 照 moomoo-quotes spec 改过的「快照的映射」（夏令时的快照、还没切换、切换以后、开盘 1 分钟以后的成交量）；`tests/fakes/quotes.py` 和其他构造 `Quote` 的测试补上 `volume`。验证：确认因为 `Quote.volume` 不存在而失败
-- [ ] 2.2 实现（design D4）：`modules/marketdata/domain/quote.py` 的 `Quote.volume: int | None`，`integrations/moomoo/quotes.py` 映射快照的 `volume`（和最新价同一个条件）；`src/` 里构造 `Quote` 的地方跟着改。验证：2.1 的测试和原有的行情、紧急退出、下单流程、事件检测测试通过；`uv run mypy` 通过
+- [x] 2.1 先写测试：`tests/modules/marketdata/test_service.py` 照 market-data spec 改过的「取行情」（成交量、没有最新价时没有成交量）；`tests/integrations/moomoo/test_quotes.py` 照 moomoo-quotes spec 改过的「快照的映射」（夏令时的快照、还没切换、切换以后、开盘 1 分钟以后的成交量）；`tests/fakes/quotes.py` 和其他构造 `Quote` 的测试补上 `volume`。验证：确认因为 `Quote.volume` 不存在而失败
+- [x] 2.2 实现（design D4）：`modules/marketdata/domain/quote.py` 的 `Quote.volume: int | None`，`integrations/moomoo/quotes.py` 映射快照的 `volume`（和最新价同一个条件）；`src/` 里构造 `Quote` 的地方跟着改。验证：2.1 的测试和原有的行情、紧急退出、下单流程、事件检测测试通过；`uv run mypy` 通过
 
 ## 3. 论点条件的规则
 
