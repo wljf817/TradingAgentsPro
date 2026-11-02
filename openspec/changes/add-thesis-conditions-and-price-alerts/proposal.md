@@ -68,7 +68,7 @@ PM 在关注论点里写了入场条件，在投资论点里写了目标价和�
   - `workflows/event_detection.py`：论点条件、同步到价提醒、叫醒
   - `bootstrap/app.py`：`QuoteContext` 加到价提醒的那部分，装配 `AlertService`
 - **数据库**：没有迁移；新的事件照样存在 `events_detected`
-- **测试**（只在本地）：`tests/modules/events/domain/test_conditions.py`、`test_alerts.py`，`tests/integrations/moomoo/test_alerts.py`，事件检测、行情、moomoo 行情和启动的测试；`tests/fakes/` 加到价提醒的内存实现；连本机 OpenD 的冒烟测试（`moomoo_opend` 标记，人来跑）
+- **测试**（只在本地）：`tests/modules/events/domain/test_conditions.py`、`test_alerts.py`，`tests/integrations/moomoo/test_alerts.py`，事件检测、行情、moomoo 行情和启动的测试；`tests/fakes/` 加到价提醒的内存实现；连 OpenD 的冒烟测试（`moomoo_opend` 标记，在部署主机上跑）
 - **依赖**：无新依赖
 - **部署**：
   - 外部请求：每分钟多 1 次读到价提醒列表；论点变了时增删几个提醒

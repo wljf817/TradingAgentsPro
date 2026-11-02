@@ -308,13 +308,14 @@ class EventDetector:
 - `tests/integrations/moomoo/test_alerts.py`：`FakeOpenD` 满足 `ReminderContext`，返回 DataFrame（列和 SDK 一样，值是 numpy 的 float64），记录收到的调用；moomoo-price-alerts spec 的全部场景；推送用 `_PushHandler.on_recv_rsp` 直接调
 - `tests/integrations/moomoo/test_quotes.py`、`tests/modules/marketdata/`：成交量
 - `tests/workflows/test_event_detection.py`：event-detection spec 改过和新加的场景，price-alerts spec「同步」「同步失败」「推送」的场景；叫醒照 `test_queue_runner.py` 的线程写法，用 `FakeClock` 和线程事件，不计时
-- 冒烟测试 `tests/integrations/moomoo/test_opend_alerts_smoke.py`（`moomoo_opend` 标记，人来跑）：对 SPY 设一个远高于现价的系统提醒，读回来值、频率、时段、备注都对，删掉；常规时段内设一个 SPY 价格涨到现价以下的提醒，30 秒内收到推送（收不到就停下报告给人）；跑完以后人看一眼 moomoo app 有没有显示、手机有没有收到推送
+- 冒烟测试 `tests/integrations/moomoo/test_opend_alerts_smoke.py`（`moomoo_opend` 标记，在部署主机上对主机的 OpenD 跑，部署本变更以前跑）：对 SPY 设一个远高于现价的系统提醒，读回来值、频率、时段、备注都对，删掉；常规时段内设一个 SPY 价格涨到现价以下的提醒，30 秒内收到推送（收不到就停下报告给人）；跑的时候看一眼 moomoo app 有没有显示、手机有没有收到推送
+- 主机上的程序和冒烟测试共用一个 moomoo 账户：账户上已经有备注 TAPro 的提醒时冒烟测试跳过，免得同步删掉程序的提醒；每个测试结束时不论通过没有，都按 key 删掉它设上的提醒
 - `tests/bootstrap/`：bootstrap spec 新加的场景
 
 ## Risks / Trade-offs
 
 - [到价提醒在什么情况下推送没有验证：设上时已经满足会不会立即推、盘中多快推、断线期间触发的会不会补推] → 冒烟测试看前两项；按 D1 推送只是提前，哪项不成立都只是晚到一轮
-- [moomoo app 可能也推送这些提醒到手机] → 冒烟测试时人看一眼；嫌吵可以在 app 里关掉到价提醒的通知，不影响 OpenD 的推送（这一点也要在冒烟测试时核对）
+- [moomoo app 可能也推送这些提醒到手机] → 跑冒烟测试时看一眼；嫌吵可以在 app 里关掉到价提醒的通知，不影响 OpenD 的推送（这一点也要在冒烟测试时核对）
 - [`get_price_reminder` 的频率限制文档没写] → 每分钟一次，和设置的 60 次每 30 秒相比很少；被限频时按读不到处理，下一轮再来
 - [条件一直满足时每天开一个案件，吃预算] → 每只股票每天每组最多一个；PM 改论点、降级或移出就停；替身的入场条件几乎总是满足，模拟盘上每只关注股每个交易日最多一个入场案件
 - [moomoo 的涨跌幅提醒的基准可能和我们的不同（比如盘前算进去）] → 只影响叫醒的时机，事件按我们的规则判断
