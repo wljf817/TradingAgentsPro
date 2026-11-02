@@ -27,13 +27,13 @@
 
 ## 6. 事件检测接上
 
-- [ ] 6.1 先写测试 `tests/workflows/test_event_detection.py`（design D1、D3、D6、D8）：event-detection spec 改过的「一轮」（同一只股票的价格事件和论点条件事件、入场条件满足排进案件、盘前照常同步、股票池是空的时删掉提醒）「没成为事件的新闻和公告」（论点条件没满足不写）「什么时候做一轮」（推送叫醒、做一轮时收到推送、停止以后的推送）「读不到时」（到价提醒不可用不影响事件）和新加的「断线以后」；price-alerts spec「同步」「同步失败」「推送」的场景；已有场景的股票池补上 event-detection spec 写的默认论点。验证：确认失败
-- [ ] 6.2 实现 `workflows/event_detection.py`：`DetectionParts.alerts`；第 2 部分按 `condition_groups` 判断论点条件；第 6 部分同步到价提醒，读不到和失败写 WARNING，有增删写 INFO；`wake`、`_woken`、`start` 里先登记推送；模块说明写上推送在哪个线程、为什么只叫醒。验证：6.1 的测试和原有的事件检测测试通过；`uv run mypy`、`uv run lint-imports`、`uv run ruff check` 通过
+- [x] 6.1 先写测试 `tests/workflows/test_event_detection.py`（design D1、D3、D6、D8）：event-detection spec 改过的「一轮」（同一只股票的价格事件和论点条件事件、入场条件满足排进案件、盘前照常同步、股票池是空的时删掉提醒）「没成为事件的新闻和公告」（论点条件没满足不写）「什么时候做一轮」（推送叫醒、做一轮时收到推送、停止以后的推送）「读不到时」（到价提醒不可用不影响事件）和新加的「断线以后」；price-alerts spec「同步」「同步失败」「推送」的场景；已有场景的股票池补上 event-detection spec 写的默认论点。验证：确认失败
+- [x] 6.2 实现 `workflows/event_detection.py`：`DetectionParts.alerts`；第 2 部分按 `condition_groups` 判断论点条件；第 6 部分同步到价提醒，读不到和失败写 WARNING，有增删写 INFO；`wake`、`_woken`、`start` 里先登记推送；模块说明写上推送在哪个线程、为什么只叫醒。验证：6.1 的测试和原有的事件检测测试通过；`uv run mypy`、`uv run lint-imports`、`uv run ruff check` 通过
 
 ## 7. 装配
 
-- [ ] 7.1 先写测试 `tests/bootstrap/`：bootstrap spec 改过的「模拟盘的装配」的新场景（事件检测设到价提醒、按论点条件排案件、替身给出开仓方案）；`tests/bootstrap/externals.py` 的替身 OpenD 实现 `get_price_reminder`、`set_price_reminder`、`set_handler`。验证：确认失败
-- [ ] 7.2 实现（design D9）：`bootstrap/app.py` 的 `QuoteContext` 加 `ReminderContext`，装配 `AlertService(MoomooPriceAlerts(quotes))` 交给 `DetectionParts`。验证：7.1 的测试和原有的 `tests/bootstrap` 测试通过；`uv run mypy`、`uv run lint-imports` 通过
+- [x] 7.1 先写测试 `tests/bootstrap/`：bootstrap spec 改过的「模拟盘的装配」的新场景（事件检测设到价提醒、按论点条件排案件、替身给出开仓方案）；`tests/bootstrap/externals.py` 的替身 OpenD 实现 `get_price_reminder`、`set_price_reminder`、`set_handler`。验证：确认失败
+- [x] 7.2 实现（design D9）：`bootstrap/app.py` 的 `QuoteContext` 加 `ReminderContext`，装配 `AlertService(MoomooPriceAlerts(quotes))` 交给 `DetectionParts`。验证：7.1 的测试和原有的 `tests/bootstrap` 测试通过；`uv run mypy`、`uv run lint-imports` 通过
 
 ## 8. 收尾
 

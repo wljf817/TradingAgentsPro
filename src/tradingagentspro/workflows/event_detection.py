@@ -1,10 +1,15 @@
 """事件检测：在自己的守护线程里一轮一轮地读交易记录、行情、公告、财报日历和新闻，按事件规则检测股票池
-里的股票的事件，记下、写程序日志、排进案件；并给每笔已经结束、有成交的卖出排一个卖出复盘。
+里的股票的事件（包括论点里的条件），记下、写程序日志、排进案件；给每笔已经结束、有成交的卖出排一个
+卖出复盘；每一轮最后把行情源的到价提醒同步成论点需要的那一组。
 
-见 event-detection spec 和 add-event-detection 的 design D4 到 D6、D11、D12。规则全在事件模块的
-纯函数里，这里只读数据、组出输入、记下和排队。一轮开始时读一次时钟，这一轮的检测时刻、交易日、回看
-起点都按它算。行情、券商账户、新闻源、公告源读不到时只跳过那一部分，写 WARNING；数据库出错原样抛出，
+见 event-detection spec、add-event-detection 的 design D4 到 D6、D11、D12 和
+add-thesis-conditions-and-price-alerts 的 design D1、D3、D6、D8。规则全在事件模块的纯函数里，这里
+只读数据、组出输入、记下和排队。一轮开始时读一次时钟，这一轮的检测时刻、交易日、回看起点都按它算。
+行情、券商账户、新闻源、公告源、到价提醒读不到时只跳过那一部分，写 WARNING；数据库出错原样抛出，
 这一轮剩下的不做。
+
+论点条件只由每一轮按行情判断。到价提醒的推送在行情源自己的线程里到达，只调用 wake 叫醒这个线程提前
+做下一轮，不读写数据库、不拿锁；所以推送丢了、OpenD 断过，都只让事件晚到一轮，不用另外检测断线。
 
 事件检测只读执行模块（账户数据、已经结束的卖出），不拿全程序共用的那把锁；排队经 CaseIntake 交给
 排队运行。
@@ -15,7 +20,7 @@ import threading
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Protocol
+from typing import Final, Protocol
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -25,7 +30,10 @@ from tradingagentspro.contracts.snapshot import EarningsTime
 from tradingagentspro.contracts.stock_pool import StockStatus
 from tradingagentspro.modules.companydata import CompanyDataService
 from tradingagentspro.modules.events import (
+    AlertKind,
+    AlertService,
     CalendarRelease,
+    ConditionGroup,
     Detection,
     Discard,
     DiscardReason,
@@ -33,8 +41,11 @@ from tradingagentspro.modules.events import (
     EventRulesConfig,
     EventService,
     Monitored,
+    PriceAlertsUnavailableError,
     PricedStock,
     Reading,
+    condition_event,
+    condition_groups,
     detection,
     earnings_window_start,
     event_id,
@@ -53,6 +64,14 @@ from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.trading_calendar import TradingCalendar
 
 _log = logging.getLogger(__name__)
+
+_ALERT_KINDS: Final = {
+    AlertKind.PRICE_UP: "价格涨到",
+    AlertKind.PRICE_DOWN: "价格跌到",
+    AlertKind.CHANGE_UP: "当日涨幅达到",
+    AlertKind.CHANGE_DOWN: "当日跌幅达到",
+    AlertKind.VOLUME_UP: "当日成交量达到",
+}
 
 
 class EventDetectionConfig(BaseModel):
@@ -91,6 +110,7 @@ class DetectionParts:
     company_data: CompanyDataService
     events: EventService
     intake: CaseIntake
+    alerts: AlertService
     clock: Clock
     calendar: TradingCalendar
     rules: EventRulesConfig
@@ -99,7 +119,8 @@ class DetectionParts:
 class EventDetector:
     """事件检测，见 event-detection spec。
 
-    run_round 做一轮，可以直接调用；start 开守护线程循环，立即做第一轮；stop 停下并等线程结束。
+    run_round 做一轮，可以直接调用；start 开守护线程循环，立即做第一轮；wake 叫醒它提前做下一轮；
+    stop 停下并等线程结束。
     """
 
     def __init__(self, parts: DetectionParts, config: EventDetectionConfig) -> None:
@@ -107,46 +128,62 @@ class EventDetector:
         self._config = config
         self._filings_at: datetime | None = None  # 上一次取公告的时刻，取到和取不到都算
         self._stopping = threading.Event()
+        self._woken = threading.Event()  # 等下一轮时被它提前叫醒：到价提醒的推送、停止
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
-        """开守护线程 event-detection，立即做第一轮。写一条 INFO：事件检测已开始和间隔。"""
+        """登记到价提醒推送的回调，开守护线程 event-detection，立即做第一轮。写一条 INFO：事件检测
+        已开始和间隔。
+        """
+        self._parts.alerts.listen(self.wake)
         self._thread = threading.Thread(target=self._loop, name="event-detection", daemon=True)
         self._thread.start()
         _log.info("事件检测已开始，间隔 %g 秒", self._config.interval.total_seconds())
 
+    def wake(self) -> None:
+        """叫醒事件检测：在等下一轮的立即做下一轮，在做一轮的做完以后再做一轮。可以从任何线程调用，
+        只设一个线程事件。
+        """
+        self._woken.set()
+
     def stop(self) -> None:
         """不再开始新的一轮，等正在做的一轮做完、线程结束；没有开始过时什么都不做。"""
         self._stopping.set()
+        self._woken.set()
         if self._thread is not None:
             self._thread.join()
 
     def _loop(self) -> None:
-        """做一轮，等一个间隔，直到停止；一轮出错写 ERROR，下一轮照常。"""
+        """做一轮，等一个间隔或者被叫醒，直到停止；一轮出错写 ERROR，下一轮照常。
+
+        一轮开始时清掉叫醒：这一轮里来的推送让等待立即返回，几次都只多做一轮。
+        """
         seconds = self._config.interval.total_seconds()
         while not self._stopping.is_set():
+            self._woken.clear()
             try:
                 self.run_round()
             except Exception:
                 _log.exception("事件检测：这一轮出错")
-            self._stopping.wait(seconds)
+            self._woken.wait(seconds)
 
     def run_round(self) -> None:
-        """做一轮，见 spec「一轮」：卖出成交、价格和成交量、公告、财报日历、新闻。"""
+        """做一轮，见 spec「一轮」：卖出成交、价格成交量和论点条件、公告、财报日历、新闻、到价
+        提醒。
+        """
         parts = self._parts
         at = detection(parts.clock.now(), parts.calendar)
         since = at.at - self._config.lookback
-        monitored = {
-            e.symbol: Monitored(e.symbol, e.status, e.added_at)
-            for e in sorted(parts.pool.entries(), key=lambda e: e.symbol)
-        }
+        entries = sorted(parts.pool.entries(), key=lambda e: e.symbol)
+        monitored = {e.symbol: Monitored(e.symbol, e.status, e.added_at) for e in entries}
+        groups = {e.symbol: condition_groups(e.watch_thesis, e.investment_thesis) for e in entries}
         self._sales(at, since)
-        if not monitored:
-            return
-        self._prices(at, monitored)
-        self._filings(at, since, monitored)
-        self._calendar(at, since, monitored)
-        self._news(at, since, monitored)
+        if monitored:
+            self._prices(at, monitored, groups)
+            self._filings(at, since, monitored)
+            self._calendar(at, since, monitored)
+            self._news(at, since, monitored)
+        self._sync_alerts(groups)
 
     # 卖出成交
 
@@ -159,10 +196,17 @@ class EventDetector:
             if trade.client_order_id not in queued:
                 parts.intake.enqueue(SellTrigger(trade.symbol, trade.client_order_id), at.at)
 
-    # 价格和成交量
+    # 价格、成交量和论点条件
 
-    def _prices(self, at: Detection, monitored: Mapping[str, Monitored]) -> None:
-        """检测时刻在常规交易时段里时，读一次账户、一次取齐行情，每只股票判断价格和成交量。"""
+    def _prices(
+        self,
+        at: Detection,
+        monitored: Mapping[str, Monitored],
+        groups: Mapping[str, tuple[ConditionGroup, ...]],
+    ) -> None:
+        """检测时刻在常规交易时段里时，读一次账户、一次取齐行情，每只股票依次判断价格、成交量和
+        论点条件（入场条件、目标价、证伪条件）。
+        """
         parts = self._parts
         if parts.calendar.session_at(at.at) is None:
             return
@@ -195,6 +239,10 @@ class EventDetector:
             )
             for judge in (price_event, volume_event):
                 event = judge(priced, reading, at, parts.calendar, parts.rules)
+                if event is not None:
+                    self._record(event, stock.status, at)
+            for group in groups[symbol]:
+                event = condition_event(symbol, group, reading, at, parts.calendar)
                 if event is not None:
                     self._record(event, stock.status, at)
 
@@ -272,6 +320,22 @@ class EventDetector:
         start = earnings_window_start(at.at, parts.calendar, parts.rules.earnings_sessions)
         found = parts.events.events(symbol, start)
         return any(e.category is EventCategory.EARNINGS for e in found)
+
+    # 到价提醒
+
+    def _sync_alerts(self, groups: Mapping[str, tuple[ConditionGroup, ...]]) -> None:
+        """把行情源的到价提醒同步成股票池的论点需要的，见 price-alerts spec「同步」「同步失败」。"""
+        try:
+            changes = self._parts.alerts.sync(groups)
+        except PriceAlertsUnavailableError as error:
+            _log.warning("事件检测：读不到到价提醒，这一轮不同步：%s", error)
+            return
+        if changes.added or changes.removed:
+            _log.info("事件检测：到价提醒设了 %d 个，删了 %d 个", changes.added, changes.removed)
+        for alert, reason in changes.failed:
+            value = f"{alert.value.normalize():f}"
+            described = f"{alert.symbol} {_ALERT_KINDS[alert.kind]} {value}"
+            _log.warning("事件检测：到价提醒 %s 没有同步：%s", described, reason)
 
     # 记下和排队
 

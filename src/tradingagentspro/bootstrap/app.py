@@ -60,9 +60,11 @@ from tradingagentspro.integrations.discord import (
 from tradingagentspro.integrations.finnhub import FinnhubSource
 from tradingagentspro.integrations.moomoo import (
     MoomooConfig,
+    MoomooPriceAlerts,
     MoomooQuoteSource,
     MoomooSecuritiesConfig,
     MoomooSecuritySource,
+    ReminderContext,
     SecuritiesContext,
     SnapshotContext,
     open_quote_context,
@@ -83,7 +85,12 @@ from tradingagentspro.modules.companydata import (
     PostgresEarningsStore,
 )
 from tradingagentspro.modules.emergency import EmergencyConfig, EmergencyService
-from tradingagentspro.modules.events import EventRulesConfig, EventService, PostgresEventStore
+from tradingagentspro.modules.events import (
+    AlertService,
+    EventRulesConfig,
+    EventService,
+    PostgresEventStore,
+)
 from tradingagentspro.modules.execution import (
     Broker,
     ExecutionConfig,
@@ -171,8 +178,8 @@ _log = logging.getLogger(__name__)
 APP_NAME = "tradingagentspro"
 
 
-class QuoteContext(SnapshotContext, SecuritiesContext, Protocol):
-    """OpenD 行情连接里装配用到的部分：取快照、条件选股和股票的静态信息，退出时关闭。"""
+class QuoteContext(SnapshotContext, SecuritiesContext, ReminderContext, Protocol):
+    """OpenD 行情连接里装配用到的部分：取快照、条件选股和股票的静态信息、到价提醒，退出时关闭。"""
 
     def close(self) -> None: ...
 
@@ -518,6 +525,7 @@ def _assemble(
             company_data=cases.company_data,
             events=cases.events,
             intake=queue,
+            alerts=AlertService(MoomooPriceAlerts(quotes)),
             clock=clock,
             calendar=calendar,
             rules=EventRulesConfig(),
