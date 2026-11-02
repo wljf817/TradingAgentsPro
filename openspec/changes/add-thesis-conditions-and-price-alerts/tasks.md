@@ -21,8 +21,8 @@
 
 ## 5. moomoo 到价提醒
 
-- [ ] 5.1 先写测试 `tests/integrations/moomoo/test_alerts.py`（design D7、D8）：`FakeOpenD` 满足 `ReminderContext`，`get_price_reminder` 返回 DataFrame（列和 SDK 的一样，值是 numpy 的 float64），记录 `set_price_reminder` 和 `set_handler` 的调用，能安排返回错误；覆盖 moomoo-price-alerts spec 的全部场景；`alerts: PriceAlerts = MoomooPriceAlerts(...)` 让 mypy 检查满足端口。验证：确认因为 `integrations/moomoo/alerts.py` 不存在而失败
-- [ ] 5.2 实现 `integrations/moomoo/alerts.py`：`ReminderContext`、`MoomooPriceAlerts`（读系统设的、取整比较、先删后设、失败记进结果）、`_PushHandler`；`__init__.py` 导出，模块说明加上到价提醒。验证：5.1 的测试通过；`uv run mypy`、`uv run lint-imports`、`uv run ruff check` 通过
+- [x] 5.1 先写测试 `tests/integrations/moomoo/test_alerts.py`（design D7、D8）：`FakeOpenD` 满足 `ReminderContext`，`get_price_reminder` 返回 DataFrame（列和 SDK 的一样，值是 numpy 的 float64），记录 `set_price_reminder` 和 `set_handler` 的调用，能安排返回错误；覆盖 moomoo-price-alerts spec 的全部场景；`alerts: PriceAlerts = MoomooPriceAlerts(...)` 让 mypy 检查满足端口。验证：确认因为 `integrations/moomoo/alerts.py` 不存在而失败
+- [x] 5.2 实现 `integrations/moomoo/alerts.py`：`ReminderContext`、`MoomooPriceAlerts`（读系统设的、取整比较、先删后设、失败记进结果）、`_PushHandler`；`__init__.py` 导出，模块说明加上到价提醒。验证：5.1 的测试通过；`uv run mypy`、`uv run lint-imports`、`uv run ruff check` 通过
 - [ ] 5.3 冒烟测试 `tests/integrations/moomoo/test_opend_alerts_smoke.py`，加 `moomoo_opend` 标记，本机 127.0.0.1:11111 连不上时跳过（design D10）：任何时候对 SPY 设一个远高于现价的系统提醒，读回来类型、值、频率、时段、备注都对，再删掉、读不到；常规时段内设一个 SPY 价格涨到现价以下的提醒，30 秒内收到推送，结束时删掉。验证：OpenD 没开时跳过；写好以后告诉人去跑，并请人看 moomoo app 有没有显示这个提醒、手机有没有收到推送；推送收不到或字段不对就停下，报告给人
 
 ## 6. 事件检测接上
