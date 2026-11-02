@@ -37,5 +37,5 @@
 
 ## 8. 收尾
 
-- [ ] 8.1 对照本变更的全部 spec，确认每个场景都有对应的测试，测试名或说明里写明场景。验证：逐条列出场景和测试的对应关系，没有遗漏
-- [ ] 8.2 运行全部检查：`uv run pytest`（要开着 OrbStack）、`uv run ruff check`、`uv run ruff format --check`、`uv run mypy`、`uv run lint-imports`、`openspec validate add-thesis-conditions-and-price-alerts --strict`。验证：全部通过
+- [x] 8.1 对照本变更的全部 spec，确认每个场景都有对应的测试，测试名或说明里写明场景。验证：逐条列出场景和测试的对应关系，没有遗漏
+- [x] 8.2 运行全部检查：`uv run pytest`（要开着 OrbStack）、`uv run ruff check`、`uv run ruff format --check`、`uv run mypy`、`uv run lint-imports`、`openspec validate add-thesis-conditions-and-price-alerts --strict`。验证：全部通过
