@@ -3,11 +3,18 @@
 
 规则见 openspec 的 event-rules spec 和 event-detection spec「事件的存储」「读取事件」，做法见
 add-event-detection 的 design D1 到 D11、D14、D16 和 add-thesis-conditions-and-price-alerts 的
-design D2。事件存在 events_detected 表里，数据库实现是
+design D2。论点条件里价格类的条件另外设成行情源的到价提醒（price-alerts spec，同一个变更的
+design D5、D6），行情源实现 PriceAlerts。事件存在 events_detected 表里，数据库实现是
 PostgresEventStore；存储由 bootstrap 注入。模块之外的代码只能 import 这里导出的名字。
 """
 
 from tradingagentspro.modules.events.config import EventRulesConfig, FilingTiers, KeywordRule
+from tradingagentspro.modules.events.domain.alerts import (
+    AlertChanges,
+    AlertKind,
+    PriceAlert,
+    wanted_alerts,
+)
 from tradingagentspro.modules.events.domain.conditions import (
     ConditionGroup,
     condition_event,
@@ -33,11 +40,18 @@ from tradingagentspro.modules.events.domain.price import (
     price_event,
     volume_event,
 )
-from tradingagentspro.modules.events.ports import EventStore
+from tradingagentspro.modules.events.ports import (
+    EventStore,
+    PriceAlerts,
+    PriceAlertsUnavailableError,
+)
 from tradingagentspro.modules.events.repo import PostgresEventStore
-from tradingagentspro.modules.events.service import EventService
+from tradingagentspro.modules.events.service import AlertService, EventService
 
 __all__ = [
+    "AlertChanges",
+    "AlertKind",
+    "AlertService",
     "CalendarRelease",
     "ConditionGroup",
     "Detection",
@@ -51,6 +65,9 @@ __all__ = [
     "KeywordRule",
     "Monitored",
     "PostgresEventStore",
+    "PriceAlert",
+    "PriceAlerts",
+    "PriceAlertsUnavailableError",
     "PricedStock",
     "Reading",
     "condition_event",
@@ -64,4 +81,5 @@ __all__ = [
     "price_event",
     "release_event",
     "volume_event",
+    "wanted_alerts",
 ]

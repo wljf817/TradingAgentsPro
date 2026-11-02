@@ -16,8 +16,8 @@
 
 ## 4. 需要的到价提醒和端口
 
-- [ ] 4.1 先写测试：`tests/modules/events/domain/test_alerts.py` 覆盖 price-alerts spec「需要的到价提醒」的四个场景；`tests/fakes/alerts.py`（`FakePriceAlerts`：内存里的一组提醒，记录每次 `sync` 收到的，能安排下一次读不到、某个提醒失败，`push()` 调登记的回调）；`tests/modules/events/test_service.py` 加 `AlertService` 的 `sync`（算出需要的再交给端口、读不到原样抛出）和 `listen`。验证：确认因为 `wanted_alerts`、`AlertService` 不存在而失败
-- [ ] 4.2 实现（design D5、D6）：`domain/alerts.py` 的 `AlertKind`、`PriceAlert`、`AlertChanges`、`wanted_alerts`；`ports.py` 的 `PriceAlerts`、`PriceAlertsUnavailableError`；`service.py` 的 `AlertService`；`__init__.py` 导出。验证：4.1 的测试通过；`uv run mypy`、`uv run lint-imports` 通过
+- [x] 4.1 先写测试：`tests/modules/events/domain/test_alerts.py` 覆盖 price-alerts spec「需要的到价提醒」的四个场景；`tests/fakes/alerts.py`（`FakePriceAlerts`：内存里的一组提醒，记录每次 `sync` 收到的，能安排下一次读不到、某个提醒失败，`push()` 调登记的回调）；`tests/modules/events/test_service.py` 加 `AlertService` 的 `sync`（算出需要的再交给端口、读不到原样抛出）和 `listen`。验证：确认因为 `wanted_alerts`、`AlertService` 不存在而失败
+- [x] 4.2 实现（design D5、D6）：`domain/alerts.py` 的 `AlertKind`、`PriceAlert`、`AlertChanges`、`wanted_alerts`；`ports.py` 的 `PriceAlerts`、`PriceAlertsUnavailableError`；`service.py` 的 `AlertService`；`__init__.py` 导出。验证：4.1 的测试通过；`uv run mypy`、`uv run lint-imports` 通过
 
 ## 5. moomoo 到价提醒
 
