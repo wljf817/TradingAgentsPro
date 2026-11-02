@@ -127,6 +127,6 @@ Grouped by dependency; the order in the table is the implementation order: stora
 | Scheduling | Queue runner | New; Modify: Order flow, Case workflow, Health monitor wiring, Startup and wiring, Program log, Deployment | Done |
 | | Emergency exit aborts cases | Modify: Emergency exit flow, Case workflow, Order flow | Done |
 | Triggers | Event detection | New; Modify: Case types and conclusions, Queue runner, State store snapshots, Case workflow, Stand-ins, Trade records, Program log, Startup and wiring | Done |
-| | Thesis conditions and price alerts | New | Not started |
+| | Thesis conditions and price alerts | New; Modify: Event detection, moomoo quotes, Startup and wiring | In progress |
 | | Close heartbeat | New | Not started |
 | | Follow-up due | Modify: Scheduler | Not started |
