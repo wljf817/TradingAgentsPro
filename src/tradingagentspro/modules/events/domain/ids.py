@@ -20,6 +20,9 @@ class EventKind(StrEnum):
     NEWS = "news"  # 新闻或公告，不是持仓风险级别的
     NEWS_RISK = "news_risk"  # 新闻或公告，持仓风险级别的
     EARNINGS = "earnings"  # 财报发布
+    ENTRY = "entry"  # 入场条件满足
+    TARGET = "target"  # 达到目标价
+    INVALIDATION = "invalidation"  # 证伪条件触发
 
 
 @dataclass(frozen=True, slots=True)

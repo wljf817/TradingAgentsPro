@@ -33,11 +33,12 @@ class PricedStock:
 
 @dataclass(frozen=True, slots=True)
 class Reading:
-    """一只股票的行情读数，来自行情模块的行情。最新价、量比没有时为 None。"""
+    """一只股票的行情读数，来自行情模块的行情。最新价、量比、当日累计成交量（股）没有时为 None。"""
 
     last_price: Decimal | None
     previous_close: Decimal
     volume_ratio: Decimal | None
+    volume: int | None
     updated_at: datetime
 
 

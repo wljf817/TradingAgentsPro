@@ -187,7 +187,11 @@ class EventDetector:
             else:
                 priced = PricedStock(symbol, stock.status, None, None)
             reading = Reading(
-                quote.last_price, quote.previous_close, quote.volume_ratio, quote.updated_at
+                quote.last_price,
+                quote.previous_close,
+                quote.volume_ratio,
+                quote.volume,
+                quote.updated_at,
             )
             for judge in (price_event, volume_event):
                 event = judge(priced, reading, at, parts.calendar, parts.rules)

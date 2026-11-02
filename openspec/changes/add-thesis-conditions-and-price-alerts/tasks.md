@@ -11,8 +11,8 @@
 
 ## 3. 论点条件的规则
 
-- [ ] 3.1 先写测试 `tests/modules/events/domain/test_conditions.py`（design D2）：event-rules spec「论点条件」的全部场景，「事件的内容」的入场条件满足事件的内容，「事件 ID 和去重」的条件一直满足时每天一个、价格下跌不挡证伪条件；比较的两侧从条件的值算出来（比如入场价、入场价加 0.01）；`condition_groups` 对候选、关注、持仓（有和没有证伪条件）给出的组。验证：确认因为 `condition_groups`、`condition_event`、`EventKind.ENTRY` 不存在而失败
-- [ ] 3.2 实现（design D2、D4）：`modules/events/domain/ids.py` 的 `EventKind.ENTRY`、`TARGET`、`INVALIDATION`；`domain/price.py` 的 `Reading.volume`；`domain/conditions.py` 的 `ConditionGroup`、`condition_groups`、`condition_event`（复用 `today_session`，说明用 `text.py` 的写法）；`__init__.py` 导出，模块说明加上论点条件。验证：3.1 的测试和原有的 `tests/modules/events` 通过；`uv run pytest tests/architecture`、`uv run mypy`、`uv run lint-imports` 通过，纯区域白名单没有改
+- [x] 3.1 先写测试 `tests/modules/events/domain/test_conditions.py`（design D2）：event-rules spec「论点条件」的全部场景，「事件的内容」的入场条件满足事件的内容，「事件 ID 和去重」的条件一直满足时每天一个、价格下跌不挡证伪条件；比较的两侧从条件的值算出来（比如入场价、入场价加 0.01）；`condition_groups` 对候选、关注、持仓（有和没有证伪条件）给出的组。验证：确认因为 `condition_groups`、`condition_event`、`EventKind.ENTRY` 不存在而失败
+- [x] 3.2 实现（design D2、D4）：`modules/events/domain/ids.py` 的 `EventKind.ENTRY`、`TARGET`、`INVALIDATION`；`domain/price.py` 的 `Reading.volume`；`domain/conditions.py` 的 `ConditionGroup`、`condition_groups`、`condition_event`（复用 `today_session`，说明用 `text.py` 的写法）；`__init__.py` 导出，模块说明加上论点条件。验证：3.1 的测试和原有的 `tests/modules/events` 通过；`uv run pytest tests/architecture`、`uv run mypy`、`uv run lint-imports` 通过，纯区域白名单没有改
 
 ## 4. 需要的到价提醒和端口
 
