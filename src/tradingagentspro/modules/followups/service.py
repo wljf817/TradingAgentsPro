@@ -1,10 +1,12 @@
-"""跟进审批的用例：审批跟进申请、给出这只股票待执行的跟进、到点触发和股票状态往下走时作废。
+"""跟进审批的用例：审批跟进申请、给出这只股票待执行的跟进、读取一个跟进、到点触发和股票状态往下走
+时作废。
 
-四个公开方法一次只进行一个；每个动作在保存以后写一条程序日志，行为者是调度器。见 follow-ups spec
+公开方法一次只进行一个；每个动作在保存以后写一条程序日志，行为者是调度器。见 follow-ups spec
 和 program-log spec「调度器的动作」。
 """
 
 import threading
+from collections.abc import Callable
 from datetime import datetime
 from uuid import UUID
 
@@ -39,9 +41,10 @@ class FollowUpService:
     审批通过时返回新的跟进，不通过时返回原因，不改变任何跟进的记录。每个动作在保存以后写一条
     程序日志，每保存一个写一条。
 
-    四个公开方法拿同一把可重入锁，从读时钟、读存储到保存、写条目都在锁里，一次只进行一个：上限和
-    次数的检查是先读后写，几个调用方（案件、定时任务、股票池的变化）同时调用也不会超出，同一个
-    跟进的状态只变化一次（spec「同时进行的调用」）。拿着锁时只读写存储、写程序日志，不拿别的锁。
+    公开方法拿同一把可重入锁，从读时钟、读存储到保存、写条目都在锁里，一次只进行一个：上限和次数
+    的检查是先读后写，几个调用方（案件、排队运行、股票池的变化）同时调用也不会超出，同一个跟进的
+    状态只变化一次（spec「同时进行的调用」）。拿着锁时只读写存储、写程序日志，到点触发另外调用
+    调用方给的排进方式（只写排队表和程序日志），都不拿别的锁。
     """
 
     def __init__(
@@ -65,6 +68,14 @@ class FollowUpService:
         """这只股票待执行的跟进，按触发时间、再按获批的先后。"""
         with self._lock:
             return tuple(in_trigger_order(self._pending(symbol)))
+
+    def follow_up(self, follow_up_id: UUID) -> FollowUp:
+        """这个跟进现在的记录，不论状态；没有时抛 KeyError（spec「读取一个跟进」）。"""
+        with self._lock:
+            found = self._store.get(follow_up_id)
+        if found is None:
+            raise KeyError(follow_up_id)
+        return found
 
     def request(
         self, symbol: str, request: FollowUpRequest, case_id: UUID, catalyst: Catalyst
@@ -119,15 +130,18 @@ class FollowUpService:
                 )
             return follow_up
 
-    def trigger_due(self) -> tuple[FollowUp, ...]:
-        """把触发时间不晚于现在的待执行跟进记为已触发，按触发时间、再按获批的先后返回它们。
+    def trigger_due(self, enqueue: Callable[[FollowUp], UUID]) -> tuple[FollowUp, ...]:
+        """触发时间不晚于现在的待执行跟进，按触发时间、再按获批的先后，逐个先交给 enqueue 排进一个
+        案件（交回案件 ID），再记为已触发、写触发跟进；返回这次记为已触发的。
 
-        返回的就是这次记为已触发的，下一次不会再给：跟进只触发一次。调用方定时调用，每个转成一个
-        跟进的触发入队；错过的话，下一次调用照样给出所有已经到点的跟进。
+        跟进只触发一次：返回的下一次不会再给。enqueue 出错时原样抛出，出错的这一个和后面的仍是
+        待执行，下一次照样排进；错过的话，下一次照样排进所有已经到点的跟进。见 spec「到点触发」和
+        update-follow-ups-due 的 design D2。
         """
         with self._lock:
             triggered: list[FollowUp] = []
             for follow_up in due(self._store.pending(), self._clock.now()):
+                case_id = enqueue(follow_up)
                 done = follow_up.triggered()
                 self._store.save(done)
                 self._program_log.write(
@@ -135,6 +149,7 @@ class FollowUpService:
                     Action.TRIGGER_FOLLOW_UP,
                     str(done.follow_up_id),
                     content(done.symbol, done.request),
+                    outputs=[str(case_id)],
                 )
                 triggered.append(done)
             return tuple(triggered)

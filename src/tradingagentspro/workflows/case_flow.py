@@ -21,6 +21,7 @@ from tradingagentspro.contracts.agent_call import (
     CriticReply,
     CriticRequest,
     CriticTurn,
+    FollowUpOrigin,
     PmReply,
     PmRequest,
     PmTurn,
@@ -66,6 +67,7 @@ from tradingagentspro.modules.scheduler import (
     CaseDefinition,
     CaseState,
     EventTrigger,
+    FollowUpTrigger,
     SchedulerConfig,
     Trigger,
 )
@@ -177,7 +179,9 @@ class CaseFlow:
         return version
 
     def context(self, definition: CaseDefinition, trigger: Trigger) -> CaseContext:
-        """组出案件上下文，见 spec「案件上下文」：事件案件的事件按触发里的事件 ID 读出。"""
+        """组出案件上下文，见 spec「案件上下文」：事件案件的事件按触发里的事件 ID 读出；跟进案件的
+        跟进按触发里的跟进 ID 读出，读不到时抛 KeyError（update-follow-ups-due 的 design D5）。
+        """
         assert definition.question is not None  # 由 PM 处理的案件都有问题
         symbol = definition.symbol
         entry = None if symbol is None else self._s.pool.entry(symbol)
@@ -190,6 +194,9 @@ class CaseFlow:
         if isinstance(trigger, EventTrigger):
             event = self._s.events.event(trigger.event_id)
             assert event is not None  # 事件检测先记下事件、再排进案件
+        follow_up = None
+        if isinstance(trigger, FollowUpTrigger):
+            follow_up = self._follow_up(trigger.follow_up_id)
         return CaseContext(
             question=definition.question,
             event=event,
@@ -198,7 +205,15 @@ class CaseFlow:
             investment_thesis=None if entry is None else entry.investment_thesis,
             recent_cases=tuple(_recent(r) for r in recent),
             pending_follow_ups=pending,
+            follow_up=follow_up,
         )
+
+    def _follow_up(self, follow_up_id: UUID) -> FollowUpOrigin:
+        """跟进案件开出它的跟进：申请和来源案件的结论。"""
+        follow_up = self._s.follow_ups.follow_up(follow_up_id)
+        source = self._s.records.case(follow_up.case_id).conclusion
+        assert source is not None  # 跟进是来源案件的结论通过检查时获批的
+        return FollowUpOrigin(request=follow_up.request, conclusion=source.conclusion)
 
     # 调用 agent：每次调用交回以后写唤醒 agent，全部不可用时告警、给出 None
 

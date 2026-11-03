@@ -7,6 +7,7 @@
 
 from dataclasses import dataclass
 from typing import Final
+from uuid import UUID
 
 from tradingagentspro.contracts.agent import SubAgent
 from tradingagentspro.contracts.case import CaseType
@@ -121,10 +122,13 @@ class HeartbeatTrigger:
 
 @dataclass(frozen=True, slots=True)
 class FollowUpTrigger:
-    """获批的跟进到了触发时间。不带申请时的状态：按开始运行时的状态定类型。"""
+    """获批的跟进到了触发时间。不带申请时的状态：按开始运行时的状态定类型。follow_up_id 是跟进审批
+    的跟进（follow-ups spec「跟进的记录」），案件开始时按它读出申请和来源案件。
+    """
 
     symbol: str
     question: str  # 申请时写下的问题
+    follow_up_id: UUID
 
 
 @dataclass(frozen=True, slots=True)

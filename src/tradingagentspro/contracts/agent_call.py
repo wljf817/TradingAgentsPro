@@ -38,6 +38,15 @@ class RecentCase(BaseModel):
     conclusion: Conclusion | None  # 通过校验的结论；没有结论的为 None
 
 
+class FollowUpOrigin(BaseModel):
+    """跟进案件开出它的跟进：获批的申请和提出申请的案件的结论，放进案件上下文。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    request: FollowUpRequest
+    conclusion: Conclusion  # 提出申请的案件通过校验的结论
+
+
 class CaseContext(BaseModel):
     """案件上下文：快照以外 PM 和 Critic 要看的、由调用方给出的内容，见 agent-calls spec。
 
@@ -53,6 +62,7 @@ class CaseContext(BaseModel):
     investment_thesis: InvestmentThesis | None  # 持仓现在的投资论点
     recent_cases: tuple[RecentCase, ...] = ()  # 这只股票最近结束的案件，按结束时刻从晚到早
     pending_follow_ups: tuple[FollowUpRequest, ...] = ()  # 这只股票待执行的跟进，按触发时间
+    follow_up: FollowUpOrigin | None  # 跟进案件开出它的跟进
 
 
 class TaskOutcome(BaseModel):

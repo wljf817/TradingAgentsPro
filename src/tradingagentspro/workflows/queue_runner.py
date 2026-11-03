@@ -1,10 +1,11 @@
-"""排队运行：触发源排进来的案件持久地排队；每一轮组出队列的快照、取得队列的决定，按作废、不再运行、
-启动的顺序执行；给出调度器心跳，写调用预算用完的程序日志。
+"""排队运行：触发源排进来的案件持久地排队；每一轮先把到点的跟进排进来，再组出队列的快照、取得队列的
+决定，按作废、不再运行、启动的顺序执行；给出调度器心跳，写调用预算用完的程序日志。
 
 见 queue-runner spec 和 add-queue-runner 的 design D1 到 D4、D8 到 D10、D13。排队的案件存在调度器
 的表里（QueueService），运行中的案件就是 DBOS 里 PENDING 的案件工作流（running_cases）；规则全在
 调度器的纯函数 queue_decision 里，这里只组快照和执行决定。排队运行在自己的守护线程里每隔一个间隔做
-一轮，不靠通知：快照的每一项都在下一轮里重新读（design D3）。
+一轮，不靠通知：快照的每一项都在下一轮里重新读（design D3）。到点的跟进由跟进审批先交给这里排进、
+再记为已触发，同一轮就能启动（update-follow-ups-due 的 design D1、D2）。
 
 排队运行不调用模型、不做交易判断、不下单、不拿全程序共用的那把锁：开始运行以后的事由案件工作流做，
 作废交给方案的下单流程（order_workflow.void_plan，design D6）。排队、不再运行、方案作废写调度器的
@@ -25,11 +26,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from tradingagentspro.contracts.stock_pool import StockStatus
 from tradingagentspro.contracts.trade_plan import TradePlan
 from tradingagentspro.modules.caserecords import CaseRecordService, CaseTrigger
+from tradingagentspro.modules.followups import FollowUp, FollowUpService
 from tradingagentspro.modules.gateway import Budget, BudgetStatus, CallBudgetService, GatewayConfig
 from tradingagentspro.modules.health import HealthService
 from tradingagentspro.modules.programlog import WHOLE_SYSTEM, Action, Actor, ProgramLog
 from tradingagentspro.modules.scheduler import (
     CaseDefinition,
+    FollowUpTrigger,
     QueuedCase,
     QueueExit,
     QueueService,
@@ -126,6 +129,7 @@ class QueueParts:
     budget: CallBudgetService
     gateway: GatewayConfig
     records: CaseRecordService
+    follow_ups: FollowUpService
     exiting: Callable[[], frozenset[str]]
     scheduler: SchedulerConfig
     log: ProgramLog
@@ -198,10 +202,11 @@ class QueueRunner:
             self._stopping.wait(seconds)
 
     def run_round(self) -> None:
-        """做一轮，见 spec「一轮」：组出快照、取得队列的决定，先作废、再不再运行、最后启动；做完
-        记下心跳。出错时原样抛出，这一轮剩下的不做，心跳不变。
+        """做一轮，见 spec「一轮」：先把到点的跟进排进来，再组出快照、取得队列的决定，先作废、再不再
+        运行、最后启动；做完记下心跳。出错时原样抛出，这一轮剩下的不做，心跳不变。
         """
         parts = self._parts
+        parts.follow_ups.trigger_due(self._enqueue_follow_up)
         running = parts.cases.running()
         budget = parts.budget.status()
         self._report_budget(budget)
@@ -230,6 +235,14 @@ class QueueRunner:
             parts.cases.start(cases[start.case_id], start.definition)
             parts.queue.leave(start.case_id, QueueExit.STARTED)
         self._beat = parts.clock.now()
+
+    def _enqueue_follow_up(self, follow_up: FollowUp) -> UUID:
+        """排进一个到点的跟进：触发带股票、问题和跟进 ID，触发时刻是它的触发时间
+        （update-follow-ups-due 的 design D3）。
+        """
+        request = follow_up.request
+        trigger = FollowUpTrigger(follow_up.symbol, request.question, follow_up.follow_up_id)
+        return self.enqueue(trigger, request.trigger_at)
 
     def _void(self, case_id: UUID, plan: TradePlan) -> None:
         """写程序日志的方案作废，交给下单流程作废，见 spec「作废方案」。"""

@@ -65,7 +65,8 @@ _HEARTBEAT_ITEMS: Final = {
 def case_trigger(trigger: Trigger, triggered_at: datetime) -> CaseTrigger:
     """调度器的触发换成案件记录的触发：种类、触发原因、股票和触发时刻（add-case-records D8）。
 
-    事件的触发原因带事件 ID，卖出成交的带客户端订单 ID（add-event-detection 的 design D12）。
+    事件的触发原因带事件 ID，卖出成交的带客户端订单 ID（add-event-detection 的 design D12），跟进的
+    带跟进 ID（update-follow-ups-due 的 design D3）。
     """
     match trigger:
         case EventTrigger(symbol, category, holding_risk, event_id):
@@ -77,8 +78,8 @@ def case_trigger(trigger: Trigger, triggered_at: datetime) -> CaseTrigger:
             item = _HEARTBEAT_ITEMS[case_type]
             reason = item if symbol is None else f"{symbol} 的{item}"
             return CaseTrigger(TriggerKind.HEARTBEAT, reason, symbol, triggered_at)
-        case FollowUpTrigger(symbol, question):
-            reason = f"{symbol} 的跟进：{question}"
+        case FollowUpTrigger(symbol, question, follow_up_id):
+            reason = f"{symbol} 的跟进（{follow_up_id}）：{question}"
             return CaseTrigger(TriggerKind.FOLLOW_UP, reason, symbol, triggered_at)
         case SellTrigger(symbol, order_id):
             reason = f"{symbol} 卖出成交（{order_id}）"

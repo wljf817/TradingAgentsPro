@@ -4,6 +4,7 @@
 """
 
 from datetime import datetime
+from uuid import UUID
 
 from sqlalchemy import Boolean, Column, DateTime, Engine, Uuid
 
@@ -33,6 +34,9 @@ class PostgresFollowUpStore:
 
     def requested_since(self, moment: datetime) -> tuple[FollowUp, ...]:
         return self._versions.latest_since(moment, "requested_at")
+
+    def get(self, follow_up_id: UUID) -> FollowUp | None:
+        return self._versions.get(follow_up_id)
 
     def save(self, follow_up: FollowUp) -> None:
         self._versions.save(

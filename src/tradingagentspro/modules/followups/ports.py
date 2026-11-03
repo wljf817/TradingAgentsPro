@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import Protocol
+from uuid import UUID
 
 from tradingagentspro.modules.followups.domain.follow_up import FollowUp
 
@@ -19,6 +20,10 @@ class FollowUpStore(Protocol):
 
     def requested_since(self, moment: datetime) -> tuple[FollowUp, ...]:
         """获批时刻不早于 moment 的跟进，不论现在的状态；用来数当天的申请次数。"""
+        ...
+
+    def get(self, follow_up_id: UUID) -> FollowUp | None:
+        """这个跟进最新的记录，不论状态；没有这个跟进时为 None。"""
         ...
 
     def save(self, follow_up: FollowUp) -> None:

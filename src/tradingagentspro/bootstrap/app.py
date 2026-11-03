@@ -532,6 +532,7 @@ def _assemble(
             budget=cases.budget,
             gateway=cases.gateway,
             records=case_records,
+            follow_ups=follow_ups,
             exiting=emergency_flow.exiting,
             scheduler=cases.scheduler,
             log=program_log,
