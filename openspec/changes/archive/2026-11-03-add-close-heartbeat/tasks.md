@@ -3,7 +3,7 @@
 ## 1. 前提
 
 - [x] 1.1 按 proposal「需要人决定」1 修改完整版 Proposal「技术栈与部署」的定时心跳那一句（propose 时已改）。验证：`grep -n "每个交易日的定时心跳是一个持久化工作流" "docs/AI Agent 美股交易系统需求 Proposal.md"` 找到改过的一处；简版不改
-- [ ] 1.2 本变更在 add-thesis-conditions-and-price-alerts 归档以后才归档：本变更 bootstrap delta 的「模拟盘的装配」是在它改过的版本上改的（它的代码已经在 main 上，apply 不用等）。验证：归档本变更以前，`diff` 归档以后的 `openspec/specs/bootstrap/spec.md`「模拟盘的装配」和本变更 delta 的同一节，只差收盘心跳一行和「收盘心跳排进的案件跑起来」一个场景；有别的差异先把 delta 改成在最新版本上改
+- [x] 1.2 本变更的 bootstrap delta 的「模拟盘的装配」是在 add-thesis-conditions-and-price-alerts 改过的版本上改的；本变更先归档，所以把那个变更 delta 里的同一节同步成本变更的版本（多出收盘心跳一行和「收盘心跳排进的案件跑起来」一个场景），不论哪个先归档，这一节都不丢。验证：两个 delta 的这一节 `diff` 没有差异
 
 ## 2. 到期的判断
 
