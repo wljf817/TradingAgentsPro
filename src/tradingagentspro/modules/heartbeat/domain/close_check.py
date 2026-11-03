@@ -1,11 +1,12 @@
-"""收盘检查：每个交易日收盘以后，按一份快照决定这次开哪些定时心跳案件，见 close-check spec。
+"""收盘检查：每个交易日收盘以后，按一份快照决定这次开哪些定时心跳案件，见 close-check spec；
+以及现在该做哪个交易日的收盘心跳，见 close-heartbeat spec「什么时候做」。
 
 顺延不单独记：到期而还没有续期的日期每次都算到期，已经在排队或运行的不重复开。降级模式和调用预算
 不进快照：收盘检查照常开，案件什么时候启动由队列决定。
 """
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Final
 
 from tradingagentspro.contracts.case import CaseType
@@ -71,6 +72,18 @@ _REVIEW_TYPES: Final = frozenset(
 _HOLDING_TYPES: Final = (CaseType.HOLDING_REVIEW, CaseType.HOLDING_CATALYST_REVIEW)
 _WATCH_TYPES: Final = (CaseType.WATCH_REVIEW, CaseType.WATCH_CATALYST_REVIEW)
 _STRONG_SCORE: Final = 1  # 好候选：最新评分 ≥ 1，Proposal 的定义
+
+
+def heartbeat_day(calendar: TradingCalendar, now: datetime, delay: timedelta) -> date | None:
+    """now 该做哪个交易日的收盘心跳，不看开始过没有，见 close-heartbeat spec「什么时候做」。
+
+    收盘时刻不晚于 now 的最后一个交易日 D：now 不在盘中、并且不早于 D 收盘加 delay 时为 D，
+    否则为 None。不在盘中就一定在 D 收盘和下一个交易日开盘之间，所以开盘以后不会再给出 D。
+    """
+    if calendar.session_at(now) is not None:
+        return None
+    last = calendar.last_session_before(now)
+    return last.day if now >= last.close + delay else None
 
 
 def close_check(

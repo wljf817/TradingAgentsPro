@@ -78,6 +78,7 @@ class Action(StrEnum):
     ENQUEUE = "enqueue"  # 排队
     DROP_CASE = "drop_case"  # 不再运行
     VOID_PLAN = "void_plan"  # 方案作废
+    CLOSE_CHECK = "close_check"  # 收盘检查
     BUDGET_EXHAUSTED = "budget_exhausted"  # 调用预算用完
     DETECT_EVENT = "detect_event"  # 检测到事件
     DISCARD_EVENT = "discard_event"  # 丢弃事件

@@ -10,6 +10,7 @@ case-stages spec。模块之外的代码只能 import 这里导出的名字。
 
 from tradingagentspro.modules.scheduler.config import SchedulerConfig
 from tradingagentspro.modules.scheduler.domain.case_type import (
+    HEARTBEAT_CASE_TYPES,
     CaseDefinition,
     EventTrigger,
     FollowUpTrigger,
@@ -47,6 +48,7 @@ from tradingagentspro.modules.scheduler.repo import PostgresQueueStore
 from tradingagentspro.modules.scheduler.service import QueueService
 
 __all__ = [
+    "HEARTBEAT_CASE_TYPES",
     "CaseDefinition",
     "CaseStage",
     "CaseStart",

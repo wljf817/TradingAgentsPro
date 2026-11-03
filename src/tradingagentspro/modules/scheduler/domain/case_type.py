@@ -56,8 +56,9 @@ _CASE_TYPES: Final = {
     CaseType.SELL_RETROSPECTIVE: _CaseSpec(None, None, None, 9),
 }
 
-# 定时心跳的检查项开出的案件类型；针对一个状态的带股票，寻股和每周复盘不带
-_HEARTBEAT_TYPES: Final = frozenset(
+# 定时心跳的检查项开出的案件类型；针对一个状态的带股票，寻股和每周复盘不带。只有定时心跳开得出
+# 它们，收盘心跳按它认出运行中的心跳案件
+HEARTBEAT_CASE_TYPES: Final = frozenset(
     {
         CaseType.HOLDING_REVIEW,
         CaseType.HOLDING_CATALYST_REVIEW,
@@ -112,7 +113,7 @@ class HeartbeatTrigger:
     symbol: str | None = None
 
     def __post_init__(self) -> None:
-        if self.case_type not in _HEARTBEAT_TYPES:
+        if self.case_type not in HEARTBEAT_CASE_TYPES:
             raise ValueError(f"定时心跳开不出案件类型 {self.case_type}")
         if (_CASE_TYPES[self.case_type].status is not None) != (self.symbol is not None):
             raise ValueError(f"定时心跳开出的 {self.case_type} 带不带股票和检查项不符")
