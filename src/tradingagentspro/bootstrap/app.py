@@ -14,7 +14,8 @@ design D10。确认按钮的结果先送给紧急退出流程，它不在等的�
 取，见 update-order-flow-case-plans 的 design D9。案件那一侧（Agent 网关和替身、新闻和公告、公司
 数据、寻股粗筛、快照、案件工作流和交接、排队运行）也在这里装配：DBOS launch 以前装上案件工作流，
 launch 以后开始排队运行，再开始盘中巡检；健康监控读网关的模型和预算、排队运行的心跳。以后的触发源
-从 TradingApp.queue 排队。见 add-queue-runner 的 design D8、D12。
+从 TradingApp.queue 排队。见 add-queue-runner 的 design D8、D12。收盘心跳的部件在 DBOS launch 以前
+install，事件检测之后开始、盘中巡检之后关闭，见 add-close-heartbeat 的 design D6。
 """
 
 import logging
@@ -57,7 +58,7 @@ from tradingagentspro.integrations.discord import (
     Gateway,
     PlanCommand,
 )
-from tradingagentspro.integrations.finnhub import FinnhubSource
+from tradingagentspro.integrations.finnhub import FinnhubConfig, FinnhubSource
 from tradingagentspro.integrations.moomoo import (
     MoomooConfig,
     MoomooPriceAlerts,
@@ -82,6 +83,7 @@ from tradingagentspro.modules.caserecords import CaseRecordService, PostgresCase
 from tradingagentspro.modules.companydata import (
     CompanyDataConfig,
     CompanyDataService,
+    CompanyDataSource,
     PostgresEarningsStore,
 )
 from tradingagentspro.modules.emergency import EmergencyConfig, EmergencyService
@@ -144,9 +146,15 @@ from tradingagentspro.modules.stockpool import (
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.ids import IdGenerator
 from tradingagentspro.shared.trading_calendar import TradingCalendar
-from tradingagentspro.workflows import case_workflow, order_workflow
+from tradingagentspro.workflows import case_workflow, close_heartbeat, order_workflow
 from tradingagentspro.workflows.case_conclusion import CheckConfigs
 from tradingagentspro.workflows.case_flow import CaseFlow, CaseFlowConfig, CaseServices
+from tradingagentspro.workflows.close_heartbeat import (
+    CloseHeartbeat,
+    CloseHeartbeatConfig,
+    DbosHeartbeatRuns,
+    HeartbeatParts,
+)
 from tradingagentspro.workflows.emergency_flow import EmergencyDecisions, EmergencyFlow
 from tradingagentspro.workflows.event_detection import (
     DetectionParts,
@@ -190,7 +198,9 @@ class Externals:
 
     wait 是下单流程等开盘、等重试用的持久化等待，期间收到作废就提前返回，见 add-order-flow 的
     design D13 和 add-queue-runner 的 design D6。news、filings 是新闻源和公告源：事件检测在运行中
-    取新闻和公告，测试换成替身，见 add-event-detection 的 design D15。
+    取新闻和公告，测试换成替身，见 add-event-detection 的 design D15。sleep 是收盘心跳相邻两次刷新
+    之间的持久化等待，finnhub 是公司数据源：收盘心跳在运行中刷新财报，测试换成替身，见
+    add-close-heartbeat 的 design D6。
     """
 
     clock: Clock
@@ -201,6 +211,8 @@ class Externals:
     wait: Callable[[float], str | None]
     news: Callable[[AlpacaNewsConfig], NewsSource]
     filings: Callable[[SecConfig], FilingSource]
+    sleep: Callable[[float], None]
+    finnhub: Callable[[FinnhubConfig], CompanyDataSource]
 
 
 SYSTEM_EXTERNALS = Externals(
@@ -212,6 +224,8 @@ SYSTEM_EXTERNALS = Externals(
     wait=wait_decision,
     news=AlpacaNewsSource,
     filings=SecFilingSource,
+    sleep=DBOS.sleep,
+    finnhub=FinnhubSource,
 )
 
 
@@ -328,12 +342,14 @@ class _Parts:
     case_flow: CaseFlow
     queue: QueueRunner
     detector: EventDetector
+    heartbeat_parts: HeartbeatParts
+    heartbeat: CloseHeartbeat
 
 
 @dataclass(frozen=True, slots=True)
 class _CaseSide:
-    """案件那一侧装配好的部件：案件工作流的用例，健康监控要读的备用模型和预算，以及事件检测要用的
-    新闻和公告、公司数据和事件。
+    """案件那一侧装配好的部件：案件工作流的用例，健康监控要读的备用模型和预算，事件检测要用的
+    新闻和公告、公司数据和事件，以及和收盘心跳共用的心跳配置。
     """
 
     flow: CaseFlow
@@ -341,6 +357,7 @@ class _CaseSide:
     budget: CallBudgetService
     gateway: GatewayConfig
     scheduler: SchedulerConfig
+    heartbeat: HeartbeatConfig
     news: NewsService
     company_data: CompanyDataService
     events: EventService
@@ -373,7 +390,7 @@ def _case_side(
         PostgresNewsStore(engine, clock),
     )
     company_data = CompanyDataService(
-        FinnhubSource(settings.finnhub),
+        externals.finnhub(settings.finnhub),
         PostgresEarningsStore(engine, clock),
         clock,
         CompanyDataConfig(),
@@ -420,8 +437,11 @@ def _case_side(
         calendar=calendar,
         ids=ids,
     )
-    flow = CaseFlow(services, CheckConfigs(gateway, scheduler, HeartbeatConfig()), CaseFlowConfig())
-    return _CaseSide(flow, fallback, budget, gateway, scheduler, news, company_data, events)
+    heartbeat = HeartbeatConfig()  # 案件工作流的校验和收盘心跳共用
+    flow = CaseFlow(services, CheckConfigs(gateway, scheduler, heartbeat), CaseFlowConfig())
+    return _CaseSide(
+        flow, fallback, budget, gateway, scheduler, heartbeat, news, company_data, events
+    )
 
 
 def _assemble(
@@ -500,9 +520,12 @@ def _assemble(
         decisions,
         running,
     )
+    queued = QueueService(
+        PostgresQueueStore(engine), clock, externals.ids
+    )  # 排队运行和收盘心跳共用
     queue = QueueRunner(
         QueueParts(
-            queue=QueueService(PostgresQueueStore(engine), clock, externals.ids),
+            queue=queued,
             cases=running,
             pool=stock_pool,
             health=health,
@@ -532,6 +555,20 @@ def _assemble(
         ),
         EventDetectionConfig(),
     )
+    heartbeat_parts = HeartbeatParts(
+        pool=stock_pool,
+        company_data=cases.company_data,
+        records=case_records,
+        queue=queued,
+        running=running.running,
+        intake=queue,
+        log=program_log,
+        clock=clock,
+        calendar=calendar,
+        heartbeat=cases.heartbeat,
+        config=CloseHeartbeatConfig(),
+    )
+    heartbeat = CloseHeartbeat(DbosHeartbeatRuns(), clock, calendar, heartbeat_parts.config)
     monitor = HealthMonitor(
         health,
         execution,
@@ -580,6 +617,8 @@ def _assemble(
         case_flow=cases.flow,
         queue=queue,
         detector=detector,
+        heartbeat_parts=heartbeat_parts,
+        heartbeat=heartbeat,
     )
 
 
@@ -631,6 +670,7 @@ def start(
         on_stop(stack, "DBOS", DBOS.destroy)
         order_workflow.install(parts.flow, externals.wait)
         case_workflow.install(parts.case_flow, CasePlanHandoff())
+        close_heartbeat.install(parts.heartbeat_parts, externals.sleep)
         DBOS.launch()
         _log.info("DBOS 已启动")
     with step("开始排队运行"):
@@ -639,6 +679,9 @@ def start(
     with step("开始事件检测"):
         parts.detector.start()
         on_stop(stack, "事件检测", parts.detector.stop)
+    with step("开始收盘心跳"):
+        parts.heartbeat.start()
+        on_stop(stack, "收盘心跳", parts.heartbeat.stop)
     with step("开始盘中巡检"):
         parts.patrol.start()
         on_stop(stack, "盘中巡检", parts.patrol.stop)
