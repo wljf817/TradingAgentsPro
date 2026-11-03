@@ -129,4 +129,4 @@ Grouped by dependency; the order in the table is the implementation order: stora
 | Triggers | Event detection | New; Modify: Case types and conclusions, Queue runner, State store snapshots, Case workflow, Stand-ins, Trade records, Program log, Startup and wiring | Done |
 | | Thesis conditions and price alerts | New; Modify: Event detection, moomoo quotes, Startup and wiring | In progress |
 | | Close heartbeat | New; Modify: Startup and wiring, Program log | Done |
-| | Follow-up due | Modify: Scheduler | Not started |
+| | Follow-up due | Modify: Follow-up approval, Case types and conclusions, Queue runner, Case workflow, Stand-ins, Program log, Startup and wiring | In progress |
