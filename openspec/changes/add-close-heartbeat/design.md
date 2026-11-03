@@ -106,7 +106,9 @@ def close_heartbeat(day: date) -> None:
 ### D6 装配
 
 - `HeartbeatParts`：pool、company_data、records、queue（`QueueService`）、running（`case_workflow.running_cases`）、intake（`QueueRunner`）、log、clock、calendar、heartbeat（`HeartbeatConfig`）、config（`CloseHeartbeatConfig`）
-- DBOS launch 以前 `close_heartbeat.install(parts, wait)`；生产的 `wait` 是 `DBOS.sleep`，`Externals` 照下单流程的 `wait` 加一项，测试换成拨钟的
+- DBOS launch 以前 `close_heartbeat.install(parts, externals.sleep)`；`Externals` 照下单流程的 `wait` 加一项 `sleep`，生产是 `DBOS.sleep`，测试换成拨钟的
+- `Externals` 再加一项 `finnhub`（生产是 `FinnhubSource`），照 add-event-detection 的 design D15 的新闻源和公告源：收盘以后启动的测试里收盘心跳真的刷新财报，要换成替身，不能连 Finnhub
+- `HeartbeatConfig` 由案件那一侧建一份，案件工作流的校验和收盘心跳共用；`QueueService` 建一个，排队运行和收盘心跳共用
 - 事件检测之后开始 `CloseHeartbeat`，写 INFO「收盘心跳已开始，间隔 60 秒」；停止时盘中巡检之后、事件检测之前 `stop()`，写「已关闭收盘心跳」
 - 线程判断出错写 `_log.exception`，下一次照常（spec「什么时候做」）
 
