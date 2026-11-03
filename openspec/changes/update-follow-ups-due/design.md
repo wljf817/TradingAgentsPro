@@ -65,8 +65,9 @@ tests/fakes/              (改) 跟进存储的内存实现加 get
 ### D2 先排进、再记为已触发，都在跟进审批的锁里
 
 ```python
-def trigger_due(self, enqueue: Callable[[FollowUp], UUID]) -> None:
+def trigger_due(self, enqueue: Callable[[FollowUp], UUID]) -> tuple[FollowUp, ...]:
     with self._lock:
+        triggered: list[FollowUp] = []
         for follow_up in due(self._store.pending(), self._clock.now()):
             case_id = enqueue(follow_up)
             done = follow_up.triggered()
@@ -78,13 +79,14 @@ def trigger_due(self, enqueue: Callable[[FollowUp], UUID]) -> None:
                 content(done.symbol, done.request),
                 outputs=[str(case_id)],
             )
+            triggered.append(done)
+        return tuple(triggered)
 ```
 
 - `enqueue` 出错时原样抛出：这一个没有存为已触发，它和后面的都还是待执行，下一轮再排；前面的已经排进、已经存下
 - 放在锁里：取出、排进、存下之间不会被审批（替换）或状态变化（作废）插进来，`same_reason` 的替换和 `voids_follow_ups` 的作废只会看到排进以前或存下以后的状态
 - 拿着锁时只多做了 `enqueue`：它只写排队表和程序日志，不拿锁，所以「拿着锁时不拿别的锁」仍然成立，不会死锁
-- 不再返回已触发的跟进：唯一的调用方不需要；测试从 `enqueue` 的替身记下的调用和存储读状态
-- 返回值从 `tuple[FollowUp, ...]` 改为 `None`，服务的类说明和模块说明里"到点触发"的描述跟着改
+- 照旧返回这次记为已触发的跟进；服务的类说明和模块说明里"到点触发"的描述改成先排进、再记为已触发
 
 考虑过的：
 
