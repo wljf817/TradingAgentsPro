@@ -21,6 +21,7 @@ moomoo-api 10.11.7108 的到价提醒（读源码，查 openapi.moomoo.com 的�
 - 备注：SDK 注释写最多 10 个字符，文档写 20 个中文字符
 - 推送：`set_handler(PriceReminderHandlerBase 的子类)`，不用订阅；回调在 SDK 的回调线程里执行。handler 登记在连接对象上，断线重连以后照样有效（`_handler_ctx` 不随断线清掉）
 - 文档没写：提醒是否同步到 moomoo app、触发时是否推送到手机；断线期间触发的提醒重连以后会不会补推
+- 2026-11-02 在部署主机上实测：价格越过提醒的值时几秒内就有推送；设上时已经满足的提醒不推送（SPY 价格涨到现价的 99%，30 秒没有推送）。读到价提醒列表每 30 秒最多 10 次（超了返回 "Maximum 10 times per 30 seconds"）
 
 动机见 proposal.md，要求见 specs/。
 
@@ -86,7 +87,7 @@ bootstrap/app.py    (改) QuoteContext 加 ReminderContext；装配 AlertService
 | 推送和每一轮各自产生事件，事件 ID 去重 | 两份规则可能判断不一致：一路先到成了事件，另一路判断不出；测试要两套 |
 | 每一轮判断是唯一的来源，推送只让下一轮马上开始 | 推送到事件之间多一次快照（几十毫秒） |
 
-选第三种。事件只有一个来源，一份规则；推送丢了、到价提醒设不上、OpenD 断过，结果都一样：最多晚一个间隔（60 秒）。Proposal 要的"断线恢复后用实时行情补查"就是恢复以后的那一轮，不用另写（D3）。简版写的是"价格类条件用 moomoo 到价提醒"，这里照样设提醒，它让入场和证伪的事件从最多晚 60 秒变成几秒。
+选第三种。事件只有一个来源，一份规则；推送丢了、到价提醒设不上、OpenD 断过，结果都一样：最多晚一个间隔（60 秒）。OpenD 只在价格越过提醒的值时推送，设上时已经满足的不推（Context 的实测），这种情况也一样由下一轮判断出来。Proposal 要的"断线恢复后用实时行情补查"就是恢复以后的那一轮，不用另写（D3）。简版写的是"价格类条件用 moomoo 到价提醒"，这里照样设提醒，它让入场和证伪的事件从最多晚 60 秒变成几秒。
 
 完整版 Proposal 「到价提醒」和「到价提醒的维护」两句话照这个改了（proposal 的「需要人决定」(c)）。
 
@@ -280,14 +281,18 @@ class EventDetector:
         seconds = self._config.interval.total_seconds()
         while not self._stopping.is_set():
             self._woken.clear()
+            started = self._parts.clock.now()
             try:
                 self.run_round()
             except Exception:
                 _log.exception("事件检测：这一轮出错")
-            self._woken.wait(seconds)
+            if self._woken.wait(seconds) and not self._stopping.is_set():
+                gap = self._config.min_gap - (self._parts.clock.now() - started)
+                self._stopping.wait(max(gap.total_seconds(), 0))
 ```
 
 - 一轮开始时清掉叫醒，这一轮里再来的推送让 `wait` 立即返回，只多做一轮；`stop` 先设 `_stopping` 再设 `_woken`，在等的立即结束，停止以后的推送不再开始一轮
+- 最短间隔（`EventDetectionConfig.min_gap`，默认 5 秒）：被推送叫醒以后，离上一轮开始不到最短间隔就再等到那一刻，等的时候来的推送留在 `_woken` 上，下一轮开始时一起清掉。开盘时一批提醒同时越过，每 5 秒最多一轮：读到价提醒列表每 30 秒最多 6 次（OpenD 限 10 次），快照每 30 秒多 6 次。按时钟算已经过了多久，测试的 `FakeClock` 不走，等的就是整个最短间隔
 - `start` 先 `alerts.listen(self.wake)` 再开线程
 - 叫醒的这一轮就是平常的一轮：也取新闻、读财报日历、同步提醒。推送一天每个提醒最多一次，多出来的请求有限；公告仍按公告间隔
 
@@ -308,13 +313,14 @@ class EventDetector:
 - `tests/integrations/moomoo/test_alerts.py`：`FakeOpenD` 满足 `ReminderContext`，返回 DataFrame（列和 SDK 一样，值是 numpy 的 float64），记录收到的调用；moomoo-price-alerts spec 的全部场景；推送用 `_PushHandler.on_recv_rsp` 直接调
 - `tests/integrations/moomoo/test_quotes.py`、`tests/modules/marketdata/`：成交量
 - `tests/workflows/test_event_detection.py`：event-detection spec 改过和新加的场景，price-alerts spec「同步」「同步失败」「推送」的场景；叫醒照 `test_queue_runner.py` 的线程写法，用 `FakeClock` 和线程事件，不计时
-- 冒烟测试 `tests/integrations/moomoo/test_opend_alerts_smoke.py`（`moomoo_opend` 标记，在部署主机上对主机的 OpenD 跑，部署本变更以前跑）：对 SPY 设一个远高于现价的系统提醒，读回来值、频率、时段、备注都对，删掉；常规时段内设一个 SPY 价格涨到现价以下的提醒，30 秒内收到推送（收不到就停下报告给人）；跑的时候看一眼 moomoo app 有没有显示、手机有没有收到推送
-- 主机上的程序和冒烟测试共用一个 moomoo 账户：账户上已经有备注 TAPro 的提醒时冒烟测试跳过，免得同步删掉程序的提醒；每个测试结束时不论通过没有，都按 key 删掉它设上的提醒
+- 冒烟测试 `tests/integrations/moomoo/test_opend_alerts_smoke.py`（`moomoo_opend` 标记，在部署主机上对主机的 OpenD 跑，部署本变更以前跑）：对 SPY 设一个远高于现价的系统提醒，读回来值、频率、时段、备注都对，删掉；常规时段内在现价上下各 3 分设一个价格涨到和价格跌到，120 秒内收到推送（OpenD 只在越过时推送；收不到就停下报告给人）；跑的时候看一眼 moomoo app 有没有显示、手机有没有收到推送
+- 主机上的程序和冒烟测试共用一个 moomoo 账户：账户上已经有备注 TAPro 的提醒时冒烟测试跳过，免得同步删掉程序的提醒；跑完以后不论通过没有，都按 key 删掉这次设上的提醒；整个文件只读 7 次列表，结束时被限频就等 31 秒再读一次
 - `tests/bootstrap/`：bootstrap spec 新加的场景
 
 ## Risks / Trade-offs
 
-- [到价提醒在什么情况下推送没有验证：设上时已经满足会不会立即推、盘中多快推、断线期间触发的会不会补推] → 冒烟测试看前两项；按 D1 推送只是提前，哪项不成立都只是晚到一轮
+- [设上时已经满足的提醒不推送（实测），断线期间触发的会不会补推没有验证] → 按 D1 推送只是提前，这两种都只是晚到一轮
+- [一批提醒同时触发，叫醒的轮次超过 OpenD 读列表的频率限制] → 最短间隔 5 秒（D8）；真被限频时按读不到处理，下一轮再同步
 - [moomoo app 可能也推送这些提醒到手机] → 跑冒烟测试时看一眼；嫌吵可以在 app 里关掉到价提醒的通知，不影响 OpenD 的推送（这一点也要在冒烟测试时核对）
 - [`get_price_reminder` 的频率限制文档没写] → 每分钟一次，和设置的 60 次每 30 秒相比很少；被限频时按读不到处理，下一轮再来
 - [条件一直满足时每天开一个案件，吃预算] → 每只股票每天每组最多一个；PM 改论点、降级或移出就停；替身的入场条件几乎总是满足，模拟盘上每只关注股每个交易日最多一个入场案件

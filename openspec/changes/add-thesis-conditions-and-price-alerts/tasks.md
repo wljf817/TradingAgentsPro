@@ -23,12 +23,14 @@
 
 - [x] 5.1 先写测试 `tests/integrations/moomoo/test_alerts.py`（design D7、D8）：`FakeOpenD` 满足 `ReminderContext`，`get_price_reminder` 返回 DataFrame（列和 SDK 的一样，值是 numpy 的 float64），记录 `set_price_reminder` 和 `set_handler` 的调用，能安排返回错误；覆盖 moomoo-price-alerts spec 的全部场景；`alerts: PriceAlerts = MoomooPriceAlerts(...)` 让 mypy 检查满足端口。验证：确认因为 `integrations/moomoo/alerts.py` 不存在而失败
 - [x] 5.2 实现 `integrations/moomoo/alerts.py`：`ReminderContext`、`MoomooPriceAlerts`（读系统设的、取整比较、先删后设、失败记进结果）、`_PushHandler`；`__init__.py` 导出，模块说明加上到价提醒。验证：5.1 的测试通过；`uv run mypy`、`uv run lint-imports`、`uv run ruff check` 通过
-- [ ] 5.3 冒烟测试 `tests/integrations/moomoo/test_opend_alerts_smoke.py`，加 `moomoo_opend` 标记，127.0.0.1:11111 连不上时跳过（design D10），在部署主机上对主机的 OpenD 跑，部署本变更以前跑：账户上已经有备注 TAPro 的提醒（主机上的程序在用）时跳过；任何时候对 SPY 设一个远高于现价的系统提醒，读回来类型、值、频率、时段、备注都对，再删掉、读不到；常规时段内设一个 SPY 价格涨到现价以下的提醒，30 秒内收到推送；每个测试结束时不论通过没有，都按 key 删掉它设上的提醒。验证：OpenD 没开时跳过；在主机上跑通，同时看 moomoo app 有没有显示这个提醒、手机有没有收到推送；推送收不到或字段不对就停下，报告给人
+- [ ] 5.3 冒烟测试 `tests/integrations/moomoo/test_opend_alerts_smoke.py`，加 `moomoo_opend` 标记，127.0.0.1:11111 连不上时跳过（design D10），在部署主机上对主机的 OpenD 跑，部署本变更以前跑：账户上已经有备注 TAPro 的提醒（主机上的程序在用）时跳过；任何时候对 SPY 设一个远高于现价的系统提醒，读回来类型、值、频率、时段、备注都对，再删掉、读不到；常规时段内在现价上下各 3 分设一个价格涨到和价格跌到（OpenD 只在越过时推送），120 秒内收到推送；整个文件读列表不超过 7 次（OpenD 每 30 秒最多 10 次）；跑完以后不论通过没有，都按 key 删掉这次设上的提醒，结束时读列表被限频就等 31 秒再读一次。验证：OpenD 没开时跳过；在主机上跑通，同时看 moomoo app 有没有显示这个提醒、手机有没有收到推送；推送收不到或字段不对就停下，报告给人
 
 ## 6. 事件检测接上
 
 - [x] 6.1 先写测试 `tests/workflows/test_event_detection.py`（design D1、D3、D6、D8）：event-detection spec 改过的「一轮」（同一只股票的价格事件和论点条件事件、入场条件满足排进案件、盘前照常同步、股票池是空的时删掉提醒）「没成为事件的新闻和公告」（论点条件没满足不写）「什么时候做一轮」（推送叫醒、做一轮时收到推送、停止以后的推送）「读不到时」（到价提醒不可用不影响事件）和新加的「断线以后」；price-alerts spec「同步」「同步失败」「推送」的场景；已有场景的股票池补上 event-detection spec 写的默认论点。验证：确认失败
 - [x] 6.2 实现 `workflows/event_detection.py`：`DetectionParts.alerts`；第 2 部分按 `condition_groups` 判断论点条件；第 6 部分同步到价提醒，读不到和失败写 WARNING，有增删写 INFO；`wake`、`_woken`、`start` 里先登记推送；模块说明写上推送在哪个线程、为什么只叫醒。验证：6.1 的测试和原有的事件检测测试通过；`uv run mypy`、`uv run lint-imports`、`uv run ruff check` 通过
+
+- [x] 6.3 最短间隔（design D8，event-detection spec「什么时候做一轮」「事件检测的配置」，2026-11-02 冒烟测试发现读到价提醒列表每 30 秒最多 10 次以后加的）：先写测试（推送叫醒的一轮隔开最短间隔、最短间隔为 0 时配置报错），再实现 `EventDetectionConfig.min_gap`（默认 5 秒）和 `_loop` 的等待。验证：测试通过；`uv run mypy`、`uv run ruff check` 通过
 
 ## 7. 装配
 

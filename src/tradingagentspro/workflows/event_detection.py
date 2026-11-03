@@ -81,6 +81,8 @@ class EventDetectionConfig(BaseModel):
 
     # 一轮做完以后等这么久再做下一轮
     interval: timedelta = Field(default=timedelta(seconds=60), gt=timedelta(0))
+    # 推送叫醒的一轮最早在上一轮开始以后这么久开始：一批提醒同时触发时不超过行情源的频率限制
+    min_gap: timedelta = Field(default=timedelta(seconds=5), gt=timedelta(0))
     # 距上一次取公告满这么久才再取：SEC 一只股票一个请求
     filing_interval: timedelta = Field(default=timedelta(minutes=5), gt=timedelta(0))
     # 新闻和公告的起始时刻、财报日历的预计发布时刻、卖出的成交日从检测时刻往前这么久算起
@@ -156,16 +158,21 @@ class EventDetector:
     def _loop(self) -> None:
         """做一轮，等一个间隔或者被叫醒，直到停止；一轮出错写 ERROR，下一轮照常。
 
-        一轮开始时清掉叫醒：这一轮里来的推送让等待立即返回，几次都只多做一轮。
+        一轮开始时清掉叫醒：这一轮里来的推送让等待立即返回，几次都只多做一轮。被叫醒时离上一轮开始
+        不到最短间隔，就等到那一刻；等的时候来的推送也只算下一轮。见
+        add-thesis-conditions-and-price-alerts 的 design D8。
         """
         seconds = self._config.interval.total_seconds()
         while not self._stopping.is_set():
             self._woken.clear()
+            started = self._parts.clock.now()
             try:
                 self.run_round()
             except Exception:
                 _log.exception("事件检测：这一轮出错")
-            self._woken.wait(seconds)
+            if self._woken.wait(seconds) and not self._stopping.is_set():
+                gap = self._config.min_gap - (self._parts.clock.now() - started)
+                self._stopping.wait(max(gap.total_seconds(), 0))
 
     def run_round(self) -> None:
         """做一轮，见 spec「一轮」：卖出成交、价格成交量和论点条件、公告、财报日历、新闻、到价
