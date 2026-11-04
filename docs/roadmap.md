@@ -40,7 +40,7 @@ There are three statuses: Not started, In progress, Done.
 | M1 Trading-side core | Done | 12 / 12 |
 | M2 Trading side on paper | In progress | 16 / 16 |
 | M3 Case-side core | Done | 12 / 12 |
-| M4 Case flow end to end | In progress | 18 / 19 |
+| M4 Case flow end to end | In progress | 19 / 19 |
 | M5 Models | Not started | — |
 | M6 Retrospectives and evaluation | Not started | — |
 | M7 Small-capital live | Not started | — |
@@ -119,7 +119,7 @@ Grouped by dependency; the order in the table is the implementation order: stora
 | Data | News and filings | New | Done |
 | | Earnings calendar and sectors | New | Done |
 | | Stock search screen | New; Modify: Stock pool | Done |
-| | SEC acceptance time | Modify: News and filings | In progress |
+| | SEC acceptance time | Modify: News and filings | Done |
 | Cases | State store snapshots | New | Done |
 | | Case records | New | Done |
 | | Stand-ins | New | Done |
