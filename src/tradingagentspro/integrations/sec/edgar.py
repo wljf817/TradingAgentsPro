@@ -6,8 +6,7 @@ FilingSource。
 
 import threading
 from collections.abc import Callable, Iterator, Sequence
-from datetime import UTC, datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
@@ -17,7 +16,6 @@ from tradingagentspro.modules.news import SourceUnavailableError
 
 SEC_URL = "https://www.sec.gov"
 SEC_DATA_URL = "https://data.sec.gov"
-NEW_YORK = ZoneInfo("America/New_York")
 
 
 class SecConfig(BaseModel):
@@ -149,7 +147,7 @@ class SecFilingSource:
             strict=True,
         )
         for accession, form, acceptance, items, document in rows:
-            accepted_at = _accepted_at(acceptance)
+            accepted_at = datetime.fromisoformat(acceptance)
             if accepted_at >= since:
                 folder = f"{SEC_URL}/Archives/edgar/data/{cik}/{accession.replace('-', '')}"
                 yield Filing(
@@ -179,11 +177,3 @@ class SecFilingSource:
 def _sec_ticker(symbol: str) -> str:
     """SEC 代码表的写法：分级股票用横线，BRK.B 是 BRK-B。"""
     return symbol.replace(".", "-")
-
-
-def _accepted_at(text: str) -> datetime:
-    """submissions 的 acceptanceDateTime 比真实时刻晚了美东和 UTC 的时差：换成美东时间，它的钟面
-    读数就是真实时刻的 UTC 钟面读数。见 sec-filings spec「受理时刻的换算」和 design D6。
-    """
-    shown = datetime.fromisoformat(text)  # 比如 2026-07-31T00:30:28.000Z
-    return shown.astimezone(NEW_YORK).replace(tzinfo=UTC)  # 2026-07-30T20:30:28Z
