@@ -41,7 +41,7 @@ There are three statuses: Not started, In progress, Done.
 | M2 Trading side on paper | In progress | 16 / 16 |
 | M3 Case-side core | Done | 12 / 12 |
 | M4 Case flow end to end | In progress | 19 / 19 |
-| M5 Models | Not started | — |
+| M5 Models | In progress | 0 / 1 |
 | M6 Retrospectives and evaluation | Not started | — |
 | M7 Small-capital live | Not started | — |
 
@@ -131,3 +131,11 @@ Grouped by dependency; the order in the table is the implementation order: stora
 | | Thesis conditions and price alerts | New; Modify: Event detection, moomoo quotes, Startup and wiring | Done |
 | | Close heartbeat | New; Modify: Startup and wiring, Program log | Done |
 | | Follow-up due | Modify: Follow-up approval, Case types and conclusions, Queue runner, Case workflow, Stand-ins, Program log, Startup and wiring | Done |
+
+### M5 Models
+
+Completed when the milestone is split.
+
+| Group | Change | Type | Status |
+| --- | --- | --- | --- |
+| Data | Market context | New; Modify: State store snapshots, Startup and wiring | In progress |
