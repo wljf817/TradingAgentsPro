@@ -10,7 +10,7 @@ A multi-agent US stock trading system driven by a code scheduler. A "case" opens
 - The PM is the only decision maker; agents never talk to each other directly and collaborate only through Tasks / Results relayed by the Agent gateway
 - The shared state store is the single source of facts for all agents; every agent in a case reads the same snapshot
 - Every trade must pass code risk control, and every opening trade needs human confirmation
-- Cash account, long only: no shorting, no margin; orders only during regular trading hours
+- Cash account, no margin; orders only during regular trading hours
 
 ## Architecture
 
