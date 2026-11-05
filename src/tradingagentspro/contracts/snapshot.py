@@ -92,6 +92,32 @@ class AccountEntry(SnapshotEntry):
     positions: tuple[HeldStock, ...]  # 按股票代码
 
 
+class VixClose(BaseModel):
+    """一天的 VIX 收盘值，见 market-context spec「VIX 收盘值」。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    day: date
+    close: Decimal
+
+
+class ScheduleKind(StrEnum):
+    """重要日程的类型，见 market-context spec「重要日程」。"""
+
+    FOMC = "fomc"  # FOMC 决议，日期是会议的第二天
+    CPI = "cpi"
+    PAYROLLS = "payrolls"  # 非农
+
+
+class ScheduleItem(BaseModel):
+    """重要日程的一项。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    day: date
+    kind: ScheduleKind
+
+
 class MarketEntry(SnapshotEntry):
     """市场状态：生成时刻归属的交易日，以及生成时刻是否在它的常规交易时段里。"""
 
@@ -99,6 +125,8 @@ class MarketEntry(SnapshotEntry):
     in_session: bool
     session_open: AwareDatetime
     session_close: AwareDatetime
+    vix: VixClose | None = None  # 读不到时为 None；旧快照没有这一项
+    schedule: tuple[ScheduleItem, ...] = ()  # 按日期；旧快照没有这一项
 
 
 class PoolMember(BaseModel):

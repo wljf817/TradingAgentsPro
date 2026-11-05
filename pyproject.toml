@@ -134,7 +134,7 @@ markers = [
     "alpaca_paper: 连真实的 Alpaca 模拟盘，需要 APCA_API_KEY_ID 和 APCA_API_SECRET_KEY",
     "moomoo_opend: 连本机的 moomoo OpenD，需要 OpenD 开着并已登录",
     "discord_bot: 连真实的 Discord，需要 DISCORD_BOT_TOKEN、DISCORD_GUILD_ID、DISCORD_CHANNEL_ID 和 DISCORD_USER_ID",
-    "news_sources: 连真实的 Alpaca 新闻和 SEC EDGAR，需要 APCA_API_KEY_ID、APCA_API_SECRET_KEY 和 SEC_USER_AGENT",
+    "news_sources: 连真实的 Alpaca 新闻、SEC EDGAR 和 Cboe，需要 APCA_API_KEY_ID、APCA_API_SECRET_KEY 和 SEC_USER_AGENT",
     "finnhub_api: 连真实的 Finnhub，需要 FINNHUB_API_KEY",
     "alpaca_bars: 连真实的 Alpaca 市场数据取日线，需要 APCA_API_KEY_ID 和 APCA_API_SECRET_KEY",
 ]

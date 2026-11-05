@@ -51,6 +51,7 @@ from tradingagentspro.integrations.alpaca import (
     AlpacaStopBroker,
     configure_account,
 )
+from tradingagentspro.integrations.cboe import CboeConfig, CboeVixSource
 from tradingagentspro.integrations.discord import (
     DiscordConfig,
     DiscordGateway,
@@ -120,7 +121,12 @@ from tradingagentspro.modules.gateway import (
 )
 from tradingagentspro.modules.health import HealthConfig, HealthService
 from tradingagentspro.modules.heartbeat import HeartbeatConfig
-from tradingagentspro.modules.marketdata import MarketDataConfig, MarketDataService
+from tradingagentspro.modules.marketdata import (
+    MarketContextService,
+    MarketDataConfig,
+    MarketDataService,
+    VixSource,
+)
 from tradingagentspro.modules.news import FilingSource, NewsService, NewsSource, PostgresNewsStore
 from tradingagentspro.modules.notification import (
     ConfirmationOutcome,
@@ -200,7 +206,8 @@ class Externals:
     design D13 和 add-queue-runner 的 design D6。news、filings 是新闻源和公告源：事件检测在运行中
     取新闻和公告，测试换成替身，见 add-event-detection 的 design D15。sleep 是收盘心跳相邻两次刷新
     之间的持久化等待，finnhub 是公司数据源：收盘心跳在运行中刷新财报，测试换成替身，见
-    add-close-heartbeat 的 design D6。
+    add-close-heartbeat 的 design D6。vix 是 VIX 源：生成快照时读，测试换成替身，见
+    add-market-context 的 design D1。
     """
 
     clock: Clock
@@ -213,6 +220,7 @@ class Externals:
     filings: Callable[[SecConfig], FilingSource]
     sleep: Callable[[float], None]
     finnhub: Callable[[FinnhubConfig], CompanyDataSource]
+    vix: Callable[[CboeConfig], VixSource]
 
 
 SYSTEM_EXTERNALS = Externals(
@@ -226,6 +234,7 @@ SYSTEM_EXTERNALS = Externals(
     filings=SecFilingSource,
     sleep=DBOS.sleep,
     finnhub=FinnhubSource,
+    vix=CboeVixSource,
 )
 
 
@@ -407,9 +416,11 @@ def _case_side(
     )
     snapshots = SnapshotService(PostgresSnapshotStore(engine, clock), program_log)
     events = EventService(PostgresEventStore(engine), program_log)
+    market_context = MarketContextService(externals.vix(CboeConfig()), calendar, MarketDataConfig())
     snapshot_flow = SnapshotFlow(
         execution,
         market_data,
+        market_context,
         stock_pool,
         news,
         company_data,
@@ -418,7 +429,7 @@ def _case_side(
         snapshots,
         clock,
         calendar,
-        SnapshotConfig(),
+        SnapshotConfig(indexes=("SPY", "QQQ", "VIXY")),
     )
     services = CaseServices(
         agents=agents,

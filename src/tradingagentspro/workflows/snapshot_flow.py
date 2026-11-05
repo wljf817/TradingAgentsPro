@@ -5,9 +5,10 @@ add-state-snapshot 的 design D7、D8、D9。快照的格式在 contracts.snapsh
 状态库模块。
 """
 
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Final
 from uuid import UUID
 
@@ -35,6 +36,7 @@ from tradingagentspro.contracts.snapshot import (
     StockPoolEntry,
     SurpriseQuarter,
     SurprisesEntry,
+    VixClose,
     check_reason,
     entry_id,
 )
@@ -45,7 +47,12 @@ from tradingagentspro.modules.companydata import (
 )
 from tradingagentspro.modules.events import EventService
 from tradingagentspro.modules.execution import Account, ExecutionService
-from tradingagentspro.modules.marketdata import MarketDataService, Quote
+from tradingagentspro.modules.marketdata import (
+    MarketContextService,
+    MarketDataService,
+    Quote,
+    VixUnavailableError,
+)
 from tradingagentspro.modules.news import NewsService
 from tradingagentspro.modules.screener import ScreenerService, ScreenRun
 from tradingagentspro.modules.statestore import SnapshotService
@@ -57,6 +64,9 @@ from tradingagentspro.shared.trading_calendar import TradingCalendar
 _NO_STOCK_FACTS: Final = frozenset(
     {CaseType.EXPLORATION, CaseType.WEEKLY_RETROSPECTIVE, CaseType.SELL_RETROSPECTIVE}
 )
+
+
+_log = logging.getLogger(__name__)
 
 
 class SnapshotConfig(BaseModel):
@@ -96,13 +106,14 @@ class _StockFacts:
 class SnapshotFlow:
     """生成快照：读各模块的事实，组成一版快照存下，见 state-snapshot spec。
 
-    只读执行模块、股票池、新闻和公告、公司数据、事件，不拿锁；寻股的粗筛写的是粗筛模块自己的表。
+    只读执行模块、行情、市场背景、股票池、新闻和公告、公司数据、事件，不拿锁；寻股的粗筛写的是粗筛模块自己的表。
     """
 
     def __init__(
         self,
         execution: ExecutionService,
         market_data: MarketDataService,
+        market_context: MarketContextService,
         pool: StockPoolService,
         news: NewsService,
         company_data: CompanyDataService,
@@ -115,6 +126,7 @@ class SnapshotFlow:
     ) -> None:
         self._execution = execution
         self._market_data = market_data
+        self._market_context = market_context
         self._pool = pool
         self._news = news
         self._company_data = company_data
@@ -202,7 +214,17 @@ class SnapshotFlow:
             in_session=self._calendar.session_at(now) is not None,
             session_open=session.open,
             session_close=session.close,
+            vix=self._vix(session.day),
+            schedule=self._market_context.schedule(session.day),
         )
+
+    def _vix(self, day: date) -> VixClose | None:
+        """最近的 VIX 收盘值；读不到时写 WARNING，为 None，见 add-market-context 的 design D2。"""
+        try:
+            return self._market_context.vix(day)
+        except VixUnavailableError as error:
+            _log.warning("生成快照：读不到 VIX 收盘值：%s", error)
+            return None
 
 
 def _case_stock(case_type: CaseType, symbol: str | None, members: Iterable[PoolEntry]) -> PoolEntry:

@@ -1,8 +1,9 @@
-"""行情模块需要的外部接口：行情源。"""
+"""行情模块需要的外部接口：行情源和 VIX 源。"""
 
 from collections.abc import Mapping, Sequence
 from typing import Protocol
 
+from tradingagentspro.contracts.snapshot import VixClose
 from tradingagentspro.modules.marketdata.domain.quote import Quote
 
 
@@ -19,4 +20,16 @@ class QuoteSource(Protocol):
 
     def quotes(self, symbols: Sequence[str]) -> Mapping[str, Quote]:
         """这些股票的行情。"""
+        ...
+
+
+class VixUnavailableError(RuntimeError):
+    """VIX 源超时、断线、出错或格式不对，或者没有早于要取的交易日的收盘值。"""
+
+
+class VixSource(Protocol):
+    """VIX 源。失败时抛 VixUnavailableError，不重试。"""
+
+    def closes(self) -> Sequence[VixClose]:
+        """全部收盘值。"""
         ...

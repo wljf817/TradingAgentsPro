@@ -1,14 +1,22 @@
-"""行情的用例：取一组股票的行情，给出行情最近一次更新的时刻。
+"""行情的用例：取一组股票的行情，给出行情最近一次更新的时刻；市场背景的用例：VIX 收盘值和重要日程。
 
-见 market-data spec。
+见 market-data spec 和 market-context spec。
 """
 
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import date, datetime
 
+from tradingagentspro.contracts.snapshot import ScheduleItem, VixClose
 from tradingagentspro.modules.marketdata.config import MarketDataConfig
+from tradingagentspro.modules.marketdata.domain.context import latest_close, upcoming
 from tradingagentspro.modules.marketdata.domain.quote import Quote
-from tradingagentspro.modules.marketdata.ports import QuoteSource, QuoteUnavailableError
+from tradingagentspro.modules.marketdata.ports import (
+    QuoteSource,
+    QuoteUnavailableError,
+    VixSource,
+    VixUnavailableError,
+)
+from tradingagentspro.shared.trading_calendar import TradingCalendar
 
 
 class MarketDataService:
@@ -39,3 +47,26 @@ class MarketDataService:
         if quote is None:
             raise QuoteUnavailableError(f"行情源没有参考股票 {symbol} 的数据")
         return quote.updated_at
+
+
+class MarketContextService:
+    """市场背景的入口。不保存状态，每次都向 VIX 源取；VIX 源的失败原样抛出，不重试。"""
+
+    def __init__(
+        self, source: VixSource, calendar: TradingCalendar, config: MarketDataConfig
+    ) -> None:
+        self._source = source
+        self._calendar = calendar
+        self._config = config
+
+    def vix(self, day: date) -> VixClose:
+        """日期早于交易日 day 的最近一个收盘值。没有时抛 VixUnavailableError。"""
+        close = latest_close(self._source.closes(), day)
+        if close is None:
+            raise VixUnavailableError(f"没有早于 {day} 的 VIX 收盘值")
+        return close
+
+    def schedule(self, day: date) -> tuple[ScheduleItem, ...]:
+        """交易日 day 到它之后配置的交易日数内的重要日程，按日期。"""
+        last = self._calendar.add_sessions(day, self._config.schedule_sessions)
+        return upcoming(self._config.schedule, day, last.day)
