@@ -123,6 +123,7 @@ _CONCLUSION: Final = {
     ConclusionRejection.FOLLOW_UP_IN_FOLLOW_UP: "跟进案件不能再申请跟进",
     ConclusionRejection.MISSING_RENEWAL: "续期缺少论点更新",
     ConclusionRejection.MISSING_REQUIRED_AGENT: "缺少事件要求的子 agent",
+    ConclusionRejection.SCORE_NOT_POSITIVE: "开仓评分不大于 0",
     ConclusionRejection.INSUFFICIENT_RESEARCH: "研究不足",
 }
 _DATES: Final = {

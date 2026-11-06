@@ -31,6 +31,7 @@ class ConclusionRejection(StrEnum):
     FOLLOW_UP_IN_FOLLOW_UP = "follow_up_in_follow_up"  # 跟进案件不能再申请跟进
     MISSING_RENEWAL = "missing_renewal"  # 续期缺少论点更新
     MISSING_REQUIRED_AGENT = "missing_required_agent"  # 缺少事件要求的子 agent
+    SCORE_NOT_POSITIVE = "score_not_positive"  # 开仓评分不大于 0
     INSUFFICIENT_RESEARCH = "insufficient_research"  # 研究不足
 
 
@@ -45,6 +46,8 @@ _REVIEW_CASES: Final = frozenset(
 )
 # 结论之后股票还是这个状态的决定：复查类案件里选了就是续期
 _RENEWING: Final = frozenset({Decision.HOLD, Decision.ADD, Decision.REDUCE, Decision.KEEP_WATCHING})
+# 评分必须大于 0 的决定
+_ENTERING: Final = frozenset({Decision.BUY, Decision.ADD})
 # 有研究要求的决定
 _RESEARCHED: Final = frozenset({Decision.BUY, Decision.ADD, Decision.PROMOTE})
 
@@ -91,6 +94,12 @@ def conclusion_rejection(
         return ConclusionRejection.MISSING_RENEWAL
     if case.required_agent is not None and case.required_agent not in dispatched:
         return ConclusionRejection.MISSING_REQUIRED_AGENT
+    if (
+        isinstance(conclusion, HoldingConclusion | WatchConclusion)
+        and conclusion.decision in _ENTERING
+        and conclusion.signal.score <= 0
+    ):
+        return ConclusionRejection.SCORE_NOT_POSITIVE
     if decision in _RESEARCHED:
         agents = {completed[r] for r in conclusion.cited_results if r in completed}
         if len(agents) < config.min_cited_agents:
