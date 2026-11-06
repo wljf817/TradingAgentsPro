@@ -41,7 +41,7 @@ There are three statuses: Not started, In progress, Done.
 | M2 Trading side on paper | In progress | 16 / 16 |
 | M3 Case-side core | Done | 12 / 12 |
 | M4 Case flow end to end | In progress | 19 / 19 |
-| M5 Models | In progress | 1 / 1 |
+| M5 Models | In progress | 1 / 9 |
 | M6 Retrospectives and evaluation | Not started | — |
 | M7 Small-capital live | Not started | — |
 
@@ -134,8 +134,16 @@ Grouped by dependency; the order in the table is the implementation order: stora
 
 ### M5 Models
 
-Completed when the milestone is split.
+The PM is split first; the sub-agents and the Critic are added when they are split. The order of the table is the order of implementation. These changes build the skeleton only; prompts are written once it stands.
 
 | Group | Change | Type | Status |
 | --- | --- | --- | --- |
 | Data | Market context | New; Modify: State store snapshots, Startup and wiring | Done |
+| Access | Model configuration | New; Modify: Backup models, Call budget, Startup and wiring, Deployment | Not started |
+| | Model adapter | New; Modify: Startup and wiring | Not started |
+| PM | Available limits | New; Modify: Case workflow | Not started |
+| | Shared context | New; Modify: Program log | Not started |
+| | PM calls | New | Not started |
+| | Opening score | Modify: Case workflow | Not started |
+| | Watching rules | Modify: Case types and conclusions, Case workflow, Stand-ins | Not started |
+| | History queries | New; Modify: Case records, Trade records, Program log | Not started |
