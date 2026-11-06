@@ -43,9 +43,12 @@ from tradingagentspro.modules.heartbeat import (
     thesis_dates_rejection,
 )
 from tradingagentspro.modules.scheduler import (
+    WATCH_REVIEW_CASES,
     CaseDefinition,
     SchedulerConfig,
+    can_open,
     conclusion_rejection,
+    renewal_capped,
 )
 from tradingagentspro.modules.stockpool import PoolEntry, PoolSource, Rejection, StockPoolService
 from tradingagentspro.shared.trading_calendar import TradingCalendar
@@ -101,6 +104,7 @@ def conclusion_problem(
         conclusion,
         dispatched_agents(records),
         completed_results(records),
+        renewal_at_cap(definition, entry, snapshot, configs.scheduler),
         configs.scheduler,
     )
     if rejection is not None:
@@ -114,6 +118,22 @@ def conclusion_problem(
         if dates is not None:
             return dates
     return None
+
+
+def renewal_at_cap(
+    definition: CaseDefinition,
+    entry: PoolEntry | None,
+    snapshot: Snapshot,
+    config: SchedulerConfig,
+) -> bool:
+    """案件股票到了续期上限，见 spec「案件上下文」「结论的检查」。
+
+    只有关注股的复查类案件看上限；股票在案件运行时被移出的，entry 为 None，不算到上限。
+    """
+    if definition.case_type not in WATCH_REVIEW_CASES or entry is None:
+        return False
+    assert snapshot.headroom is not None  # 关注的案件的快照一定有可用额度
+    return renewal_capped(entry.renewals, snapshot.headroom, config)
 
 
 def _unscreened(conclusion: Conclusion, snapshot: Snapshot) -> str | None:
@@ -236,7 +256,10 @@ class ConclusionEffects:
                 symbol = self._scored(case_id, definition, conclusion.signal.score)
                 if thesis is not None:
                     day = self._last_review_day(definition, conclusion, entry, snapshot, today)
-                    self._pool.update_watch_thesis(symbol, thesis, day, case_id=case_id)
+                    counted = _counted(definition, snapshot)
+                    self._pool.update_watch_thesis(
+                        symbol, thesis, day, case_id=case_id, counted=counted
+                    )
                 elif decision is Decision.DEMOTE:
                     demoted = self._pool.demote(symbol, case_id=case_id)
                     if isinstance(demoted, PoolEntry):
@@ -300,6 +323,14 @@ class ConclusionEffects:
 
     def _status_changed(self, symbol: str, before: StockStatus, after: StockStatus | None) -> None:
         self._follow_ups.status_changed(symbol, before, after)
+
+
+def _counted(definition: CaseDefinition, snapshot: Snapshot) -> bool:
+    """关注的论点更新计入连续续期次数：是续期，并且开得了仓。"""
+    if definition.case_type not in WATCH_REVIEW_CASES:
+        return False
+    assert snapshot.headroom is not None  # 关注的案件的快照一定有可用额度
+    return can_open(snapshot.headroom)
 
 
 def _rejected(outcome: PoolEntry | Rejection) -> str | None:

@@ -71,6 +71,8 @@ HEARTBEAT_CASE_TYPES: Final = frozenset(
         CaseType.WEEKLY_RETROSPECTIVE,
     }
 )
+# 关注股的复查类案件：续期上限管的案件（spec「续期上限」）
+WATCH_REVIEW_CASES: Final = frozenset({CaseType.WATCH_REVIEW, CaseType.WATCH_CATALYST_REVIEW})
 _EVENT_TYPES: Final = {
     _HOLDING: CaseType.HOLDING_EVENT,
     _WATCH: CaseType.WATCH_EVENT,
@@ -154,18 +156,20 @@ class CaseDefinition:
     question: str | None  # 复盘案件不唤醒 PM，没有问题
     priority: int  # 1 最高，9 最低
     required_agent: SubAgent | None  # 只有事件案件有
+    category: EventCategory | None = None  # 事件类别，只有事件案件有
 
 
 def _definition(
     case_type: CaseType,
     symbol: str | None,
     question: str | None = None,
-    required_agent: SubAgent | None = None,
+    category: EventCategory | None = None,
 ) -> CaseDefinition:
-    """按表给出案件类型固定的内容；question 是跟进申请时写下的问题。"""
+    """按表给出案件类型固定的内容；question 是跟进申请时写下的问题，category 是事件的类别。"""
     spec = _CASE_TYPES[case_type]
+    required_agent = None if category is None else _REQUIRED_AGENTS[category]
     return CaseDefinition(
-        case_type, symbol, question or spec.question, spec.priority, required_agent
+        case_type, symbol, question or spec.question, spec.priority, required_agent, category
     )
 
 
@@ -182,7 +186,7 @@ def define_case(trigger: Trigger, status: StockStatus | None) -> CaseDefinition 
                 case_type = CaseType.HOLDING_RISK_EVENT
             else:
                 case_type = _EVENT_TYPES[status]
-            return _definition(case_type, symbol, required_agent=_REQUIRED_AGENTS[category])
+            return _definition(case_type, symbol, category=category)
         case HeartbeatTrigger(case_type, symbol):
             target = _CASE_TYPES[case_type].status
             if target is not None and status is not target:
@@ -201,9 +205,15 @@ def conclusion_model(case_type: CaseType) -> type[Conclusion] | None:
     return _CASE_TYPES[case_type].conclusion
 
 
-def allowed_decisions(case_type: CaseType) -> tuple[Decision, ...]:
-    """这种案件的结论能选的决定，取自结论的格式；寻股的结论没有决定，为空。只用于唤醒 PM 的案件。"""
+def allowed_decisions(case_type: CaseType, renewal_capped: bool = False) -> tuple[Decision, ...]:
+    """这种案件的结论能选的决定，取自结论的格式；寻股的结论没有决定，为空。只用于唤醒 PM 的案件。
+
+    renewal_capped 只在关注股的复查类案件到上限时为真，这时去掉继续关注。
+    """
     conclusion = conclusion_model(case_type)
     assert conclusion is not None  # 复盘案件不唤醒 PM，不组案件上下文
     decision = conclusion.model_fields.get("decision")
-    return () if decision is None else get_args(decision.annotation)
+    decisions: tuple[Decision, ...] = () if decision is None else get_args(decision.annotation)
+    if renewal_capped:
+        return tuple(d for d in decisions if d is not Decision.KEEP_WATCHING)
+    return decisions

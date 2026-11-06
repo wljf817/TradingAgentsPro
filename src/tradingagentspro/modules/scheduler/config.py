@@ -1,5 +1,5 @@
-"""调度器的阈值和默认值，含义见 case-types spec「研究要求的配置」、case-queue spec「队列配置」
-和 case-stages spec「案件阶段的配置」。
+"""调度器的阈值和默认值，含义见 case-types spec「研究要求的配置」「续期上限」、case-queue spec
+「队列配置」和 case-stages spec「案件阶段的配置」。
 """
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -15,6 +15,8 @@ class SchedulerConfig(BaseModel):
     # 开仓方案、加仓和升级引用的状态是完成的 Result，至少来自这么多个不同子 agent；
     # 上限是子 agent 的个数
     min_cited_agents: int = Field(default=2, ge=1, le=len(SubAgent))
+    # 关注股连续续期这么多次还没有开仓，复查类案件就不能再选继续关注；至少 1
+    max_watch_renewals: int = Field(default=3, ge=1)
     # 同一时间还在调用模型的案件最多这么多个
     max_concurrent_cases: int = Field(default=3, ge=1)
     # 结论校验不通过时，PM 在同一个案件里最多重交这么多次；0 表示不重交

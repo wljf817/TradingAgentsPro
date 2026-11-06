@@ -11,6 +11,7 @@ case-stages spec。模块之外的代码只能 import 这里导出的名字。
 from tradingagentspro.modules.scheduler.config import SchedulerConfig
 from tradingagentspro.modules.scheduler.domain.case_type import (
     HEARTBEAT_CASE_TYPES,
+    WATCH_REVIEW_CASES,
     CaseDefinition,
     EventTrigger,
     FollowUpTrigger,
@@ -34,6 +35,7 @@ from tradingagentspro.modules.scheduler.domain.queue import (
     emergency_decision,
     queue_decision,
 )
+from tradingagentspro.modules.scheduler.domain.renewal import can_open, renewal_capped
 from tradingagentspro.modules.scheduler.domain.stage import (
     CaseStage,
     CaseState,
@@ -50,6 +52,7 @@ from tradingagentspro.modules.scheduler.service import QueueService
 
 __all__ = [
     "HEARTBEAT_CASE_TYPES",
+    "WATCH_REVIEW_CASES",
     "CaseDefinition",
     "CaseStage",
     "CaseStart",
@@ -74,10 +77,12 @@ __all__ = [
     "SellTrigger",
     "Trigger",
     "allowed_decisions",
+    "can_open",
     "conclusion_model",
     "conclusion_rejection",
     "define_case",
     "emergency_decision",
     "new_case",
     "queue_decision",
+    "renewal_capped",
 ]

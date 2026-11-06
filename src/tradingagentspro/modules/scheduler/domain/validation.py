@@ -19,9 +19,14 @@ from tradingagentspro.contracts.conclusion import (
     HoldingConclusion,
     WatchConclusion,
 )
+from tradingagentspro.contracts.event import EventCategory
 from tradingagentspro.contracts.thesis import InvestmentThesis, WatchThesis
 from tradingagentspro.modules.scheduler.config import SchedulerConfig
-from tradingagentspro.modules.scheduler.domain.case_type import CaseDefinition, conclusion_model
+from tradingagentspro.modules.scheduler.domain.case_type import (
+    WATCH_REVIEW_CASES,
+    CaseDefinition,
+    conclusion_model,
+)
 
 
 class ConclusionRejection(StrEnum):
@@ -29,7 +34,10 @@ class ConclusionRejection(StrEnum):
 
     WRONG_KIND = "wrong_kind"  # 结论不属于这个案件
     FOLLOW_UP_IN_FOLLOW_UP = "follow_up_in_follow_up"  # 跟进案件不能再申请跟进
+    MISSING_COMMITMENT = "missing_commitment"  # 新写的关注论点缺少承诺
     MISSING_RENEWAL = "missing_renewal"  # 续期缺少论点更新
+    RENEWAL_CAPPED = "renewal_capped"  # 续期次数已用完
+    MISSING_CHANGE = "missing_change"  # 等的事到了没有开仓，没有写什么变了
     MISSING_REQUIRED_AGENT = "missing_required_agent"  # 缺少事件要求的子 agent
     SCORE_NOT_POSITIVE = "score_not_positive"  # 开仓评分不大于 0
     INSUFFICIENT_RESEARCH = "insufficient_research"  # 研究不足
@@ -67,17 +75,31 @@ def _parts(
             return None, None, None
 
 
+def _new_watch_thesis(conclusion: Conclusion) -> WatchThesis | None:
+    """结论新写的关注论点：升级、清仓转为关注、关注的论点更新；没有时为 None。"""
+    return None if isinstance(conclusion, ExplorationConclusion) else conclusion.watch_thesis
+
+
+def _waited_for(case: CaseDefinition) -> bool:
+    """代码认得出等的事到了的案件：入场条件满足开出的关注股事件和关注催化剂复查。"""
+    if case.case_type is CaseType.WATCH_EVENT:
+        return case.category is EventCategory.ENTRY
+    return case.case_type is CaseType.WATCH_CATALYST_REVIEW
+
+
 def conclusion_rejection(
     case: CaseDefinition,
     conclusion: Conclusion,
     dispatched: Collection[SubAgent],
     completed: Mapping[str, SubAgent],
+    renewal_capped: bool,
     config: SchedulerConfig,
 ) -> ConclusionRejection | None:
     """按 spec「结论的校验」的顺序给出第一项不通过的原因，全部通过时为 None。
 
     - dispatched：本案件派过任务的子 agent，不论 Result 的状态
     - completed：本案件状态是完成的 Result 出自哪个子 agent，键是 Result ID；没传入的 Result 不计数
+    - renewal_capped：案件股票到了续期上限（spec「续期上限」）
 
     复盘案件不唤醒 PM，没有结论，抛 ValueError。
     """
@@ -90,8 +112,24 @@ def conclusion_rejection(
     decision, follow_up, update = _parts(conclusion)
     if case.case_type in _FOLLOW_UP_CASES and follow_up is not None:
         return ConclusionRejection.FOLLOW_UP_IN_FOLLOW_UP
+    thesis = _new_watch_thesis(conclusion)
+    if thesis is not None and thesis.commitment is None:
+        return ConclusionRejection.MISSING_COMMITMENT
     if case.case_type in _REVIEW_CASES and decision in _RENEWING and update is None:
         return ConclusionRejection.MISSING_RENEWAL
+    if (
+        renewal_capped
+        and case.case_type in WATCH_REVIEW_CASES
+        and decision is Decision.KEEP_WATCHING
+    ):
+        return ConclusionRejection.RENEWAL_CAPPED
+    if (
+        isinstance(conclusion, WatchConclusion)
+        and _waited_for(case)
+        and conclusion.decision is not Decision.BUY
+        and conclusion.what_changed is None
+    ):
+        return ConclusionRejection.MISSING_CHANGE
     if case.required_agent is not None and case.required_agent not in dispatched:
         return ConclusionRejection.MISSING_REQUIRED_AGENT
     if (

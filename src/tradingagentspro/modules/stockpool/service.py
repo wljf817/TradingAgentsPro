@@ -226,9 +226,18 @@ class StockPoolService:
             return scored
 
     def update_watch_thesis(
-        self, symbol: str, thesis: WatchThesis, last_review_day: date, *, case_id: UUID
+        self,
+        symbol: str,
+        thesis: WatchThesis,
+        last_review_day: date,
+        *,
+        case_id: UUID,
+        counted: bool = False,
     ) -> PoolEntry | Rejection:
-        """关注股的论点更新：关注论点和上次复查的那一天换成给出的，要求关注。"""
+        """关注股的论点更新：关注论点和上次复查的那一天换成给出的，要求关注。
+
+        counted 由调用方给出：这次更新计入连续续期次数时为真。
+        """
         with self._lock:
             entry = self._store.get(symbol)
             rejection = status_rejection(entry, StockStatus.WATCH)
@@ -237,7 +246,9 @@ class StockPoolService:
                 self._write(Action.POOL_THESIS, symbol, detail, case_id)
                 return rejection
             assert entry is not None  # 检查保证在池子里
-            updated = self._save(entry.watch_thesis_updated(thesis, last_review_day))
+            updated = self._save(
+                entry.watch_thesis_updated(thesis, last_review_day, counted=counted)
+            )
             detail = f"关注论点，通过：{_thesis_dates(thesis, last_review_day)}"
             self._write(Action.POOL_THESIS, symbol, detail, case_id)
             return updated

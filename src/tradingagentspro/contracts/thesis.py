@@ -69,6 +69,15 @@ class Catalyst(BaseModel):
     reference: CatalystReference | None = None
 
 
+class WatchCommitment(BaseModel):
+    """关注论点的承诺：在等什么、等到以后做什么。最晚等到哪天就是论点的复查日。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", str_strip_whitespace=True)
+
+    waiting_for: str = Field(min_length=1)  # 在等什么
+    then_action: str = Field(min_length=1)  # 等到以后做什么
+
+
 class WatchThesis(BaseModel):
     """关注论点。复查日和截止日期取什么值由「复查日与催化剂」校验。"""
 
@@ -80,6 +89,8 @@ class WatchThesis(BaseModel):
     catalyst: Catalyst
     invalidation: str = Field(min_length=1)  # 证伪条件
     review_day: date  # 复查日
+    # 新写的论点要不要有承诺由结论的校验检查
+    commitment: WatchCommitment | None = None
 
 
 class InvestmentThesis(BaseModel):

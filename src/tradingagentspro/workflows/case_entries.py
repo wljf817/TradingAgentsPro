@@ -121,7 +121,10 @@ _SIGNAL: Final = {
 _CONCLUSION: Final = {
     ConclusionRejection.WRONG_KIND: "结论不属于这个案件",
     ConclusionRejection.FOLLOW_UP_IN_FOLLOW_UP: "跟进案件不能再申请跟进",
+    ConclusionRejection.MISSING_COMMITMENT: "关注论点缺少承诺",
     ConclusionRejection.MISSING_RENEWAL: "续期缺少论点更新",
+    ConclusionRejection.RENEWAL_CAPPED: "续期次数已用完",
+    ConclusionRejection.MISSING_CHANGE: "没有写什么变了",
     ConclusionRejection.MISSING_REQUIRED_AGENT: "缺少事件要求的子 agent",
     ConclusionRejection.SCORE_NOT_POSITIVE: "开仓评分不大于 0",
     ConclusionRejection.INSUFFICIENT_RESEARCH: "研究不足",

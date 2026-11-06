@@ -83,6 +83,7 @@ from tradingagentspro.workflows.case_conclusion import (
     CheckConfigs,
     ConclusionEffects,
     conclusion_problem,
+    renewal_at_cap,
 )
 from tradingagentspro.workflows.case_entries import (
     RETROSPECTIVE,
@@ -185,9 +186,10 @@ class CaseFlow:
             return None
         return version
 
-    def context(self, definition: CaseDefinition, trigger: Trigger) -> CaseContext:
+    def context(self, case_id: UUID, definition: CaseDefinition, trigger: Trigger) -> CaseContext:
         """组出案件上下文，见 spec「案件上下文」：事件案件的事件按触发里的事件 ID 读出；跟进案件的
-        跟进按触发里的跟进 ID 读出，读不到时抛 KeyError（update-follow-ups-due 的 design D5）。
+        跟进按触发里的跟进 ID 读出，读不到时抛 KeyError（update-follow-ups-due 的 design D5）；是否
+        到续期上限按第 1 版快照的可用额度。
         """
         assert definition.question is not None  # 由 PM 处理的案件都有问题
         symbol = definition.symbol
@@ -204,7 +206,10 @@ class CaseFlow:
         follow_up = None
         if isinstance(trigger, FollowUpTrigger):
             follow_up = self._follow_up(trigger.follow_up_id)
-        decisions = allowed_decisions(definition.case_type)
+        capped = renewal_at_cap(
+            definition, entry, self._snapshot(case_id, 1), self._configs.scheduler
+        )
+        decisions = allowed_decisions(definition.case_type, capped)
         return CaseContext(
             question=definition.question,
             event=event,

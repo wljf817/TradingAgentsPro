@@ -202,12 +202,16 @@ class WatchConclusion(_ConclusionBase):
     thesis: InvestmentThesis | None = None  # 新建仓的投资论点
     watch_thesis: WatchThesis | None = None  # 论点更新
     follow_up: FollowUpRequest | None = None
+    # 为什么没有照承诺开仓；哪些案件必须写由调度器的结论校验检查
+    what_changed: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def _check_attachments(self) -> Self:
         _check_plan(self.decision, self.plan)
         if (self.decision is Decision.BUY) != (self.thesis is not None):
             raise ValueError("开仓方案必须附投资论点，其他决定不附")
+        if self.decision is Decision.BUY and self.what_changed is not None:
+            raise ValueError("开仓方案不写什么变了")
         if self.decision is not Decision.KEEP_WATCHING and (
             self.watch_thesis is not None or self.follow_up is not None
         ):

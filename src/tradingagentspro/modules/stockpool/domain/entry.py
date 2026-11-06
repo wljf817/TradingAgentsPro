@@ -50,6 +50,7 @@ class PoolEntry:
     - investment_thesis：投资论点；只有持仓有
     - last_review_day：论点的复查日最近一次新设（买入、升级、清仓转为关注、续期）的那个交易日，
       由调用方给出；只有关注和持仓有
+    - renewals：转入关注以后计入上限的续期次数，只有关注读它
     - candidate_since：加入或代码触发的清仓转为候选的时刻；降为候选的候选没有，关注和持仓也没有。
       收盘心跳拿它判断新候选
     - score、reviewed_at：PM 最近一次对这只股票给出结论时的评分和时刻；还没有时为 None
@@ -71,6 +72,7 @@ class PoolEntry:
     watch_thesis: WatchThesis | None = None
     investment_thesis: InvestmentThesis | None = None
     last_review_day: date | None = None
+    renewals: int = 0
     candidate_since: datetime | None = None
     score: int | None = None
     reviewed_at: datetime | None = None
@@ -81,7 +83,7 @@ class PoolEntry:
         return self.removal is None
 
     def promoted(self, thesis: WatchThesis, last_review_day: date) -> Self:
-        """候选升级为关注：关注论点和上次复查的那一天是给出的。"""
+        """候选升级为关注：关注论点和上次复查的那一天是给出的，续期次数从 0 算起。"""
         return replace(
             self,
             status=StockStatus.WATCH,
@@ -89,6 +91,7 @@ class PoolEntry:
             candidate_since=None,
             watch_thesis=thesis,
             last_review_day=last_review_day,
+            renewals=0,
         )
 
     def kept(self, expires_at: datetime) -> Self:
@@ -142,7 +145,7 @@ class PoolEntry:
 
     def closed_to_watch(self, thesis: WatchThesis, last_review_day: date) -> Self:
         """PM 发起的清仓，PM 选择转为关注：持仓转为关注，去掉投资论点，关注论点和上次复查的那一天
-        是给出的。
+        是给出的，续期次数从 0 算起。
         """
         self._check_holding()
         return replace(
@@ -151,11 +154,17 @@ class PoolEntry:
             watch_thesis=thesis,
             investment_thesis=None,
             last_review_day=last_review_day,
+            renewals=0,
         )
 
-    def watch_thesis_updated(self, thesis: WatchThesis, last_review_day: date) -> Self:
-        """关注论点更新：关注论点整份换成新的，上次复查的那一天换成给出的。"""
-        return replace(self, watch_thesis=thesis, last_review_day=last_review_day)
+    def watch_thesis_updated(
+        self, thesis: WatchThesis, last_review_day: date, *, counted: bool = False
+    ) -> Self:
+        """关注论点更新：论点整份换成新的，上次复查的那一天换成给出的；counted 时续期次数加 1。"""
+        renewals = self.renewals + 1 if counted else self.renewals
+        return replace(
+            self, watch_thesis=thesis, last_review_day=last_review_day, renewals=renewals
+        )
 
     def investment_thesis_updated(self, thesis: InvestmentThesis, last_review_day: date) -> Self:
         """投资论点更新：投资论点整份换成新的，上次复查的那一天换成给出的。"""

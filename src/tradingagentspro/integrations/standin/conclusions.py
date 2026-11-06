@@ -33,6 +33,7 @@ from tradingagentspro.contracts.thesis import (
     Condition,
     ConditionKind,
     InvestmentThesis,
+    WatchCommitment,
     WatchThesis,
 )
 from tradingagentspro.contracts.trade_plan import OrderType
@@ -53,6 +54,10 @@ _QUESTION = "替身任务：按任务类型给出固定的信号"
 _BARS: Final = BarWindow(period=BarPeriod.DAY, days=60)  # Quant 的任务的周期和范围
 _ANSWER = "替身按案件类型给出固定的结论"
 _RATIONALE = "替身不做判断，结论按案件类型固定，用来跑通案件流程"
+_COMMITMENT: Final = WatchCommitment(
+    waiting_for="替身：等入场条件满足", then_action="替身：入场条件满足就开仓"
+)
+_WHAT_CHANGED = "替身：催化剂到期，按固定的规则不开仓"
 
 
 def stand_in_signal(snapshot: Snapshot, cited: tuple[str, ...], config: StandInConfig) -> Signal:
@@ -127,8 +132,7 @@ def conclusion(
         case CaseType.WATCH_EVENT | CaseType.WATCH_FOLLOW_UP:
             return _watch(snapshot, results, config)
         case CaseType.WATCH_REVIEW | CaseType.WATCH_CATALYST_REVIEW:
-            watch_renewal = _renewed(_current(context.watch_thesis), today, calendar, config)
-            return _watch(snapshot, results, config, watch_thesis=watch_renewal)
+            return _watch_review(context, snapshot, results, calendar, config)
         case CaseType.CANDIDATE_EVENT:
             return _candidate(snapshot, results, config, Decision.KEEP)
         case CaseType.CANDIDATE_EVALUATION:
@@ -224,6 +228,7 @@ def _promotion(snapshot: Snapshot, calendar: TradingCalendar, config: StandInCon
         catalyst=new_catalyst(today, calendar, config),
         invalidation="替身：入场条件长期不满足",
         review_day=_review_day(today, calendar, config),
+        commitment=_COMMITMENT,
     )
 
 
@@ -254,16 +259,41 @@ def _watch(
     results: tuple[str, ...],
     config: StandInConfig,
     *,
+    decision: Literal[Decision.KEEP_WATCHING, Decision.DEMOTE] = Decision.KEEP_WATCHING,
     watch_thesis: WatchThesis | None = None,
+    what_changed: str | None = None,
 ) -> WatchConclusion:
-    """继续关注；复查类案件附续期的关注论点。"""
+    """关注的结论：继续关注或降为候选。"""
     return WatchConclusion(
         answer=_ANSWER,
         rationale=_RATIONALE,
         cited_results=results,
         signal=_case_signal(snapshot, config),
-        decision=Decision.KEEP_WATCHING,
+        decision=decision,
         watch_thesis=watch_thesis,
+        what_changed=what_changed,
+    )
+
+
+def _watch_review(
+    context: CaseContext,
+    snapshot: Snapshot,
+    results: tuple[str, ...],
+    calendar: TradingCalendar,
+    config: StandInConfig,
+) -> WatchConclusion:
+    """继续关注并续期，换上固定的承诺；允许的决定没有继续关注时降为候选。催化剂复查写什么变了。"""
+    changed = _WHAT_CHANGED if snapshot.case_type is CaseType.WATCH_CATALYST_REVIEW else None
+    if Decision.KEEP_WATCHING not in context.decisions:
+        return _watch(snapshot, results, config, decision=Decision.DEMOTE, what_changed=changed)
+    today = snapshot.market.trading_day
+    renewal = _renewed(_current(context.watch_thesis), today, calendar, config)
+    return _watch(
+        snapshot,
+        results,
+        config,
+        watch_thesis=renewal.model_copy(update={"commitment": _COMMITMENT}),
+        what_changed=changed,
     )
 
 

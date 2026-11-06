@@ -245,7 +245,7 @@ def run_case(
     elif case.state.stage is CaseStage.RETROSPECTIVE:
         _retrospective(case)
     else:
-        case.context = _context(definition, trigger)
+        case.context = _context(case_id, definition, trigger)
         _research(case)
         _review(case)
         _deliver(case)
@@ -466,8 +466,8 @@ def _snapshot(
 
 
 @DBOS.step(name="case.context")
-def _context(definition: CaseDefinition, trigger: Trigger) -> CaseContext:
-    return _parts().flow.context(definition, trigger)
+def _context(case_id: UUID, definition: CaseDefinition, trigger: Trigger) -> CaseContext:
+    return _parts().flow.context(case_id, definition, trigger)
 
 
 @DBOS.step(name="case.call_pm")
