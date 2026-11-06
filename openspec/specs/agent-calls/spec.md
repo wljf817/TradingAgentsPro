@@ -11,8 +11,8 @@ Agent 网关 SHALL 按下表把输入交给 agent，收下它的输出：
 
 | agent | 输入 | 输出 |
 | --- | --- | --- |
-| PM（研究） | 案件上下文、本案件现在的快照、PM 在本案件的对话 | 派发任务：一个或多个任务请求（task-dispatch spec「任务请求的格式」）；或者提交结论：case-types spec 的四种结论之一 |
-| PM（回应） | 同上，对话的最后一轮交回的是 Critic 的质询 | 对这轮质询的回应（case-stages spec「Critic 审核和 PM 回应的格式」） |
+| PM（研究） | 案件上下文、本案件现在的快照、PM 在本案件的对话 | 派发任务：一个或多个任务请求（task-dispatch spec「任务请求的格式」）；或者提交结论：case-types spec 的四种结论之一；或者输出不合法（pm-calls spec「PM 的输出不合法」） |
+| PM（回应） | 同上，对话的最后一轮交回的是 Critic 的质询 | 对这轮质询的回应（case-stages spec「Critic 审核和 PM 回应的格式」）；或者输出不合法 |
 | Critic | 案件上下文、快照、要审核的结论（带交易方案的持仓或关注的结论）、PM 在本案件派过的任务和 Result、Critic 在本案件的对话 | 补充研究：一个或多个任务请求；或者一次审核：通过、质询或否决（case-stages spec「Critic 审核和 PM 回应的格式」） |
 | News、Quant、Fundamentals | Task 和快照 | 输出文本：按 task-dispatch spec「子 agent 的输出变成 Result」校验 |
 | Reviewer | 快照 | 复盘报告：一段总结 |
@@ -91,6 +91,7 @@ PM 和 Critic 在一个案件里的对话 SHALL 按先后排列，每一轮是 a
 | PM | 派发任务 | 每个请求的 Task 和 Result，按请求的顺序：派发的是子 agent 运行以后的 Result，被拒绝的是被拒绝的 Result，复用的是被复用的任务和它的 Result |
 | PM | 提交结论 | 结论校验不通过、退回重交的原因（case-stages spec「唤醒 PM 和结论」）；或者 Critic 的质询：这次审核，以及这次审核里补充研究的 Task 和 Result |
 | PM | 回应 | Critic 下一次审核的质询，以及那次审核里补充研究的 Task 和 Result |
+| PM | 输出不合法 | 退回重交的原因（case-stages spec「唤醒 PM 和结论」「PM 回应」） |
 | Critic | 派发任务（补充研究） | 每个请求的 Task 和 Result，按请求的顺序 |
 | Critic | 质询 | PM 对这轮质询的回应 |
 
@@ -129,12 +130,23 @@ PM 和 Critic 在一个案件里的对话 SHALL 按先后排列，每一轮是 a
 - **WHEN** 构造这些轮次：PM 派发任务，交回结论退回的原因；PM 派发两个请求，交回一个 Task 和 Result；PM 回应，交回 Task 和 Result；Critic 通过，交回 PM 的回应；Critic 质询，交回 Task 和 Result
 - **THEN** 都报错
 
+#### Scenario: 输出不合法退回重交
+
+- **GIVEN** 对话有派发任务的一轮；PM 的下一次输出不合法，原文 `not json`，原因"不是工具调用"
+- **WHEN** 再调用 K-1 的 PM
+- **THEN** 对话依次有两轮：派发任务和交回的结果；输出不合法和退回的原因
+
+#### Scenario: 输出不合法只交回原因
+
+- **WHEN** 构造这一轮：PM 输出不合法，交回 Task 和 Result；或者交回 Critic 的质询
+- **THEN** 都报错
+
 ### Requirement: 一次调用
 
 Agent 网关调用一个 agent 时 SHALL 按 model-fallback spec 的步骤向模型尝试：
 
 - 从本案件这个 agent 的起点开始（model-fallback spec「案件内不切回」），每一步向那一步的模型尝试一次，最多等那一步给出的超时（model-fallback spec「尝试的超时」）；一次尝试可以发多个请求（model-adapter spec「一次尝试」），场景里的"发了一次请求"指没有工具循环的尝试
-- 拿到输出：这次调用成功，给出输出、实际使用的模型（model-fallback spec「实际使用的模型」）和这次调用的费用
+- 拿到输出：这次调用成功，给出输出、实际使用的模型（model-fallback spec「实际使用的模型」）、回答里写的模型名（model-adapter spec「输出」）和这次调用的费用；PM 的输出不合法也是拿到输出
 - 没有拿到输出：按调用错误报告这次尝试失败，按下一步继续（重试、换下一个模型）；全部不可用时 SHALL 给出调用失败和 model-fallback 给出的说明，由调用方交给案件状态（case-stages spec「Critic 不可用」「系统故障」）
 - 每次尝试拿到了用量（成功的，和失败但厂商给出了用量的）SHALL 按各请求之和，按 call-budget spec「费用的记录」记一条，案件类型是快照里的；拿不到用量的不记。这次调用的费用是这些记录的费用之和
 - PM、Critic、Reviewer 的调用没有截止时间；子 agent 的见「子 agent 的任务」
@@ -177,6 +189,12 @@ Agent 网关调用一个 agent 时 SHALL 按 model-fallback spec 的步骤向模
 
 - **WHEN** K-1 和 K-3 的 PM 同时调用，两次调用里 p-1 都失败两次（限流），再 p-2 都给出输出
 - **THEN** 两次调用都成功，实际使用的模型都是 p-2；p-1 连续不可用 2 次，没有冷却
+
+#### Scenario: PM 的输出不合法
+
+- **WHEN** 调用 K-1 的 PM，p-1 给出不合法的输出，用量 20,000/2,000
+- **THEN** 向 p-1 发了一次请求，调用成功，输出是输出不合法，实际使用的模型是 p-1
+- **AND** 记下一条费用 0.06；p-1 正常，没有换模型
 
 ### Requirement: 子 agent 的任务
 
