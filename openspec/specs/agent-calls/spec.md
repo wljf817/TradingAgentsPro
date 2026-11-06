@@ -38,6 +38,7 @@ Agent 网关 SHALL 按下表把输入交给 agent，收下它的输出：
 本 spec 的场景除非另有说明，都使用默认配置和下面的基准数据：
 
 - 当前时刻 2026-10-14 15:00Z（周三，盘中）
+- 任务时限和单次调用超时用 model-fallback spec 的基准数据：任务时限 5 分钟，子 agent 60 秒，PM、Critic、Reviewer 180 秒
 - 模型的配置是 model-fallback spec 的基准模型的配置，单价是 call-budget spec 的基准单价
 - 案件：K-1 是 BBB（关注）的关注股事件，事件 E-1 是 BBB 的入场条件满足事件，要求的子 agent 是 Quant；K-3 是 CCC（持仓）的持仓事件；K-5 是每周复盘。S1 是 K-1 的第 1 版快照
 - K-1 的案件上下文：问题"入场机会是否出现？"，事件是 E-1，事件要求的子 agent 是 Quant，关注论点是 stock-pool spec 的基准关注论点，没有投资论点
@@ -130,10 +131,10 @@ PM 和 Critic 在一个案件里的对话 SHALL 按先后排列，每一轮是 a
 
 Agent 网关调用一个 agent 时 SHALL 按 model-fallback spec 的步骤向模型尝试：
 
-- 从本案件这个 agent 的起点开始（model-fallback spec「案件内不切回」），每一步向那一步的模型发一次请求，最多等那一步给出的超时（model-fallback spec「尝试的超时」）
+- 从本案件这个 agent 的起点开始（model-fallback spec「案件内不切回」），每一步向那一步的模型尝试一次，最多等那一步给出的超时（model-fallback spec「尝试的超时」）；一次尝试可以发多个请求（model-adapter spec「一次尝试」），场景里的"发了一次请求"指没有工具循环的尝试
 - 拿到输出：这次调用成功，给出输出、实际使用的模型（model-fallback spec「实际使用的模型」）和这次调用的费用
 - 没有拿到输出：按调用错误报告这次尝试失败，按下一步继续（重试、换下一个模型）；全部不可用时 SHALL 给出调用失败和 model-fallback 给出的说明，由调用方交给案件状态（case-stages spec「Critic 不可用」「系统故障」）
-- 每次尝试拿到了用量（成功的，和失败但厂商给出了用量的）SHALL 按 call-budget spec「费用的记录」记一条，案件类型是快照里的；拿不到用量的不记。这次调用的费用是这些记录的费用之和
+- 每次尝试拿到了用量（成功的，和失败但厂商给出了用量的）SHALL 按各请求之和，按 call-budget spec「费用的记录」记一条，案件类型是快照里的；拿不到用量的不记。这次调用的费用是这些记录的费用之和
 - PM、Critic、Reviewer 的调用没有截止时间；子 agent 的见「子 agent 的任务」
 
 #### Scenario: 主模型给出输出
