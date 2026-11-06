@@ -3,7 +3,7 @@ model-adapter spec。装配时用 VendorRouter 作为网关的 ModelBackend；Ll
 """
 
 from tradingagentspro.integrations.llm.backend import LlmBackend
-from tradingagentspro.integrations.llm.client import LlmClient
+from tradingagentspro.integrations.llm.client import LlmClient, ReadTool, ReplyTool
 from tradingagentspro.integrations.llm.config import Endpoint, Interface, LlmConfig
 from tradingagentspro.integrations.llm.errors import InvalidOutput
 from tradingagentspro.integrations.llm.router import VendorRouter
@@ -15,5 +15,7 @@ __all__ = [
     "LlmBackend",
     "LlmClient",
     "LlmConfig",
+    "ReadTool",
+    "ReplyTool",
     "VendorRouter",
 ]

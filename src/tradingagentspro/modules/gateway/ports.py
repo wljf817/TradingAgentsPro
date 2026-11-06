@@ -40,7 +40,8 @@ class ModelReply[T]:
 
 
 class ModelBackend(Protocol):
-    """调用模型：每个方法向 model 发一次请求，就是 model-fallback spec 的一次尝试。
+    """调用模型：每个方法向 model 尝试一次，就是 model-fallback spec 的一次尝试，可以发多个请求，
+    usage 是各请求之和。
 
     超过 timeout 仍没有输出、或者没有拿到输出时抛 ModelCallError，不重试、不换模型；重试、切换
     备用模型和记费用由 AgentCallService 做。PM、Critic、Reviewer 的输出是按 contracts 校验过的

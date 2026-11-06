@@ -41,7 +41,7 @@ class GatewayConfig(BaseModel):
     # 每个案件 Critic 派发出去的任务最多这么多个，不占 PM 的任务数和轮次
     max_critic_tasks: PositiveInt = 2
     # 截止时间是派发时刻加这么久
-    task_timeout: timedelta = Field(default=timedelta(minutes=5), gt=timedelta(0))
+    task_timeout: timedelta = Field(default=timedelta(minutes=10), gt=timedelta(0))
     # Quant 的任务按周期最多往前这么多个交易日
     max_weekly_bar_days: PositiveInt = 1260
     max_daily_bar_days: PositiveInt = 504
@@ -50,13 +50,14 @@ class GatewayConfig(BaseModel):
 
     # 一个模型在一次调用里失败以后最多再试这么多次
     call_retries: NonNegativeInt = 1
-    # News、Quant、Fundamentals 每次尝试最多等这么久，并且不超过离任务截止时间还剩的时间
-    subagent_call_timeout: timedelta = Field(default=timedelta(seconds=60), gt=timedelta(0))
+    # News、Quant、Fundamentals 每次尝试最多等这么久，并且不超过离任务截止时间还剩的时间；一次尝试
+    # 可以发多个请求，全部算在里面
+    subagent_call_timeout: timedelta = Field(default=timedelta(seconds=150), gt=timedelta(0))
     # PM、Critic、Reviewer 每次尝试最多等这么久
-    call_timeout: timedelta = Field(default=timedelta(seconds=180), gt=timedelta(0))
+    call_timeout: timedelta = Field(default=timedelta(seconds=300), gt=timedelta(0))
     # 最近连续这么多次不可用，最早一次到最后一次不超过时间窗口，就冷却
     breaker_failures: PositiveInt = 3
-    breaker_window: timedelta = Field(default=timedelta(minutes=5), gt=timedelta(0))
+    breaker_window: timedelta = Field(default=timedelta(minutes=10), gt=timedelta(0))
     breaker_cooldown: timedelta = Field(default=timedelta(minutes=5), gt=timedelta(0))
     # PM 用备用模型时不能提的决定；为空时不限制
     fallback_blocked_decisions: frozenset[Decision] = frozenset(
