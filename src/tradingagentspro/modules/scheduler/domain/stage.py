@@ -98,7 +98,7 @@ class CaseState:
     # 唤醒 PM
 
     def reject_conclusion(self, config: SchedulerConfig) -> Self:
-        """结论校验不通过：重交次数没用完就退回 PM，用完以后结论无效。"""
+        """结论校验不通过或者输出不合法：重交次数没用完就退回 PM，用完以后结论无效。"""
         if self._ignores(CaseStage.CONCLUDING):
             return self
         if self.resubmissions >= config.max_resubmissions:
@@ -149,6 +149,14 @@ class CaseState:
         return replace(self, stage=CaseStage.CRITIC_REVIEW)
 
     # 风控、人工确认和等下单
+
+    def reject_response(self, config: SchedulerConfig) -> Self:
+        """PM 回应的输出不合法：重交次数没用完就退回 PM，用完以后系统故障。"""
+        if self._ignores(CaseStage.PM_RESPONSE):
+            return self
+        if self.resubmissions >= config.max_resubmissions:
+            return self.fail()
+        return replace(self, resubmissions=self.resubmissions + 1)
 
     def risk_checked(self, outcome: RiskOutcome, *, confirming: bool) -> Self:
         """风控的结果：拒绝时结束；通过和调整时，要人工确认的进入等人工确认，不要确认的（模型退出

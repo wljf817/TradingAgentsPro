@@ -35,7 +35,9 @@ from tradingagentspro.contracts.agent_call import (
     CriticReply,
     CriticTurn,
     DispatchTasks,
+    InvalidReply,
     PmReply,
+    PmResponseReply,
     PmTurn,
     Returned,
     SubmitConclusion,
@@ -265,6 +267,11 @@ def _research(case: _Case) -> None:
             case.advance(case.state.fail())
             return
         reply = called.output
+        if isinstance(reply, InvalidReply):
+            case.advance(case.state.reject_conclusion(config))
+            case.pm_turns.append(PmTurn(reply=reply, feedback=Returned(reason=reply.reason)))
+            why = resubmit_why(case.state.resubmissions, reply.reason)
+            continue
         if isinstance(reply, DispatchTasks):
             if _aborted(case):
                 return
@@ -347,23 +354,33 @@ def _review(case: _Case) -> None:
 
 
 def _respond(case: _Case, challenged: SubmitReview) -> None:
-    """PM 回应一轮质询：维持或修改回到 Critic 审核，撤回时结束。"""
-    called = _call_pm_respond(
-        case.id, case.version, case.ctx, tuple(case.pm_turns), respond_why(case.state.rounds)
-    )
-    if called is None:
-        case.advance(case.state.fail())
-        return
-    response = called.output
-    _record_response(case.id, response, called.model_use)
-    if response.plan is not None:
-        assert case.plan is not None
-        # 修改只改条款：方案 ID、股票、板块和动作不变，条款的字段和 PlanDraft 同名
-        case.plan = TradePlan.model_validate(case.plan.model_dump() | response.plan.model_dump())
-    case.advance(case.state.respond(response.decision))
-    if case.state.stage is CaseStage.CRITIC_REVIEW:
-        case.critic_turns.append(CriticTurn(reply=challenged, feedback=response))
-        case.last_pm_reply = response
+    """PM 回应一轮质询：维持或修改回到 Critic 审核，撤回时结束；输出不合法时退回重交。"""
+    config = _parts().flow.scheduler_config
+    why = respond_why(case.state.rounds)
+    while case.state.stage is CaseStage.PM_RESPONSE:
+        if _aborted(case):
+            return
+        called = _call_pm_respond(case.id, case.version, case.ctx, tuple(case.pm_turns), why)
+        if called is None:
+            case.advance(case.state.fail())
+            return
+        response = called.output
+        if isinstance(response, InvalidReply):
+            case.advance(case.state.reject_response(config))
+            case.pm_turns.append(PmTurn(reply=response, feedback=Returned(reason=response.reason)))
+            why = resubmit_why(case.state.resubmissions, response.reason)
+            continue
+        _record_response(case.id, response, called.model_use)
+        if response.plan is not None:
+            assert case.plan is not None
+            # 修改只改条款：方案 ID、股票、板块和动作不变，条款的字段和 PlanDraft 同名
+            terms = case.plan.model_dump() | response.plan.model_dump()
+            case.plan = TradePlan.model_validate(terms)
+        responded = case.state.respond(response.decision)
+        case.advance(responded)
+        if responded.stage is CaseStage.CRITIC_REVIEW:
+            case.critic_turns.append(CriticTurn(reply=challenged, feedback=response))
+            case.last_pm_reply = response
 
 
 def _deliver(case: _Case) -> None:
@@ -463,7 +480,7 @@ def _call_pm(
 @DBOS.step(name="case.call_pm_respond")
 def _call_pm_respond(
     case_id: UUID, version: int, context: CaseContext, turns: tuple[PmTurn, ...], why: str
-) -> Answered[PlanResponse] | None:
+) -> Answered[PmResponseReply] | None:
     return _parts().flow.call_pm_respond(case_id, version, context, turns, why)
 
 

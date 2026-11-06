@@ -30,12 +30,12 @@ from tradingagentspro.contracts.agent_call import (
     CriticRequest,
     PmReply,
     PmRequest,
+    PmResponseReply,
     RetrospectiveReport,
     ReviewerRequest,
     SubAgentRequest,
 )
 from tradingagentspro.contracts.model import ModelRef, ModelUse, TokenUsage
-from tradingagentspro.contracts.review import PlanResponse
 from tradingagentspro.contracts.signal import SubAgentOutput
 from tradingagentspro.contracts.snapshot import Snapshot
 from tradingagentspro.contracts.task import Dispatcher, Result, Task, TaskRequest
@@ -365,11 +365,12 @@ class CallBudgetService:
 
 @dataclass(frozen=True, slots=True)
 class Answered[T]:
-    """一次成功的调用：输出、实际使用的模型，以及这次调用各次尝试记下的费用之和。"""
+    """一次成功的调用：输出、实际使用的模型、这次调用各次尝试记下的费用之和和回答里写的模型名。"""
 
     output: T
     model_use: ModelUse
     cost: Decimal
+    served_model: str | None
 
 
 class AgentCallService:
@@ -401,7 +402,7 @@ class AgentCallService:
             lambda model, timeout: self._backend.pm(model, timeout, request),
         )
 
-    def pm_respond(self, request: PmRequest) -> Answered[PlanResponse] | AllUnavailable:
+    def pm_respond(self, request: PmRequest) -> Answered[PmResponseReply] | AllUnavailable:
         """调用 PM 回应对话最后一轮交回的质询。"""
         return self._without_deadline(
             request.snapshot,
@@ -481,7 +482,8 @@ class AgentCallService:
                 step = self._fallback.fail(step.call, failure.error)
                 continue
             cost += self._charge(scope, agent, model, reply.usage)
-            return Answered(reply.output, self._fallback.succeed(step.call), cost), cost
+            used = self._fallback.succeed(step.call)
+            return Answered(reply.output, used, cost, reply.served_model), cost
         return step, cost
 
     def _charge(

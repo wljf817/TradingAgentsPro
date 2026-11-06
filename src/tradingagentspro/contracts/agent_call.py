@@ -5,7 +5,8 @@ PM 和 Critic 在一个案件里的对话。
 spec 和 add-stand-ins 的 design D2、D3。
 
 对话的每一轮是 agent 的一次回复和交回给它的结果，就是一次工具调用和它的工具结果：PM 的回复是
-dispatch_tasks、submit_conclusion 和对质询的回应，Critic 的回复是补充研究和审核。
+dispatch_tasks、submit_conclusion 和对质询的回应，Critic 的回复是补充研究和审核。PM 的输出不合法时
+回复是 InvalidReply，交回的是退回的原因。
 """
 
 from typing import Self
@@ -101,7 +102,17 @@ class SubmitReview(BaseModel):
     review: CriticReview
 
 
-type PmReply = DispatchTasks | SubmitConclusion  # PM 研究时的回复
+class InvalidReply(BaseModel):
+    """PM 的输出不合法：模型的原文和原因，见 pm-calls spec「PM 的输出不合法」。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", str_strip_whitespace=True)
+
+    text: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+
+type PmReply = DispatchTasks | SubmitConclusion | InvalidReply  # PM 研究时的回复
+type PmResponseReply = PlanResponse | InvalidReply  # PM 回应时的回复
 type CriticReply = DispatchTasks | SubmitReview  # Critic 的回复
 
 
@@ -149,7 +160,7 @@ class PmTurn(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    reply: DispatchTasks | SubmitConclusion | PlanResponse
+    reply: DispatchTasks | SubmitConclusion | PlanResponse | InvalidReply
     feedback: TaskResults | Returned | Challenge
 
     @model_validator(mode="after")
@@ -163,6 +174,9 @@ class PmTurn(BaseModel):
             case PlanResponse():
                 if not isinstance(self.feedback, Challenge):
                     raise ValueError("回应交回的是 Critic 下一次审核的质询")
+            case InvalidReply():
+                if not isinstance(self.feedback, Returned):
+                    raise ValueError("输出不合法交回的是退回的原因")
         return self
 
 

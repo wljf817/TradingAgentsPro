@@ -13,6 +13,7 @@ from uuid import UUID
 from tradingagentspro.contracts.agent import Agent
 from tradingagentspro.contracts.agent_call import (
     DispatchTasks,
+    InvalidReply,
     RetrospectiveReport,
     SubmitConclusion,
     SubmitReview,
@@ -217,7 +218,14 @@ def stage_text(before: CaseState, after: CaseState, plan: TradePlan | None) -> s
 
 
 # agent 交回的输出：PM 的派发、结论和回应，Critic 的派发和审核，Reviewer 的复盘报告
-type Reply = DispatchTasks | SubmitConclusion | PlanResponse | SubmitReview | RetrospectiveReport
+type Reply = (
+    DispatchTasks
+    | SubmitConclusion
+    | PlanResponse
+    | InvalidReply
+    | SubmitReview
+    | RetrospectiveReport
+)
 
 
 def _returned(output: Reply) -> str:
@@ -233,6 +241,8 @@ def _returned(output: Reply) -> str:
             return f"提交结论：{DECISIONS[conclusion.decision]}"
         case PlanResponse(decision=decision):
             return f"回应：{RESPONSES[decision]}"
+        case InvalidReply(reason=reason):
+            return f"输出不合法：{reason}"
         case SubmitReview(review=review):
             return f"审核：{VERDICTS[review.verdict]}"
         case RetrospectiveReport(summary=summary):
@@ -240,12 +250,22 @@ def _returned(output: Reply) -> str:
 
 
 def wake_text(
-    agent: Agent, why: str, output: Reply, model: ModelUse, charter: int, snapshot: int
+    agent: Agent,
+    why: str,
+    output: Reply,
+    used: tuple[ModelUse, str | None],
+    charter: int,
+    snapshot: int,
 ) -> str:
-    """唤醒 agent 并且调用成功：哪个 agent、为什么唤醒、交回了什么、实际使用的模型、两个版本。"""
+    """唤醒 agent 并且调用成功：哪个 agent、为什么唤醒、交回了什么、实际使用的模型、两个版本。
+
+    used 是实际使用的模型和回答里写的模型名。
+    """
+    model, served = used
     fallback = "是备用模型" if model.fallback else "不是备用模型"
-    used = f"模型 {model.model.vendor}/{model.model.name}，{fallback}"
-    return f"{AGENTS[agent]}：{why}；{_returned(output)}；{used}；{_versions(charter, snapshot)}"
+    named = "" if served is None else f"，回答里的模型名 {served}"
+    text = f"模型 {model.model.vendor}/{model.model.name}，{fallback}{named}"
+    return f"{AGENTS[agent]}：{why}；{_returned(output)}；{text}；{_versions(charter, snapshot)}"
 
 
 def wake_failed_text(agent: Agent, why: str, detail: str, charter: int, snapshot: int) -> str:

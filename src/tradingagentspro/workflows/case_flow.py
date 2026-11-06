@@ -24,6 +24,7 @@ from tradingagentspro.contracts.agent_call import (
     FollowUpOrigin,
     PmReply,
     PmRequest,
+    PmResponseReply,
     PmTurn,
     RecentCase,
     Returned,
@@ -246,7 +247,7 @@ class CaseFlow:
         context: CaseContext,
         turns: Sequence[PmTurn],
         why: str,
-    ) -> Answered[PlanResponse] | None:
+    ) -> Answered[PmResponseReply] | None:
         """调用 PM 回应对话最后一轮交回的质询。"""
         snapshot = self._snapshot(case_id, version)
         request = PmRequest(context=context, snapshot=snapshot, turns=tuple(turns))
@@ -306,7 +307,8 @@ class CaseFlow:
             )
             self._s.notification.alert(str(case_id), alert)
             return None
-        text = wake_text(agent, why, outcome.output, outcome.model_use, *versions)
+        used = (outcome.model_use, outcome.served_model)
+        text = wake_text(agent, why, outcome.output, used, *versions)
         self._write(Action.WAKE_AGENT, case_id, text, duration=duration, cost=outcome.cost)
         return outcome
 

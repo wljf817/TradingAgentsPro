@@ -14,6 +14,7 @@ from tradingagentspro.contracts.agent_call import (
     DispatchTasks,
     PmReply,
     PmRequest,
+    PmResponseReply,
     RetrospectiveReport,
     ReviewerRequest,
     SubAgentRequest,
@@ -68,7 +69,7 @@ class StandInBackend:
 
     def pm_respond(
         self, model: ModelRef, timeout: timedelta, request: PmRequest
-    ) -> ModelReply[PlanResponse]:
+    ) -> ModelReply[PmResponseReply]:
         """维持方案：逐条回应对话最后一轮的质询，不写方案条款。"""
         challenge = request.turns[-1].feedback
         if not isinstance(challenge, Challenge):

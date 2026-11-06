@@ -11,6 +11,7 @@ import threading
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
+from functools import partial
 from typing import Any, Final
 
 import pydantic_ai
@@ -38,6 +39,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.profiles import ModelProfile, merge_profile
+from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
@@ -56,6 +58,7 @@ _TOOL_LIMIT_NOTICE: Final = (
 )
 _REQUESTS_AFTER_TOOLS: Final = 2  # 用满工具次数以后最多再发的请求：看到提示一次，收尾一次
 _NO_RETRIES: Final[AgentRetries] = {"output": 0, "tools": 0}  # 重试由网关负责
+_NO_REPLY_TOOL: Final = "没有调用交回工具"  # 有交回工具时只回文字或者回答为空的原因
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,13 +139,16 @@ class LlmClient:
         model: ModelRef,
         timeout: timedelta,
         instructions: str,
-        question: str,
+        question: str | None,
         replies: Sequence[ReplyTool[T]],
         tools: Sequence[ReadTool] = (),
         tool_limit: int = 0,
         history: Sequence[ModelMessage] = (),
     ) -> ModelReply[T]:
-        """运行一次，模型调用交回工具交出结果。只回文字时抛 InvalidOutput，其他同 ask。"""
+        """运行一次，模型调用交回工具交出结果。只回文字时抛 InvalidOutput，其他同 ask。
+
+        question 为 None 时请求只有之前的对话，模型接着回答。
+        """
         outputs = [
             ToolOutput(reply.output_type, name=reply.name, description=reply.description)
             for reply in replies
@@ -184,7 +190,7 @@ class LlmClient:
         model: ModelRef,
         timeout: timedelta,
         instructions: str,
-        question: str,
+        question: str | None,
         output_type: Any,
         tools: Sequence[ReadTool],
         tool_limit: int,
@@ -212,7 +218,11 @@ class LlmClient:
                 provider=AnthropicProvider(anthropic_client=client),
                 profile=_json_schema_profile,
             )
-        return OpenAIChatModel(model.name, provider=OpenAIProvider(openai_client=client))
+        return OpenAIChatModel(
+            model.name,
+            provider=OpenAIProvider(openai_client=client),
+            profile=_reasoning_field_profile,
+        )
 
     async def _shutdown(self) -> None:
         running = [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
@@ -236,6 +246,20 @@ def _json_schema_profile(profile: ModelProfile) -> ModelProfile:
     return merge_profile(profile, ModelProfile(supports_json_schema_output=True))
 
 
+def _reasoning_field_profile(profile: ModelProfile) -> ModelProfile:
+    """OpenAI 接口的工具调用带空的思考字段：DeepSeek 开思考时要求，见 add-pm-calls design D10。"""
+    return merge_profile(
+        profile,
+        OpenAIModelProfile(
+            supports_thinking=True,
+            thinking_enabled_by_default=True,
+            openai_chat_thinking_field="reasoning_content",
+            openai_chat_send_back_thinking_parts="field",
+            openai_chat_thinking_requires_field_on_tool_calls=True,
+        ),
+    )
+
+
 def _output(interface: Interface, output_type: type[Any]) -> Any:
     """文本原样要；结构化输出按接口选做法，见 add-model-adapter 的 design D5。"""
     if output_type is str:
@@ -249,12 +273,13 @@ async def _attempt(
     agent: Agent[None, Any],
     settings: ModelSettings,
     timeout: timedelta,
-    question: str,
+    question: str | None,
     history: Sequence[ModelMessage],
     limits: UsageLimits | None,
 ) -> ModelReply[Any]:
     """一次尝试：给出输出和各请求的用量之和，失败时抛 ModelCallError 或 InvalidOutput。"""
-    with capture_run_messages() as messages:
+    with capture_run_messages() as captured:
+        new = partial(_new_messages, captured, len(history))
         try:
             async with asyncio.timeout(timeout.total_seconds()):
                 result = await agent.run(
@@ -264,12 +289,12 @@ async def _attempt(
                     usage_limits=limits,
                 )
         except ContentFilterError as error:  # 模型拒绝回答，排在它的父类前面
-            raise ModelCallError(CallError.OTHER, _spent(messages)) from error
+            raise ModelCallError(CallError.OTHER, _spent(new())) from error
         except (UnexpectedModelBehavior, UsageLimitExceeded) as error:
-            raise _invalid_output(messages) from error
+            raise _invalid_output(new(), error) from error
         except (TimeoutError, ModelAPIError) as error:
-            raise ModelCallError(call_error(error), _spent(messages)) from error
-        return ModelReply(result.output, _usage(result.usage))
+            raise ModelCallError(call_error(error), _spent(new())) from error
+        return ModelReply(result.output, _usage(result.usage), result.response.model_name)
 
 
 async def _require_tool_output[T](
@@ -278,8 +303,13 @@ async def _require_tool_output[T](
     """有交回工具时只回文字算输出不合法，见 update-model-tool-loop 的 design D3。"""
     reply = await attempt
     if isinstance(reply.output, str):
-        raise InvalidOutput(reply.output, reply.usage)
-    return ModelReply(reply.output, reply.usage)
+        raise InvalidOutput(reply.output, _NO_REPLY_TOOL, reply.usage)
+    return ModelReply(reply.output, reply.usage, reply.served_model)
+
+
+def _new_messages(captured: Sequence[ModelMessage], history_length: int) -> Sequence[ModelMessage]:
+    """这次运行的消息：捕获的消息里排在前面的是之前的对话。"""
+    return captured[history_length:]
 
 
 def _usage(usage: Any) -> TokenUsage:
@@ -301,11 +331,13 @@ def _spent(messages: Sequence[ModelMessage]) -> TokenUsage | None:
     )
 
 
-def _invalid_output(messages: Sequence[ModelMessage]) -> InvalidOutput:
-    """模型最后一个回答的原文和各请求的用量之和：工具调用的原文是它的参数。"""
+def _invalid_output(messages: Sequence[ModelMessage], error: Exception) -> InvalidOutput:
+    """模型最后一个回答的原文、原因和各请求的用量之和：工具调用的原文是它的参数，原因是校验的错误。"""
     parts = _responses(messages)[-1].parts
     text = "".join(part.content for part in parts if isinstance(part, TextPart))
     arguments = (part.args_as_json_str() for part in parts if isinstance(part, ToolCallPart))
+    original = text or "".join(arguments)
+    reason = str(error.__cause__ or error) if original else _NO_REPLY_TOOL
     spent = _spent(messages)
     assert spent is not None
-    return InvalidOutput(text or "".join(arguments), spent)
+    return InvalidOutput(original, reason, spent)

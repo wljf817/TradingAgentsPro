@@ -33,7 +33,12 @@ from dbos import DBOS
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Engine
 
-from tradingagentspro.bootstrap.charter import CHARTER_FILE, load_charter
+from tradingagentspro.bootstrap.charter import (
+    CHARTER_FILE,
+    PM_PROMPT_FILE,
+    load_charter,
+    load_role_prompt,
+)
 from tradingagentspro.bootstrap.database import migrate
 from tradingagentspro.bootstrap.models import (
     MODELS_FILE,
@@ -52,6 +57,7 @@ from tradingagentspro.bootstrap.startup import (
     record_shutdown,
     record_startup,
 )
+from tradingagentspro.contracts.charter import Charter
 from tradingagentspro.integrations.alpaca import (
     AlpacaBarSource,
     AlpacaBroker,
@@ -356,9 +362,11 @@ class _CaseSide:
     events: EventService
 
 
-def _model_backend(file: ModelFile, stand_in: StandInBackend, llm: LlmClient) -> VendorRouter:
+def _model_backend(
+    file: ModelFile, stand_in: StandInBackend, llm: LlmClient, charter: Charter
+) -> VendorRouter:
     """按 model-adapter spec「按厂商分派」：替身的厂商交给替身，其他交给真实模型的后端。"""
-    real = LlmBackend(llm)
+    real = LlmBackend(llm, f"{charter.text}\n\n{load_role_prompt(PM_PROMPT_FILE)}")
     return VendorRouter(
         {
             vendor: real if isinstance(file.vendors[vendor], RealVendor) else stand_in
@@ -390,7 +398,8 @@ def _case_side(
     fallback = ModelFallbackService(clock, models, gateway)
     budget = CallBudgetService(PostgresCostStore(engine), clock, calendar, models, gateway)
     tasks = TaskDispatchService(PostgresTaskStore(engine), clock, ids, gateway, program_log)
-    backend = _model_backend(configured, StandInBackend(calendar, settings.standin), llm)
+    charter = load_charter(CHARTER_FILE, settings.risk)
+    backend = _model_backend(configured, StandInBackend(calendar, settings.standin), llm, charter)
     agents = AgentCallService(backend, fallback, budget, tasks)
     news = NewsService(
         externals.news(settings.alpaca_news),
@@ -451,7 +460,6 @@ def _case_side(
         ids=ids,
     )
     checks = CheckConfigs(gateway, settings.scheduler, settings.heartbeat)
-    charter = load_charter(CHARTER_FILE, settings.risk)
     flow = CaseFlow(services, checks, settings.case_flow, charter.version)
     return _CaseSide(flow, fallback, budget, news, company_data, events)
 

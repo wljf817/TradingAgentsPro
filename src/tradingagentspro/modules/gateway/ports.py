@@ -10,12 +10,12 @@ from tradingagentspro.contracts.agent_call import (
     CriticRequest,
     PmReply,
     PmRequest,
+    PmResponseReply,
     RetrospectiveReport,
     ReviewerRequest,
     SubAgentRequest,
 )
 from tradingagentspro.contracts.model import ModelRef, TokenUsage
-from tradingagentspro.contracts.review import PlanResponse
 from tradingagentspro.contracts.task import Result, Task
 from tradingagentspro.modules.gateway.domain.budget import CallCost
 from tradingagentspro.modules.gateway.domain.dispatch import TaskRecord
@@ -33,10 +33,11 @@ class ModelCallError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class ModelReply[T]:
-    """一次拿到输出的尝试：输出和这次的用量。"""
+    """一次拿到输出的尝试：输出、这次的用量和回答里写的模型名（替身和回答里没有时为 None）。"""
 
     output: T
     usage: TokenUsage
+    served_model: str | None = None
 
 
 class ModelBackend(Protocol):
@@ -45,8 +46,8 @@ class ModelBackend(Protocol):
 
     超过 timeout 仍没有输出、或者没有拿到输出时抛 ModelCallError，不重试、不换模型；重试、切换
     备用模型和记费用由 AgentCallService 做。PM、Critic、Reviewer 的输出是按 contracts 校验过的
-    模型；子 agent 的输出是原样的文本，由网关按 task-dispatch spec 校验。见 agent-calls spec 和
-    add-stand-ins 的 design D1、D4。
+    模型，PM 不合法的输出是 InvalidReply；子 agent 的输出是原样的文本，由网关按 task-dispatch
+    spec 校验。见 agent-calls spec 和 add-stand-ins 的 design D1、D4。
     """
 
     def pm(self, model: ModelRef, timeout: timedelta, request: PmRequest) -> ModelReply[PmReply]:
@@ -55,7 +56,7 @@ class ModelBackend(Protocol):
 
     def pm_respond(
         self, model: ModelRef, timeout: timedelta, request: PmRequest
-    ) -> ModelReply[PlanResponse]:
+    ) -> ModelReply[PmResponseReply]:
         """PM 回应对话最后一轮交回的质询。"""
         ...
 

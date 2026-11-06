@@ -10,12 +10,12 @@ from tradingagentspro.contracts.agent_call import (
     CriticRequest,
     PmReply,
     PmRequest,
+    PmResponseReply,
     RetrospectiveReport,
     ReviewerRequest,
     SubAgentRequest,
 )
 from tradingagentspro.contracts.model import ModelRef
-from tradingagentspro.contracts.review import PlanResponse
 from tradingagentspro.modules.gateway import ModelBackend, ModelReply
 
 
@@ -30,7 +30,7 @@ class VendorRouter:
 
     def pm_respond(
         self, model: ModelRef, timeout: timedelta, request: PmRequest
-    ) -> ModelReply[PlanResponse]:
+    ) -> ModelReply[PmResponseReply]:
         return self._backends[model.vendor].pm_respond(model, timeout, request)
 
     def critic(
