@@ -1,6 +1,6 @@
-"""风控的用例：检查方案并预留额度，下单前再校验，上报成交，释放预留。
+"""风控的用例：检查方案并预留额度，下单前再校验，上报成交，释放预留，算可用额度。
 
-见 risk-reservations spec 和 pre-order-recheck spec。
+见 risk-reservations spec、pre-order-recheck spec 和 case-headroom spec。
 """
 
 from datetime import datetime
@@ -8,10 +8,11 @@ from decimal import Decimal
 from uuid import UUID
 
 from tradingagentspro.contracts.account import AccountSnapshot
-from tradingagentspro.contracts.risk import RiskDecision
+from tradingagentspro.contracts.risk import Headroom, RiskDecision
 from tradingagentspro.contracts.trade_plan import TradePlan
 from tradingagentspro.modules.risk.config import RiskConfig
 from tradingagentspro.modules.risk.domain.engine import evaluate_plan
+from tradingagentspro.modules.risk.domain.headroom import headroom
 from tradingagentspro.modules.risk.domain.recheck import plan_ended, recheck_plan
 from tradingagentspro.modules.risk.domain.request import RiskRequest
 from tradingagentspro.modules.risk.domain.reservation import (
@@ -131,6 +132,17 @@ class RiskService:
         给紧急退出按股票作废还没下单的方案用，见 add-emergency-exit-flow 的 design D9。
         """
         return tuple(r.plan for r in self._store.active())
+
+    def headroom(self, symbol: str, sector: str, account: AccountSnapshot) -> Headroom:
+        """这只股票的可用额度，按全部有效的开仓预留计算。只读存储，不拿锁，见 add-case-headroom 的
+        design D3。
+        """
+        reservations = tuple(
+            opening_reservation(r, account, self._config)
+            for r in self._store.active()
+            if r.plan.action.is_opening
+        )
+        return headroom(symbol, sector, account, reservations, self._config)
 
     def _request(
         self,

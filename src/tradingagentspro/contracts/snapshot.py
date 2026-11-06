@@ -18,6 +18,7 @@ from tradingagentspro.contracts.case import CaseType
 from tradingagentspro.contracts.event import Event
 from tradingagentspro.contracts.listing import Listing
 from tradingagentspro.contracts.news import Filing, NewsArticle
+from tradingagentspro.contracts.risk import Headroom
 from tradingagentspro.contracts.signal import EntryId
 from tradingagentspro.contracts.stock_pool import StockStatus
 
@@ -271,6 +272,7 @@ class Snapshot(BaseModel):
     surprises: SurprisesEntry | None
     events: tuple[EventEntry, ...]  # 按检测时刻、事件 ID
     screen: ScreenEntry | None
+    headroom: Headroom | None = None  # 持仓和关注的案件才有，不是条目；旧快照没有这一项
 
     def entries(self) -> tuple[SnapshotEntry, ...]:
         """全部条目，按 spec「条目和条目 ID」的先后。"""

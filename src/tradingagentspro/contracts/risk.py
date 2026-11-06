@@ -1,4 +1,4 @@
-"""风控结果：通过、调整或拒绝，以及原因。"""
+"""风控结果：通过、调整或拒绝，以及原因；一只股票的可用额度。"""
 
 from decimal import Decimal
 from enum import StrEnum
@@ -38,3 +38,15 @@ class RiskDecision(BaseModel):
     emergency_threshold: Decimal | None
     expires_at: AwareDatetime | None
     violations: tuple[RiskViolation, ...]
+
+
+class Headroom(BaseModel):
+    """一只股票的可用额度，见 case-headroom spec「可用额度的内容」。金额都是美元，舍入到分。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    available_cash: Decimal  # 可用资金：现金还能买的最大成交额
+    open_slots: int | None  # 持仓名额：还能新建仓几只；这只股票有持仓时没有
+    position_room: Decimal  # 单只仓位上限：这只股票还能买的成交额
+    risk_limit: Decimal  # 单笔风险上限：买入以后这只股票合并计算的计划风险的上限
+    min_order_value: Decimal  # 最小下单额：往返佣金占比不超标的最小成交额

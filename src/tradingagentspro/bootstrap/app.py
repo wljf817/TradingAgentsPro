@@ -372,7 +372,9 @@ def _case_side(
     engine: Engine,
     calendar: TradingCalendar,
     program_log: ProgramLog,
-    trade: tuple[ExecutionService, MarketDataService, QuoteContext, NotificationService],
+    trade: tuple[
+        ExecutionService, RiskService, MarketDataService, QuoteContext, NotificationService
+    ],
     records: tuple[StockPoolService, FollowUpService, CaseRecordService],
     configured: ModelFile,
     llm: LlmClient,
@@ -381,7 +383,7 @@ def _case_side(
     新闻和公告、公司数据、寻股粗筛、快照和案件工作流的用例，见 add-queue-runner 的 design D12。
     """
     clock, ids = externals.clock, externals.ids
-    execution, market_data, quotes, notification = trade
+    execution, risk, market_data, quotes, notification = trade
     stock_pool, follow_ups, case_records = records
     models, gateway = configured.models, configured.gateway
     fallback = ModelFallbackService(clock, models, gateway)
@@ -417,6 +419,7 @@ def _case_side(
     )
     snapshot_flow = SnapshotFlow(
         execution,
+        risk,
         market_data,
         market_context,
         stock_pool,
@@ -510,7 +513,7 @@ def _assemble(
         engine,
         calendar,
         program_log,
-        (execution, market_data, quotes, notification),
+        (execution, risk, market_data, quotes, notification),
         (stock_pool, follow_ups, case_records),
         configured,
         llm,

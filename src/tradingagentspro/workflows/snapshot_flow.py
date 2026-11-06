@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from tradingagentspro.contracts.case import CaseType
 from tradingagentspro.contracts.event import Event
 from tradingagentspro.contracts.news import Filing, NewsArticle
+from tradingagentspro.contracts.risk import Headroom
 from tradingagentspro.contracts.snapshot import (
     AccountEntry,
     EarningsEntry,
@@ -54,17 +55,33 @@ from tradingagentspro.modules.marketdata import (
     VixUnavailableError,
 )
 from tradingagentspro.modules.news import NewsService
+from tradingagentspro.modules.risk import RiskService
 from tradingagentspro.modules.screener import ScreenerService, ScreenRun
 from tradingagentspro.modules.statestore import SnapshotService
 from tradingagentspro.modules.stockpool import PoolEntry, StockPoolService
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.trading_calendar import TradingCalendar
+from tradingagentspro.workflows.account_snapshot import account_snapshot
 
 # 没有案件股票的事实的案件类型；其余 11 种针对单只股票，由 PM 处理
 _NO_STOCK_FACTS: Final = frozenset(
     {CaseType.EXPLORATION, CaseType.WEEKLY_RETROSPECTIVE, CaseType.SELL_RETROSPECTIVE}
 )
 
+# 带可用额度的案件类型：只有持仓和关注能提交交易方案
+_HEADROOM_CASES: Final = frozenset(
+    {
+        CaseType.HOLDING_RISK_EVENT,
+        CaseType.HOLDING_EVENT,
+        CaseType.HOLDING_REVIEW,
+        CaseType.HOLDING_CATALYST_REVIEW,
+        CaseType.HOLDING_FOLLOW_UP,
+        CaseType.WATCH_EVENT,
+        CaseType.WATCH_REVIEW,
+        CaseType.WATCH_CATALYST_REVIEW,
+        CaseType.WATCH_FOLLOW_UP,
+    }
+)
 
 _log = logging.getLogger(__name__)
 
@@ -106,12 +123,13 @@ class _StockFacts:
 class SnapshotFlow:
     """生成快照：读各模块的事实，组成一版快照存下，见 state-snapshot spec。
 
-    只读执行模块、行情、市场背景、股票池、新闻和公告、公司数据、事件，不拿锁；寻股的粗筛写的是粗筛模块自己的表。
+    只读执行模块、风控的预留、行情、市场背景、股票池、新闻和公告、公司数据、事件，不拿锁；寻股的粗筛写的是粗筛模块自己的表。
     """
 
     def __init__(
         self,
         execution: ExecutionService,
+        risk: RiskService,
         market_data: MarketDataService,
         market_context: MarketContextService,
         pool: StockPoolService,
@@ -125,6 +143,7 @@ class SnapshotFlow:
         config: SnapshotConfig,
     ) -> None:
         self._execution = execution
+        self._risk = risk
         self._market_data = market_data
         self._market_context = market_context
         self._pool = pool
@@ -168,6 +187,10 @@ class SnapshotFlow:
         if case_type is CaseType.EXPLORATION:
             screen = _screen(version, self._screener.screen(self._pool.unavailable()))
         quotes = self._market_data.quotes(symbols)
+        headroom: Headroom | None = None
+        if stock is not None and case_type in _HEADROOM_CASES:
+            risk_account = account_snapshot(account, quotes)
+            headroom = self._risk.headroom(stock.symbol, stock.sector, risk_account)
         snapshot = Snapshot(
             case_id=case_id,
             version=version,
@@ -185,6 +208,7 @@ class SnapshotFlow:
             surprises=facts.surprises,
             events=facts.events,
             screen=screen,
+            headroom=headroom,
         )
         self._snapshots.save(snapshot)
         return snapshot
