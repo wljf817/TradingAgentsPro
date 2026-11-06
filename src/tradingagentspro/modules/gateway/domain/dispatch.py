@@ -77,11 +77,12 @@ class TaskUsage:
 
 
 def same_task(request: TaskRequest, task: Task) -> bool:
-    """任务类型、股票、问题相同，输入不论顺序相同；不论发起者。"""
+    """任务类型、股票、问题、周期和范围相同，输入不论顺序相同；不论发起者。"""
     return (
         request.task_type is task.task_type
         and request.symbol == task.symbol
         and request.question == task.question
+        and request.bars == task.bars
         and set(request.inputs) == set(task.inputs)
     )
 
@@ -119,6 +120,8 @@ def dispatch_rejection(
         and request.task_type.agent not in _EXPLORATION_AGENTS
     ):
         return TaskRejection.EXPLORATION_TARGET
+    if request.bars is not None and request.bars.days > config.max_bar_days(request.bars.period):
+        return TaskRejection.BAR_RANGE_TOO_LONG
     used = tasks_used(records, dispatcher)
     if dispatcher is Dispatcher.CRITIC:
         return TaskRejection.CRITIC_TASKS_USED_UP if used >= config.max_critic_tasks else None
@@ -150,6 +153,7 @@ def new_task(
         symbol=request.symbol,
         question=request.question,
         inputs=request.inputs,
+        bars=request.bars,
         dispatched_at=now,
         deadline=now + config.task_timeout,
         pm_round=pm_round,

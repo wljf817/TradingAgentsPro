@@ -42,6 +42,7 @@ _TASK_TYPES: Final = {
 _REJECTIONS: Final = {
     TaskRejection.NOT_CASE_STOCK: "股票不是案件的股票",
     TaskRejection.EXPLORATION_TARGET: "寻股只能派给 Quant 和 Fundamentals",
+    TaskRejection.BAR_RANGE_TOO_LONG: "范围超过上限",
     TaskRejection.ROUNDS_USED_UP: "轮次已用完",
     TaskRejection.PM_TASKS_USED_UP: "任务数已用完",
     TaskRejection.CRITIC_TASKS_USED_UP: "补充研究额度已用完",

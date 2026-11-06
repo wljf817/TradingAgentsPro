@@ -12,7 +12,7 @@ from enum import StrEnum
 from typing import Final, Self
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, PositiveInt, model_validator
 
 from tradingagentspro.contracts.agent import SubAgent
 from tradingagentspro.contracts.model import ModelUse
@@ -56,6 +56,24 @@ class Dispatcher(StrEnum):
     CRITIC = "critic"
 
 
+class BarPeriod(StrEnum):
+    """Quant 任务的周期，见 task-dispatch spec「任务请求的格式」。"""
+
+    WEEK = "week"  # 周线
+    DAY = "day"  # 日线
+    HOUR = "60min"  # 60 分钟线
+    QUARTER_HOUR = "15min"  # 15 分钟线
+
+
+class BarWindow(BaseModel):
+    """Quant 任务的周期和范围。范围到最新一根 K 线为止。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    period: BarPeriod
+    days: PositiveInt  # 范围：往前多少个交易日
+
+
 class TaskRequest(BaseModel):
     """发起者写的一个任务请求：dispatch_tasks 工具参数里的一项。不写目标和发起者。"""
 
@@ -65,6 +83,13 @@ class TaskRequest(BaseModel):
     symbol: str = Field(min_length=1)  # 股票代码
     question: str = Field(min_length=1)  # 在任务类型之外补充的具体关注点
     inputs: tuple[EntryId, ...] = ()  # 状态库条目引用，可以为空
+    bars: BarWindow | None = None  # 周期和范围：目标是 Quant 的任务必须写，别的任务不能写
+
+    @model_validator(mode="after")
+    def _check_bars(self) -> Self:
+        if (self.task_type.agent is SubAgent.QUANT) != (self.bars is not None):
+            raise ValueError("Quant 的任务必须写周期和范围，别的任务不能写")
+        return self
 
 
 class Task(BaseModel):
@@ -82,6 +107,7 @@ class Task(BaseModel):
     symbol: str = Field(min_length=1)
     question: str = Field(min_length=1)
     inputs: tuple[EntryId, ...] = ()
+    bars: BarWindow | None = None  # 写入时还没有这一项的任务读回时为 None
     dispatched_at: AwareDatetime  # 派发时刻
     deadline: AwareDatetime  # 截止时间：派发时刻加任务时限
     pm_round: int | None = Field(default=None, ge=1)  # PM 派发出去的任务是第几轮
@@ -115,6 +141,7 @@ class TaskRejection(StrEnum):
 
     NOT_CASE_STOCK = "not_case_stock"  # 股票不是案件的股票
     EXPLORATION_TARGET = "exploration_target"  # 寻股只能派给 Quant 和 Fundamentals
+    BAR_RANGE_TOO_LONG = "bar_range_too_long"  # 范围超过上限
     ROUNDS_USED_UP = "rounds_used_up"  # 轮次已用完
     PM_TASKS_USED_UP = "pm_tasks_used_up"  # 任务数已用完
     CRITIC_TASKS_USED_UP = "critic_tasks_used_up"  # 补充研究额度已用完

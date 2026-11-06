@@ -26,7 +26,7 @@ from tradingagentspro.contracts.conclusion import (
 from tradingagentspro.contracts.event import EventCategory
 from tradingagentspro.contracts.signal import Signal
 from tradingagentspro.contracts.snapshot import QuoteEntry, Snapshot
-from tradingagentspro.contracts.task import TaskRequest, TaskType
+from tradingagentspro.contracts.task import BarPeriod, BarWindow, TaskRequest, TaskType
 from tradingagentspro.contracts.thesis import (
     Catalyst,
     Comparison,
@@ -50,6 +50,7 @@ _CENT: Final = Decimal("0.01")
 _SUB_DOLLAR_TICK: Final = Decimal("0.0001")
 
 _QUESTION = "替身任务：按任务类型给出固定的信号"
+_BARS: Final = BarWindow(period=BarPeriod.DAY, days=60)  # Quant 的任务的周期和范围
 _ANSWER = "替身按案件类型给出固定的结论"
 _RATIONALE = "替身不做判断，结论按案件类型固定，用来跑通案件流程"
 
@@ -89,7 +90,13 @@ def research_requests(snapshot: Snapshot, context: CaseContext) -> tuple[TaskReq
     quote = _quote(snapshot, symbol)
     inputs = () if quote is None else (quote.entry_id,)
     return tuple(
-        TaskRequest(task_type=_TASKS[agent], symbol=symbol, question=_QUESTION, inputs=inputs)
+        TaskRequest(
+            task_type=_TASKS[agent],
+            symbol=symbol,
+            question=_QUESTION,
+            inputs=inputs,
+            bars=_BARS if agent is SubAgent.QUANT else None,
+        )
         for agent in SubAgent
         if agent in agents
     )

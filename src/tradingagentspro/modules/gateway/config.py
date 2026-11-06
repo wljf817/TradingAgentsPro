@@ -20,6 +20,7 @@ from pydantic import (
 from tradingagentspro.contracts.agent import Agent
 from tradingagentspro.contracts.conclusion import Decision
 from tradingagentspro.contracts.model import ModelRef
+from tradingagentspro.contracts.task import BarPeriod
 
 
 class GatewayConfig(BaseModel):
@@ -41,6 +42,11 @@ class GatewayConfig(BaseModel):
     max_critic_tasks: PositiveInt = 2
     # 截止时间是派发时刻加这么久
     task_timeout: timedelta = Field(default=timedelta(minutes=5), gt=timedelta(0))
+    # Quant 的任务按周期最多往前这么多个交易日
+    max_weekly_bar_days: PositiveInt = 1260
+    max_daily_bar_days: PositiveInt = 504
+    max_hourly_bar_days: PositiveInt = 20
+    max_quarter_hour_bar_days: PositiveInt = 5
 
     # 一个模型在一次调用里失败以后最多再试这么多次
     call_retries: NonNegativeInt = 1
@@ -50,7 +56,7 @@ class GatewayConfig(BaseModel):
     call_timeout: timedelta = Field(default=timedelta(seconds=180), gt=timedelta(0))
     # 最近连续这么多次不可用，最早一次到最后一次不超过时间窗口，就冷却
     breaker_failures: PositiveInt = 3
-    breaker_window: timedelta = Field(default=timedelta(minutes=10), gt=timedelta(0))
+    breaker_window: timedelta = Field(default=timedelta(minutes=5), gt=timedelta(0))
     breaker_cooldown: timedelta = Field(default=timedelta(minutes=5), gt=timedelta(0))
     # PM 用备用模型时不能提的决定；为空时不限制
     fallback_blocked_decisions: frozenset[Decision] = frozenset(
@@ -61,6 +67,18 @@ class GatewayConfig(BaseModel):
     general_budget: Decimal = Field(default=Decimal("2.00"), gt=0)
     reserve_budget: Decimal = Field(default=Decimal("1.00"), gt=0)
     exploration_budget: Decimal = Field(default=Decimal("0.50"), gt=0)
+
+    def max_bar_days(self, period: BarPeriod) -> int:
+        """这个周期的范围上限。"""
+        match period:
+            case BarPeriod.WEEK:
+                return self.max_weekly_bar_days
+            case BarPeriod.DAY:
+                return self.max_daily_bar_days
+            case BarPeriod.HOUR:
+                return self.max_hourly_bar_days
+            case BarPeriod.QUARTER_HOUR:
+                return self.max_quarter_hour_bar_days
 
     @model_validator(mode="after")
     def _check_fallback_fits(self) -> Self:
