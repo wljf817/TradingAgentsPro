@@ -7,6 +7,7 @@
   model-fallback spec。这里只读当前时刻、查模型的配置，在内存里保存熔断状态和起点
 - CallBudgetService：记下每次尝试的费用，给出三个预算的情况，见 call-budget spec。这里只读当前时刻、
   查交易日历和单价、读写存储
+- HistoryQueryService：PM 查询历史，经 HistoryReader 读出结果，写一条程序日志，见 history-query spec
 - AgentCallService：调用 agent，按 ModelFallbackService 的步骤经 ModelBackend 向模型逐次尝试，每次
   拿到用量就经 CallBudgetService 记一条费用；子 agent 的任务经 TaskDispatchService 生成 Result，见
   agent-calls spec
@@ -17,7 +18,7 @@
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Final
 from uuid import UUID
@@ -35,6 +36,8 @@ from tradingagentspro.contracts.agent_call import (
     ReviewerRequest,
     SubAgentRequest,
 )
+from tradingagentspro.contracts.case import CaseType
+from tradingagentspro.contracts.history import HistoryReport
 from tradingagentspro.contracts.model import ModelRef, ModelUse, TokenUsage
 from tradingagentspro.contracts.signal import SubAgentOutput
 from tradingagentspro.contracts.snapshot import Snapshot
@@ -60,6 +63,7 @@ from tradingagentspro.modules.gateway.domain.dispatch import (
 )
 from tradingagentspro.modules.gateway.domain.entries import (
     dispatched_text,
+    history_text,
     rejected_text,
     result_text,
 )
@@ -84,6 +88,7 @@ from tradingagentspro.modules.gateway.domain.result import (
 )
 from tradingagentspro.modules.gateway.ports import (
     CostStore,
+    HistoryReader,
     ModelBackend,
     ModelCallError,
     ModelReply,
@@ -224,6 +229,39 @@ class TaskDispatchService:
             inputs=task.inputs,
             case_id=task.case_id,
         )
+
+
+class HistoryQueryService:
+    """PM 查询历史的入口：经 HistoryReader 读出结果，写一条程序日志，见 history-query spec 和
+    program-log spec「查询历史的动作」。
+    """
+
+    def __init__(self, reader: HistoryReader, config: GatewayConfig, log: ProgramLog) -> None:
+        self._reader = reader
+        self._config = config
+        self._log = log
+
+    def query(
+        self,
+        case_id: UUID,
+        before: datetime,
+        symbol: str,
+        since: date | None,
+        case_type: CaseType | None,
+    ) -> HistoryReport:
+        """案件 case_id 的一次查询，内容截到 before 以前。"""
+        report = self._reader.report(
+            symbol, before, since, case_type, self._config.max_history_rows
+        )
+        self._log.write(
+            Actor.GATEWAY,
+            Action.QUERY_HISTORY,
+            symbol,
+            history_text(report, before, since, case_type),
+            outputs=tuple(str(case.case_id) for case in report.cases),
+            case_id=case_id,
+        )
+        return report
 
 
 class ModelFallbackService:

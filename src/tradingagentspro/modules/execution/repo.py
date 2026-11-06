@@ -34,6 +34,7 @@ PROTECTIONS = versioned_table(
 TRADES = versioned_table(
     "execution_trades",
     Column("client_order_id", String, nullable=False),
+    Column("symbol", String, nullable=False),
     Column("traded", Boolean, nullable=False),
 )
 
@@ -90,7 +91,9 @@ class PostgresProtectionStore:
 
 
 class PostgresTradeStore:
-    """满足 TradeStore：交易记录存在 execution_trades 表里，累计成交大于 0 的 traded 为真。"""
+    """满足 TradeStore：交易记录存在 execution_trades 表里，累计成交大于 0 的 traded 为真，
+    symbol 是股票。
+    """
 
     def __init__(self, engine: Engine, clock: Clock) -> None:
         self._versions = VersionedStore(engine, clock, TRADES, Trade)
@@ -101,8 +104,13 @@ class PostgresTradeStore:
     def traded(self) -> tuple[Trade, ...]:
         return self._versions.latest(traded=True)
 
+    def at(self, symbol: str, moment: datetime) -> tuple[Trade, ...]:
+        return self._versions.as_of(moment, symbol=symbol, traded=True)
+
     def save(self, trade: Trade) -> None:
-        self._versions.save(trade.client_order_id, trade, traded=trade.filled > 0)
+        self._versions.save(
+            trade.client_order_id, trade, symbol=trade.symbol, traded=trade.filled > 0
+        )
 
 
 class PostgresCloseReconciliationStore:

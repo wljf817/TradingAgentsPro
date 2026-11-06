@@ -1,7 +1,7 @@
 """Agent 网关需要的外部接口：调用模型、任务和 Result 的存储、费用的存储。"""
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Protocol
 from uuid import UUID
 
@@ -15,6 +15,8 @@ from tradingagentspro.contracts.agent_call import (
     ReviewerRequest,
     SubAgentRequest,
 )
+from tradingagentspro.contracts.case import CaseType
+from tradingagentspro.contracts.history import HistoryReport
 from tradingagentspro.contracts.model import ModelRef, TokenUsage
 from tradingagentspro.contracts.task import Result, Task
 from tradingagentspro.modules.gateway.domain.budget import CallCost
@@ -38,6 +40,21 @@ class ModelReply[T]:
     output: T
     usage: TokenUsage
     served_model: str | None = None
+
+
+class HistoryReader(Protocol):
+    """读一只股票的历史，内容都截到 before 以前，见 history-query spec。"""
+
+    def report(
+        self,
+        symbol: str,
+        before: datetime,
+        since: date | None,
+        case_type: CaseType | None,
+        limit: int,
+    ) -> HistoryReport:
+        """起始日和案件类型筛出的案件和交易，各最多 limit 条，都是最新的。"""
+        ...
 
 
 class ModelBackend(Protocol):

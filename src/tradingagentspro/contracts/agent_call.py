@@ -23,6 +23,7 @@ from tradingagentspro.contracts.conclusion import (
     WatchConclusion,
 )
 from tradingagentspro.contracts.event import Event
+from tradingagentspro.contracts.history import HistoryIndex
 from tradingagentspro.contracts.review import CriticReview, PlanResponse, Verdict
 from tradingagentspro.contracts.snapshot import Snapshot
 from tradingagentspro.contracts.task import Result, Task, TaskRequest
@@ -67,6 +68,7 @@ class CaseContext(BaseModel):
     recent_cases: tuple[RecentCase, ...] = ()  # 这只股票最近结束的案件，按结束时刻从晚到早
     pending_follow_ups: tuple[FollowUpRequest, ...] = ()  # 这只股票待执行的跟进，按触发时间
     follow_up: FollowUpOrigin | None  # 跟进案件开出它的跟进
+    history: HistoryIndex | None  # 这只股票的历史索引；寻股为 None
 
 
 class TaskOutcome(BaseModel):

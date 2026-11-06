@@ -172,6 +172,10 @@ class TradeStore(Protocol):
         """累计成交大于 0 的全部交易记录。"""
         ...
 
+    def at(self, symbol: str, moment: datetime) -> tuple[Trade, ...]:
+        """这只股票每条交易记录写入时刻早于 moment 的最新版本里，累计成交大于 0 的那些。"""
+        ...
+
     def save(self, trade: Trade) -> None:
         """保存这条交易记录的最新状态。"""
         ...

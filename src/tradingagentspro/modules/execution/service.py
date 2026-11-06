@@ -11,6 +11,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
+from tradingagentspro.contracts.history import HistoryTrade
 from tradingagentspro.contracts.risk import RiskDecision
 from tradingagentspro.contracts.trade_plan import TradePlan
 from tradingagentspro.modules.execution.config import ExecutionConfig
@@ -31,6 +32,7 @@ from tradingagentspro.modules.execution.domain.order import (
     new_order,
     opening_order,
 )
+from tradingagentspro.modules.execution.domain.pnl import history_trades
 from tradingagentspro.modules.execution.domain.protection import (
     Protection,
     StopAction,
@@ -333,6 +335,12 @@ class ExecutionService:
         ]
         ordered = sorted(recent, key=lambda pair: (pair[0], pair[1].client_order_id))
         return tuple(trade for _, trade in ordered)
+
+    def trades_at(self, symbol: str, moment: datetime) -> tuple[HistoryTrade, ...]:
+        """这只股票在 moment 有成交的交易，从晚到早，带已实现盈亏；只读交易记录，不调用券商。见
+        history-query spec「时间截止」「已实现盈亏」。
+        """
+        return history_trades(self._trades.at(symbol, moment))
 
     def account(self) -> Account:
         """账户数据：券商账户加上本系统的记录，见 trade-records spec「账户数据」和 design D7。

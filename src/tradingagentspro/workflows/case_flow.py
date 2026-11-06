@@ -96,6 +96,7 @@ from tradingagentspro.workflows.case_entries import (
     wake_failed_text,
     wake_text,
 )
+from tradingagentspro.workflows.case_history import CaseHistory
 from tradingagentspro.workflows.snapshot_flow import SnapshotFlow
 
 _log = logging.getLogger(__name__)
@@ -122,6 +123,7 @@ class CaseServices:
     budget: CallBudgetService
     fallback: ModelFallbackService
     records: CaseRecordService
+    history: CaseHistory
     snapshots: SnapshotService
     snapshot_flow: SnapshotFlow
     pool: StockPoolService
@@ -189,7 +191,7 @@ class CaseFlow:
     def context(self, case_id: UUID, definition: CaseDefinition, trigger: Trigger) -> CaseContext:
         """组出案件上下文，见 spec「案件上下文」：事件案件的事件按触发里的事件 ID 读出；跟进案件的
         跟进按触发里的跟进 ID 读出，读不到时抛 KeyError（update-follow-ups-due 的 design D5）；是否
-        到续期上限按第 1 版快照的可用额度。
+        到续期上限按第 1 版快照的可用额度，历史索引截到第 1 版快照的生成时刻。
         """
         assert definition.question is not None  # 由 PM 处理的案件都有问题
         symbol = definition.symbol
@@ -206,9 +208,8 @@ class CaseFlow:
         follow_up = None
         if isinstance(trigger, FollowUpTrigger):
             follow_up = self._follow_up(trigger.follow_up_id)
-        capped = renewal_at_cap(
-            definition, entry, self._snapshot(case_id, 1), self._configs.scheduler
-        )
+        first = self._snapshot(case_id, 1)
+        capped = renewal_at_cap(definition, entry, first, self._configs.scheduler)
         decisions = allowed_decisions(definition.case_type, capped)
         return CaseContext(
             question=definition.question,
@@ -221,6 +222,7 @@ class CaseFlow:
             recent_cases=tuple(_recent(r) for r in recent),
             pending_follow_ups=pending,
             follow_up=follow_up,
+            history=None if symbol is None else self._s.history.index(symbol, first.taken_at),
         )
 
     def _follow_up(self, follow_up_id: UUID) -> FollowUpOrigin:

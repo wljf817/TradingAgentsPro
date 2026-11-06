@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from uuid import UUID
 
-from tradingagentspro.modules.execution.domain.order import Order, OrderSide, OrderStatus
+from tradingagentspro.contracts.trade import OrderStatus
+from tradingagentspro.modules.execution.domain.order import Order, OrderSide
 from tradingagentspro.modules.execution.domain.protection import Protection
 from tradingagentspro.modules.execution.domain.reconciliation import Reconciliation
 from tradingagentspro.shared.trading_calendar import TradingCalendar

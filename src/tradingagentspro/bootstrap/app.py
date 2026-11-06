@@ -123,6 +123,7 @@ from tradingagentspro.modules.followups import (
 from tradingagentspro.modules.gateway import (
     AgentCallService,
     CallBudgetService,
+    HistoryQueryService,
     ModelFallbackService,
     PostgresCostStore,
     PostgresTaskStore,
@@ -160,6 +161,7 @@ from tradingagentspro.shared.trading_calendar import TradingCalendar
 from tradingagentspro.workflows import case_workflow, close_heartbeat, order_workflow
 from tradingagentspro.workflows.case_conclusion import CheckConfigs
 from tradingagentspro.workflows.case_flow import CaseFlow, CaseServices
+from tradingagentspro.workflows.case_history import CaseHistory
 from tradingagentspro.workflows.close_heartbeat import (
     CloseHeartbeat,
     DbosHeartbeatRuns,
@@ -363,10 +365,19 @@ class _CaseSide:
 
 
 def _model_backend(
-    file: ModelFile, stand_in: StandInBackend, llm: LlmClient, charter: Charter
+    file: ModelFile,
+    stand_in: StandInBackend,
+    llm: LlmClient,
+    charter: Charter,
+    history: HistoryQueryService,
 ) -> VendorRouter:
     """按 model-adapter spec「按厂商分派」：替身的厂商交给替身，其他交给真实模型的后端。"""
-    real = LlmBackend(llm, f"{charter.text}\n\n{load_role_prompt(PM_PROMPT_FILE)}")
+    real = LlmBackend(
+        llm,
+        f"{charter.text}\n\n{load_role_prompt(PM_PROMPT_FILE)}",
+        history,
+        file.gateway.max_history_queries,
+    )
     return VendorRouter(
         {
             vendor: real if isinstance(file.vendors[vendor], RealVendor) else stand_in
@@ -399,7 +410,14 @@ def _case_side(
     budget = CallBudgetService(PostgresCostStore(engine), clock, calendar, models, gateway)
     tasks = TaskDispatchService(PostgresTaskStore(engine), clock, ids, gateway, program_log)
     charter = load_charter(CHARTER_FILE, settings.risk)
-    backend = _model_backend(configured, StandInBackend(calendar, settings.standin), llm, charter)
+    case_history = CaseHistory(case_records, execution)
+    backend = _model_backend(
+        configured,
+        StandInBackend(calendar, settings.standin),
+        llm,
+        charter,
+        HistoryQueryService(case_history, gateway, program_log),
+    )
     agents = AgentCallService(backend, fallback, budget, tasks)
     news = NewsService(
         externals.news(settings.alpaca_news),
@@ -448,6 +466,7 @@ def _case_side(
         budget=budget,
         fallback=fallback,
         records=case_records,
+        history=case_history,
         snapshots=snapshots,
         snapshot_flow=snapshot_flow,
         pool=stock_pool,

@@ -12,6 +12,7 @@ from typing import Self
 from uuid import UUID
 
 from tradingagentspro.contracts.risk import RiskDecision
+from tradingagentspro.contracts.trade import OrderStatus
 from tradingagentspro.contracts.trade_plan import OrderType, TradePlan
 from tradingagentspro.shared.trading_calendar import TradingSession
 
@@ -19,29 +20,6 @@ from tradingagentspro.shared.trading_calendar import TradingSession
 class OrderSide(StrEnum):
     BUY = "buy"
     SELL = "sell"
-
-
-class OrderStatus(StrEnum):
-    """订单的 8 种状态，含义见 order-lifecycle spec「订单状态和券商回报」。"""
-
-    PENDING = "pending"
-    SUBMITTED = "submitted"
-    PARTIALLY_FILLED = "partially_filled"
-    FILLED = "filled"
-    CANCELLED = "cancelled"
-    EXPIRED = "expired"
-    REJECTED = "rejected"
-    UNKNOWN = "unknown"
-
-    @property
-    def is_terminal(self) -> bool:
-        """全部成交、已撤销、已过期、已拒绝是终态，进入后不再变化。"""
-        return self in (
-            OrderStatus.FILLED,
-            OrderStatus.CANCELLED,
-            OrderStatus.EXPIRED,
-            OrderStatus.REJECTED,
-        )
 
 
 class BrokerOrderStatus(StrEnum):

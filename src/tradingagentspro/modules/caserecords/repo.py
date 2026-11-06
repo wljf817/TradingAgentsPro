@@ -6,6 +6,7 @@ caserecords_findings，以及 CaseRecordStore 的数据库实现。
 """
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -125,8 +126,19 @@ class PostgresCaseRecordStore:
             "ended_at", limit, symbol=symbol, status=CaseStatus.ENDED.value
         )
 
+    def ended(self, symbol: str) -> tuple[CaseRecord, ...]:
+        records = self._cases.latest(symbol=symbol, status=CaseStatus.ENDED.value)
+        by_id = sorted(records, key=lambda record: record.case_id)
+        return tuple(sorted(by_id, key=_ended_at, reverse=True))
+
     def last_concluded(self, case_type: CaseType, symbol: str | None) -> CaseRecord | None:
         found = self._cases.most_recent(
             "concluded_at", 1, case_type=case_type.value, symbol=symbol, concluded=True
         )
         return found[0] if found else None
+
+
+def _ended_at(record: CaseRecord) -> datetime:
+    """已结束的案件的结束时刻。"""
+    assert record.ended_at is not None  # ended 只给出已结束的案件
+    return record.ended_at

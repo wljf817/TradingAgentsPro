@@ -16,6 +16,8 @@
 - 调用 agent：AgentCallService 经 ModelBackend 端口向模型逐次尝试，按备用模型的步骤重试和切换，
   每次拿到用量就记一条费用；PM、Critic、Reviewer 给出输出或全部不可用，子 agent 的任务直接生成
   Result（agent-calls spec）。M4 由 integrations/standin 的替身实现端口，M5 换成真实模型
+- 查询历史：HistoryQueryService 经 HistoryReader 端口读一只股票的历史，写一条程序日志（history-query
+  spec）
 - PM 的上下文：由案件上下文和快照组出共享事实和案件内容，新闻和公告只给标题（shared-context spec）
 
 网关不做交易判断、不下单。模块之外的代码只能 import 这里导出的名字。
@@ -82,6 +84,7 @@ from tradingagentspro.modules.gateway.domain.signal import (
 )
 from tradingagentspro.modules.gateway.ports import (
     CostStore,
+    HistoryReader,
     ModelBackend,
     ModelCallError,
     ModelReply,
@@ -92,6 +95,7 @@ from tradingagentspro.modules.gateway.service import (
     AgentCallService,
     Answered,
     CallBudgetService,
+    HistoryQueryService,
     ModelFallbackService,
     TaskDispatchService,
 )
@@ -115,6 +119,8 @@ __all__ = [
     "Dispatch",
     "DispatchAction",
     "GatewayConfig",
+    "HistoryQueryService",
+    "HistoryReader",
     "Malformed",
     "ModelAssignments",
     "ModelBackend",

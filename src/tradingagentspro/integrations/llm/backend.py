@@ -18,8 +18,13 @@ from tradingagentspro.contracts.agent_call import (
 from tradingagentspro.contracts.model import ModelRef
 from tradingagentspro.integrations.llm.client import LlmClient, ReplyTool
 from tradingagentspro.integrations.llm.errors import InvalidOutput
-from tradingagentspro.integrations.llm.pm import RESEARCH_TOOLS, RESPONSE_TOOLS, pm_messages
-from tradingagentspro.modules.gateway import ModelReply
+from tradingagentspro.integrations.llm.pm import (
+    RESEARCH_TOOLS,
+    RESPONSE_TOOLS,
+    history_tool,
+    pm_messages,
+)
+from tradingagentspro.modules.gateway import HistoryQueryService, ModelReply
 
 _EMPTY_ANSWER: Final = "（空回答）"  # 厂商不收空的文字块，见 add-pm-calls 的 design D7
 
@@ -27,9 +32,17 @@ _EMPTY_ANSWER: Final = "（空回答）"  # 厂商不收空的文字块，见 ad
 class LlmBackend:
     """满足 Agent 网关的 ModelBackend，用 LlmClient 问模型。"""
 
-    def __init__(self, client: LlmClient, pm_instructions: str) -> None:
+    def __init__(
+        self,
+        client: LlmClient,
+        pm_instructions: str,
+        history: HistoryQueryService,
+        max_history_queries: int,
+    ) -> None:
         self._client = client
         self._pm_instructions = pm_instructions
+        self._history = history
+        self._max_history_queries = max_history_queries
 
     def pm(self, model: ModelRef, timeout: timedelta, request: PmRequest) -> ModelReply[PmReply]:
         return self._run_pm(model, timeout, request, RESEARCH_TOOLS)
@@ -69,6 +82,8 @@ class LlmBackend:
                 self._pm_instructions,
                 None,
                 replies,
+                tools=(history_tool(self._history, request.snapshot),),
+                tool_limit=self._max_history_queries,
                 history=pm_messages(request),
             )
         except InvalidOutput as invalid:

@@ -114,6 +114,10 @@ class CaseRecordService:
         """这只股票已结束的案件，按结束时刻从晚到早，最多 limit 个。"""
         return self._store.recent_ended(symbol, limit)
 
+    def ended(self, symbol: str) -> tuple[CaseRecord, ...]:
+        """这只股票已结束的全部案件，按结束时刻从晚到早，时刻相同的按案件 ID。"""
+        return self._store.ended(symbol)
+
     def last_concluded(self, case_type: CaseType, symbol: str | None) -> CaseRecord | None:
         """这种案件类型（寻股的 symbol 为 None）结论时刻最晚的有结论的案件；没有时为 None。"""
         return self._store.last_concluded(case_type, symbol)

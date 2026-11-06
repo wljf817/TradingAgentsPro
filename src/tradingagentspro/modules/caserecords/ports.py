@@ -49,6 +49,10 @@ class CaseRecordStore(Protocol):
         """这只股票已结束的案件，按结束时刻从晚到早，时刻相同的按案件 ID，最多 limit 个。"""
         ...
 
+    def ended(self, symbol: str) -> tuple[CaseRecord, ...]:
+        """这只股票已结束的全部案件，按结束时刻从晚到早，时刻相同的按案件 ID。"""
+        ...
+
     def last_concluded(self, case_type: CaseType, symbol: str | None) -> CaseRecord | None:
         """这种案件类型、这只股票（寻股为 None）有结论的案件里结论时刻最晚的一个；没有时为 None。"""
         ...

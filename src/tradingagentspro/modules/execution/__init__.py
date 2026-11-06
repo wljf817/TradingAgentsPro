@@ -6,6 +6,7 @@
 交易日数，见 close-reconciliation spec。模块之外的代码只能 import 这里导出的名字。
 """
 
+from tradingagentspro.contracts.trade import OrderStatus, TradeKind
 from tradingagentspro.modules.execution.config import ExecutionConfig
 from tradingagentspro.modules.execution.domain.account import (
     Account,
@@ -35,7 +36,6 @@ from tradingagentspro.modules.execution.domain.order import (
     Order,
     OrderPausedError,
     OrderSide,
-    OrderStatus,
     new_order,
     opening_order,
 )
@@ -66,7 +66,6 @@ from tradingagentspro.modules.execution.domain.reconciliation import (
 )
 from tradingagentspro.modules.execution.domain.trade import (
     Trade,
-    TradeKind,
     trade_of_order,
     trade_of_stop,
 )

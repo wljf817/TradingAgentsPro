@@ -1,5 +1,6 @@
 """Agent 网关的阈值、默认值、各 agent 的模型和模型的单价，含义见 signal-format spec「信号的配置」、
 task-dispatch spec「派发的配置」、model-fallback spec「模型的配置」「厂商校验」「备用模型的配置」、
+history-query spec「查询的上限」、
 call-budget spec「模型的单价」「预算的配置」。
 """
 
@@ -40,6 +41,10 @@ class GatewayConfig(BaseModel):
     max_pm_rounds: PositiveInt = 2
     # 每个案件 Critic 派发出去的任务最多这么多个，不占 PM 的任务数和轮次
     max_critic_tasks: PositiveInt = 2
+    # PM 的一次运行最多查几次历史
+    max_history_queries: PositiveInt = 3
+    # 一次查询的案件最多几条，交易最多几条，各算各的
+    max_history_rows: PositiveInt = 20
     # 截止时间是派发时刻加这么久
     task_timeout: timedelta = Field(default=timedelta(minutes=10), gt=timedelta(0))
     # Quant 的任务按周期最多往前这么多个交易日

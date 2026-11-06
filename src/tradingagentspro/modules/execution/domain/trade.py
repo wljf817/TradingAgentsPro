@@ -7,18 +7,12 @@ design D1；成交日和结算日见 design D6。
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from enum import StrEnum
 from uuid import UUID
 
-from tradingagentspro.modules.execution.domain.order import Order, OrderSide, OrderStatus
+from tradingagentspro.contracts.trade import OrderStatus, TradeKind
+from tradingagentspro.modules.execution.domain.order import Order, OrderSide
 from tradingagentspro.modules.execution.domain.protection import StopOrder, StopStatus
 from tradingagentspro.shared.trading_calendar import TradingCalendar
-
-
-class TradeKind(StrEnum):
-    BUY = "buy"
-    SELL = "sell"
-    STOP = "stop"
 
 
 @dataclass(frozen=True, slots=True)

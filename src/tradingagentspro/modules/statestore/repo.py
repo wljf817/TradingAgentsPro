@@ -166,6 +166,25 @@ class VersionedStore[T]:
         used = union_all(select(at_since), later).subquery()
         return self._records(select(used.c.data).order_by(used.c[self._key.name], used.c.version))
 
+    def as_of(self, at: datetime, **where: object) -> tuple[T, ...]:
+        """每个键写入时刻早于 at 的最新版本里，筛选列等于给定值的那些，按键排序。
+
+        筛选看的是这个版本的值。见 state-store spec「读取某个时刻的版本」。
+        """
+        table = self._table
+        versions = (
+            select(table)
+            .where(table.c.recorded_at < at)
+            .ext(distinct_on(self._key))
+            .order_by(self._key, table.c.version.desc())
+            .subquery()
+        )
+        return self._records(
+            select(versions.c.data)
+            .where(*(versions.c[name] == value for name, value in where.items()))
+            .order_by(versions.c[self._key.name])
+        )
+
     def _newest(self) -> Subquery:
         """每个键的最新版本，带全部的列。"""
         table = self._table

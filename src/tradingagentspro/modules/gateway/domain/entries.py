@@ -4,10 +4,12 @@
 发起者、目标、任务类型、原因和状态写中文名；截止时间写成 UTC，精确到秒。
 """
 
-from datetime import UTC
+from datetime import UTC, date, datetime
 from typing import Final
 
 from tradingagentspro.contracts.agent import SubAgent
+from tradingagentspro.contracts.case import CaseType
+from tradingagentspro.contracts.history import HistoryReport
 from tradingagentspro.contracts.model import ModelUse
 from tradingagentspro.contracts.signal import NoSignal, Signal
 from tradingagentspro.contracts.task import (
@@ -67,6 +69,18 @@ def dispatched_text(task: Task) -> str:
     deadline = f"{task.deadline.astimezone(UTC):%Y-%m-%d %H:%M:%S} UTC"
     text = f"{_request(task)}；截止时间 {deadline}"
     return text if task.pm_round is None else f"{text}；PM 的第 {task.pm_round} 轮"
+
+
+def history_text(
+    report: HistoryReport, before: datetime, since: date | None, case_type: CaseType | None
+) -> str:
+    """查询历史的说明：起始日和案件类型、截止时刻、案件和交易各返回几条和总数、已实现盈亏合计。"""
+    cutoff = f"{before.astimezone(UTC):%Y-%m-%d %H:%M:%S} UTC"
+    return (
+        f"起始日 {since or '不限'}；案件类型 {case_type or '不限'}；截止时刻 {cutoff}；"
+        f"案件 {len(report.cases)} / {report.total_cases}；"
+        f"交易 {len(report.trades)} / {report.total_trades}；合计 {report.realized_pnl}"
+    )
 
 
 def rejected_text(task: Task, reason: TaskRejection) -> str:
