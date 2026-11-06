@@ -24,7 +24,7 @@ class StandInConfig(BaseModel):
     signal_score: int = Field(default=1, ge=-2, le=2)
     signal_confidence: Decimal = Field(default=Decimal("0.5"), ge=0, le=1)
     # 开仓方案：股数是权益乘比例再除以限价；限价比参考价高出、止损价比限价低的比例；紧急阈值
-    position_ratio: Decimal = Field(default=Decimal("0.10"), gt=0, le=1)
+    position_ratio: Decimal = Field(default=Decimal("0.25"), gt=0, le=1)
     limit_markup: Decimal = Field(default=Decimal("0.005"), ge=0, lt=1)
     stop_ratio: Decimal = Field(default=Decimal("0.05"), gt=0, lt=1)
     emergency_threshold: Decimal = Field(default=Decimal("0.08"), gt=0, lt=1)
