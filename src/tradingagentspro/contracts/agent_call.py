@@ -16,6 +16,7 @@ from tradingagentspro.contracts.agent import SubAgent
 from tradingagentspro.contracts.case import CaseEndReason, CaseType
 from tradingagentspro.contracts.conclusion import (
     Conclusion,
+    Decision,
     FollowUpRequest,
     HoldingConclusion,
     WatchConclusion,
@@ -58,6 +59,8 @@ class CaseContext(BaseModel):
     question: str = Field(min_length=1)  # 案件要回答的问题；跟进是申请时写下的问题
     event: Event | None  # 事件案件的事件
     required_agent: SubAgent | None  # 事件案件至少要派给的子 agent
+    decisions: tuple[Decision, ...]  # 这种案件的结论能选的决定；寻股为空
+    research_agents: int | None  # 研究要求：至少来自几个不同子 agent；寻股为 None
     watch_thesis: WatchThesis | None  # 关注股现在的关注论点
     investment_thesis: InvestmentThesis | None  # 持仓现在的投资论点
     recent_cases: tuple[RecentCase, ...] = ()  # 这只股票最近结束的案件，按结束时刻从晚到早

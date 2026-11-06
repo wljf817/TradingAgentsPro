@@ -17,6 +17,7 @@ from tradingagentspro.modules.scheduler.domain.case_type import (
     HeartbeatTrigger,
     SellTrigger,
     Trigger,
+    allowed_decisions,
     conclusion_model,
     define_case,
 )
@@ -72,6 +73,7 @@ __all__ = [
     "SchedulerConfig",
     "SellTrigger",
     "Trigger",
+    "allowed_decisions",
     "conclusion_model",
     "conclusion_rejection",
     "define_case",

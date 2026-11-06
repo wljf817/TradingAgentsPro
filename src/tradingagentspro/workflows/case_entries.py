@@ -239,16 +239,22 @@ def _returned(output: Reply) -> str:
             return f"复盘报告：{summary}"
 
 
-def wake_text(agent: Agent, why: str, output: Reply, model: ModelUse) -> str:
-    """唤醒 agent 并且调用成功：哪个 agent、为什么唤醒、交回了什么、实际使用的模型。"""
+def wake_text(
+    agent: Agent, why: str, output: Reply, model: ModelUse, charter: int, snapshot: int
+) -> str:
+    """唤醒 agent 并且调用成功：哪个 agent、为什么唤醒、交回了什么、实际使用的模型、两个版本。"""
     fallback = "是备用模型" if model.fallback else "不是备用模型"
     used = f"模型 {model.model.vendor}/{model.model.name}，{fallback}"
-    return f"{AGENTS[agent]}：{why}；{_returned(output)}；{used}"
+    return f"{AGENTS[agent]}：{why}；{_returned(output)}；{used}；{_versions(charter, snapshot)}"
 
 
-def wake_failed_text(agent: Agent, why: str, detail: str) -> str:
-    """唤醒 agent 但调用失败：网关给出的说明。"""
-    return f"{AGENTS[agent]}：{why}；调用失败：{detail}"
+def wake_failed_text(agent: Agent, why: str, detail: str, charter: int, snapshot: int) -> str:
+    """唤醒 agent 但调用失败：网关给出的说明、宪章和快照的版本。"""
+    return f"{AGENTS[agent]}：{why}；调用失败：{detail}；{_versions(charter, snapshot)}"
+
+
+def _versions(charter: int, snapshot: int) -> str:
+    return f"宪章版本 {charter}，快照 s{snapshot}"
 
 
 def unavailable_alert(

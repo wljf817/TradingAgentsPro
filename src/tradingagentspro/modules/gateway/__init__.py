@@ -16,6 +16,7 @@
 - 调用 agent：AgentCallService 经 ModelBackend 端口向模型逐次尝试，按备用模型的步骤重试和切换，
   每次拿到用量就记一条费用；PM、Critic、Reviewer 给出输出或全部不可用，子 agent 的任务直接生成
   Result（agent-calls spec）。M4 由 integrations/standin 的替身实现端口，M5 换成真实模型
+- PM 的上下文：由案件上下文和快照组出共享事实和案件内容，新闻和公告只给标题（shared-context spec）
 
 网关不做交易判断、不下单。模块之外的代码只能 import 这里导出的名字。
 """
@@ -34,6 +35,7 @@ from tradingagentspro.modules.gateway.domain.budget import (
     charged_budget,
     cost_of,
 )
+from tradingagentspro.modules.gateway.domain.context import pm_context
 from tradingagentspro.modules.gateway.domain.dispatch import (
     CaseScope,
     Dispatch,
@@ -144,6 +146,7 @@ __all__ = [
     "exhausted",
     "expired",
     "new_task",
+    "pm_context",
     "received",
     "rejected",
     "reusable",

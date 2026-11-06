@@ -33,6 +33,7 @@ from dbos import DBOS
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Engine
 
+from tradingagentspro.bootstrap.charter import CHARTER_FILE, load_charter
 from tradingagentspro.bootstrap.database import migrate
 from tradingagentspro.bootstrap.models import (
     MODELS_FILE,
@@ -450,7 +451,8 @@ def _case_side(
         ids=ids,
     )
     checks = CheckConfigs(gateway, settings.scheduler, settings.heartbeat)
-    flow = CaseFlow(services, checks, settings.case_flow)
+    charter = load_charter(CHARTER_FILE, settings.risk)
+    flow = CaseFlow(services, checks, settings.case_flow, charter.version)
     return _CaseSide(flow, fallback, budget, news, company_data, events)
 
 

@@ -70,6 +70,7 @@ from tradingagentspro.modules.scheduler import (
     FollowUpTrigger,
     SchedulerConfig,
     Trigger,
+    allowed_decisions,
 )
 from tradingagentspro.modules.screener import ScreenDataUnavailableError
 from tradingagentspro.modules.statestore import SnapshotService
@@ -145,11 +146,16 @@ class CaseFlow:
     """案件工作流每一步的用例，见 case-workflow spec。每个方法对应工作流的一个 step。"""
 
     def __init__(
-        self, services: CaseServices, configs: CheckConfigs, config: CaseFlowConfig
+        self,
+        services: CaseServices,
+        configs: CheckConfigs,
+        config: CaseFlowConfig,
+        charter_version: int,
     ) -> None:
         self._s = services
         self._configs = configs
         self._config = config
+        self._charter_version = charter_version
         self._effects = ConclusionEffects(services.pool, services.follow_ups, services.records)
 
     @property
@@ -197,10 +203,13 @@ class CaseFlow:
         follow_up = None
         if isinstance(trigger, FollowUpTrigger):
             follow_up = self._follow_up(trigger.follow_up_id)
+        decisions = allowed_decisions(definition.case_type)
         return CaseContext(
             question=definition.question,
             event=event,
             required_agent=definition.required_agent,
+            decisions=decisions,
+            research_agents=self._configs.scheduler.min_cited_agents if decisions else None,
             watch_thesis=None if entry is None else entry.watch_thesis,
             investment_thesis=None if entry is None else entry.investment_thesis,
             recent_cases=tuple(_recent(r) for r in recent),
@@ -288,15 +297,16 @@ class CaseFlow:
         outcome = call()
         duration = self._s.clock.now() - started
         case_id = snapshot.case_id
+        versions = (self._charter_version, snapshot.version)
         if isinstance(outcome, AllUnavailable):
-            text = wake_failed_text(agent, why, outcome.detail)
+            text = wake_failed_text(agent, why, outcome.detail, *versions)
             self._write(Action.WAKE_AGENT, case_id, text, duration=duration)
             alert = unavailable_alert(
                 case_id, snapshot.case_type, snapshot.symbol, agent, outcome.detail
             )
             self._s.notification.alert(str(case_id), alert)
             return None
-        text = wake_text(agent, why, outcome.output, outcome.model_use)
+        text = wake_text(agent, why, outcome.output, outcome.model_use, *versions)
         self._write(Action.WAKE_AGENT, case_id, text, duration=duration, cost=outcome.cost)
         return outcome
 

@@ -6,7 +6,7 @@
 """
 
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, get_args
 from uuid import UUID
 
 from tradingagentspro.contracts.agent import SubAgent
@@ -14,6 +14,7 @@ from tradingagentspro.contracts.case import CaseType
 from tradingagentspro.contracts.conclusion import (
     CandidateConclusion,
     Conclusion,
+    Decision,
     ExplorationConclusion,
     HoldingConclusion,
     WatchConclusion,
@@ -198,3 +199,11 @@ def define_case(trigger: Trigger, status: StockStatus | None) -> CaseDefinition 
 def conclusion_model(case_type: CaseType) -> type[Conclusion] | None:
     """PM 要提交的结论种类；复盘案件不唤醒 PM，为 None。"""
     return _CASE_TYPES[case_type].conclusion
+
+
+def allowed_decisions(case_type: CaseType) -> tuple[Decision, ...]:
+    """这种案件的结论能选的决定，取自结论的格式；寻股的结论没有决定，为空。只用于唤醒 PM 的案件。"""
+    conclusion = conclusion_model(case_type)
+    assert conclusion is not None  # 复盘案件不唤醒 PM，不组案件上下文
+    decision = conclusion.model_fields.get("decision")
+    return () if decision is None else get_args(decision.annotation)

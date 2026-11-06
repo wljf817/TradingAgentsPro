@@ -1,0 +1,3 @@
+# 系统宪章：随代码发布，改动要经人工确认，改了就把 version 加 1，含义见 shared-context spec。
+version = 1
+text = "系统宪章的占位内容。"
