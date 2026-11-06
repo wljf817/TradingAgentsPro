@@ -41,7 +41,7 @@ There are three statuses: Not started, In progress, Done.
 | M2 Trading side on paper | In progress | 16 / 16 |
 | M3 Case-side core | Done | 12 / 12 |
 | M4 Case flow end to end | In progress | 19 / 19 |
-| M5 Models | In progress | 11 / 14 |
+| M5 Models | In progress | 12 / 14 |
 | M6 Retrospectives and evaluation | Not started | — |
 | M7 Small-capital live | Not started | — |
 
@@ -149,6 +149,6 @@ The PM is split first; the sub-agents and the Critic are added when they are spl
 | | PM calls | New; Modify: Model adapter, Agent calls, Backup models, Case stages, Case workflow, Program log | Done |
 | | Opening score | Modify: Case types and conclusions | Done |
 | | Watching rules | Modify: Case types and conclusions, Stock pool, Agent calls, Case workflow, Stand-ins | Done |
-| | History queries | New; Modify: Case records, Trade records, Program log | Not started |
+| | History queries | New; Modify: Agent calls, PM calls, Case workflow, Case records, Trade records, State store design, Program log, Settings file | Done |
 | Going live | Write the prompts | New | Not started |
 | | Switch to real models | Modify: Model configuration | Not started |

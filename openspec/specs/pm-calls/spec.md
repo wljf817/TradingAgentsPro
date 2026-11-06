@@ -113,14 +113,14 @@ PM 的对话 SHALL 按 agent-calls spec「对话的每一轮」一轮一轮变�
 | 回应 | `respond_to_challenge` | 回应 |
 
 - 工具的参数格式 SHALL 是 agent-calls spec「每个 agent 的输入和输出」的格式
-- PM 没有读取工具，工具次数上限是 0
+- PM 的读取工具是 `query_history`（history-query spec「查询工具」），工具次数上限是查询次数上限（history-query spec「查询的上限」）
 
 #### Scenario: 研究时派发任务
 
 - **GIVEN** 测试服务器回答调用 `dispatch_tasks`，参数合法
 - **WHEN** 调用 K-1 的 PM（研究）
 - **THEN** 回复是派发任务，用量是这次回答的用量
-- **AND** 请求里的工具只有 `dispatch_tasks` 和 `submit_conclusion`
+- **AND** 请求里的交回工具只有 `dispatch_tasks` 和 `submit_conclusion`
 
 #### Scenario: 研究时提交结论
 
@@ -133,7 +133,7 @@ PM 的对话 SHALL 按 agent-calls spec「对话的每一轮」一轮一轮变�
 - **GIVEN** 对话最后一轮交回质询；测试服务器回答调用 `respond_to_challenge`，参数是维持
 - **WHEN** 调用 K-1 的 PM（回应）
 - **THEN** 回复是维持的回应
-- **AND** 请求里的工具只有 `respond_to_challenge`
+- **AND** 请求里的交回工具只有 `respond_to_challenge`
 
 ### Requirement: PM 的输出不合法
 
