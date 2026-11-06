@@ -1,7 +1,7 @@
 # bootstrap Specification
 
 ## Purpose
-启动与装配用一条命令启动交易侧程序：从环境变量读配置、配置日志，按固定的顺序连接数据库、券商、行情和 Discord，把已经实现的模块装配起来，做完启动对账和第一次健康判定；收到停止信号时按相反的顺序关闭，并用退出码告诉进程管理器结果。
+启动与装配用一条命令启动交易侧程序：从配置文件读配置、配置日志，按固定的顺序连接数据库、券商、行情和 Discord，把已经实现的模块装配起来，做完启动对账和第一次健康判定；收到停止信号时按相反的顺序关闭，并用退出码告诉进程管理器结果。
 
 ## Requirements
 
@@ -12,7 +12,7 @@
 | 用法 | 行为 |
 | --- | --- |
 | `tradingagentspro run` | 启动交易侧程序（模拟盘），一直运行到收到停止信号，见「启动顺序」「停止」 |
-| `tradingagentspro --version` | 打印 `tradingagentspro <版本号>`，退出码 0，不读环境变量、不连接任何东西 |
+| `tradingagentspro --version` | 打印 `tradingagentspro <版本号>`，退出码 0，不读配置文件、不连接任何东西 |
 | 没有子命令，或者子命令、选项不认识 | 打印用法，退出码 2，不连接任何东西 |
 
 退出码 SHALL 按下表：
@@ -26,7 +26,7 @@
 本 spec 的场景除非另有说明，都使用下面的基准数据：
 
 - 启动时刻是 2026-10-14T14:00:00Z（周三，美东 10:00，常规交易时段开盘后 30 分钟）
-- 环境变量全部给出，格式正确
+- 配置文件的必填项全部写好，格式正确；模型文件是模板
 - 状态库是一个空的数据库
 - Alpaca 模拟盘：没有持仓，没有挂单，账户设置的请求正常受理
 - OpenD：参考股票 SPY 的行情 10 秒前更新
@@ -37,7 +37,7 @@
 
 - **WHEN** 运行 `tradingagentspro --version`
 - **THEN** 输出 `tradingagentspro <版本号>`，退出码 0
-- **AND** 没有读环境变量，没有连接数据库、Alpaca、OpenD、Discord
+- **AND** 没有读配置文件，没有连接数据库、Alpaca、OpenD、Discord
 
 #### Scenario: 用法不对
 
@@ -52,77 +52,19 @@
 
 #### Scenario: 启动失败的退出码
 
-- **GIVEN** 没有 `APCA_API_SECRET_KEY`
+- **GIVEN** 配置文件的 `alpaca.secret_key` 是空的
 - **WHEN** 运行 `tradingagentspro run`
 - **THEN** 退出码 1
-
-### Requirement: 环境变量
-
-程序 SHALL 在启动的第一步一次读完下表的环境变量，本系统的代码之后不再读环境变量：
-
-| 变量 | 含义 | 格式 |
-| --- | --- | --- |
-| `TRADINGAGENTSPRO_DATABASE_URL` | 状态库的数据库地址，含用户名和密码 | `postgresql://用户:密码@主机:端口/数据库`；驱动一律用 psycopg，写不写 `+psycopg` 都可以 |
-| `APCA_API_KEY_ID` | Alpaca 模拟盘的 key ID | 文本 |
-| `APCA_API_SECRET_KEY` | Alpaca 模拟盘的 secret | 文本 |
-| `DISCORD_BOT_TOKEN` | Discord 机器人的 token | 文本 |
-| `DISCORD_GUILD_ID` | 服务器 ID | 正整数 |
-| `DISCORD_CHANNEL_ID` | 告警和确认的频道 ID | 正整数 |
-| `DISCORD_USER_ID` | 唯一可以操作的用户 ID | 正整数 |
-| `FINNHUB_API_KEY` | Finnhub 的 API key：财报日历、一致预期和行业（finnhub-company-data spec） | 文本 |
-| `SEC_USER_AGENT` | 访问 SEC EDGAR 时的 User-Agent，写明联系方式（sec-filings spec「SEC 配置」） | 文本 |
-
-- 没有设置或为空都算缺少。有缺少的变量时 SHALL 一次列出全部缺少的变量名，启动失败
-- 格式不对时 SHALL 写明是哪个变量，启动失败
-- 错误信息和日志里 MUST NOT 出现这些变量的值。数据库地址只能以密码换成 `***` 的形式出现在日志里
-- 读环境变量失败时，SHALL NOT 连接数据库、Alpaca、OpenD、Discord
-
-#### Scenario: 全部给出
-
-- **WHEN** 正常启动
-- **THEN** 启动完成，九个变量都用上了：用数据库地址连接状态库，用两个 Alpaca 变量调用 Alpaca（模拟盘、新闻和日线），用四个 Discord 变量连接 Discord，用 `FINNHUB_API_KEY` 调用 Finnhub，用 `SEC_USER_AGENT` 访问 SEC EDGAR
-
-#### Scenario: 一次列出全部缺少的变量
-
-- **GIVEN** 没有 `APCA_API_SECRET_KEY`，`DISCORD_USER_ID` 是空字符串
-- **WHEN** 运行 `tradingagentspro run`
-- **THEN** 启动失败，错误日志在一条里列出 `APCA_API_SECRET_KEY` 和 `DISCORD_USER_ID`
-- **AND** 没有连接数据库、Alpaca、OpenD、Discord
-
-#### Scenario: 缺少新的两个变量
-
-- **GIVEN** 没有 `FINNHUB_API_KEY` 和 `SEC_USER_AGENT`
-- **WHEN** 运行 `tradingagentspro run`
-- **THEN** 启动失败，错误日志在一条里列出 `FINNHUB_API_KEY` 和 `SEC_USER_AGENT`
-- **AND** 没有连接数据库、Alpaca、OpenD、Discord
-
-#### Scenario: Discord 的 ID 不是正整数
-
-- **GIVEN** `DISCORD_CHANNEL_ID` 是 `general`
-- **WHEN** 运行 `tradingagentspro run`
-- **THEN** 启动失败，错误日志写明 `DISCORD_CHANNEL_ID` 必须是正整数，没有它的值
-
-#### Scenario: 数据库地址写错
-
-- **GIVEN** `TRADINGAGENTSPRO_DATABASE_URL` 是 `pw-9f3k@db`（不是数据库地址）
-- **WHEN** 运行 `tradingagentspro run`
-- **THEN** 启动失败，错误日志写明 `TRADINGAGENTSPRO_DATABASE_URL` 不是数据库地址
-- **AND** 日志里没有 `pw-9f3k`
-
-#### Scenario: 数据库地址不写驱动
-
-- **GIVEN** 数据库地址写成 `postgresql://用户:密码@主机:端口/数据库`
-- **WHEN** 正常启动
-- **THEN** 用 psycopg 连上数据库，启动完成
 
 ### Requirement: 日志
 
 程序 SHALL 把日志写到 stderr，每条一行开头依次是：UTC 时间（ISO 8601，到毫秒，以 `Z` 结尾）、级别、线程名、logger 名，然后是内容。异常带上异常栈。
 
 - 级别 SHALL 是 INFO：DEBUG 不输出
-- httpx 和 httpcore SHALL 只输出 WARNING 及以上：它们每个请求写一条 INFO，Alpaca 的每次查询都会写
+- httpx、httpcore 和模型 SDK 用的 HTTP 库 SHALL 只输出 WARNING 及以上：它们每个请求写一条 INFO，Alpaca 的每次查询都会写
+- SHALL NOT 输出 PydanticAI 第一次运行时的横幅
 - DBOS 的日志 SHALL 走同一个输出、同一种格式，每条只出现一次
-- 日志 MUST NOT 含有环境变量的值，见「环境变量」
+- 日志 MUST NOT 含有配置文件和模型文件里密钥的值，见 settings-file spec「文件出错」「和默认值不同的项写进日志」
 - 下面这些 SHALL 各写一条日志：程序启动（版本号和模式）、启动顺序里每一步的结果、启动完成、收到停止信号、每一项关闭、已停止。正常的结果用 INFO，有不一致和降级用 WARNING，失败用 ERROR
 - 程序的动作（风控、订单和止损单、人工确认、对账、降级模式、紧急退出、告警，以及启动、停止和崩溃恢复）SHALL 写进程序日志（program-log spec），除了上一条要求的那些行，MUST NOT 再写进这里
 - 这里另外写技术问题：异常和异常栈、券商和行情的超时或断线、取不到数据、Discord 的连接出错，以及 Discord 适配器收到的按下和命令（discord-notification spec、manual-plans spec）
@@ -150,7 +92,7 @@
 
 #### Scenario: 日志里没有密钥
 
-- **GIVEN** `APCA_API_SECRET_KEY`、`DISCORD_BOT_TOKEN` 和数据库密码各是一个不会在别处出现的值
+- **GIVEN** `alpaca.secret_key`、`discord.token` 和数据库密码各是一个不会在别处出现的值
 - **WHEN** 正常启动再停止；另外在 Alpaca 拒绝账户设置（401）时启动；另外在数据库连不上时启动
 - **THEN** 三次运行的 stderr 里都没有这三个值
 - **AND** 日志里的数据库地址，密码是 `***`
@@ -162,13 +104,18 @@
 - **THEN** 程序日志有 P1 的订单变化（已提交变为部分成交）
 - **AND** stderr 里没有这次变化
 
+#### Scenario: 模型调用不写请求日志
+
+- **WHEN** 向模型问一次（model-adapter spec）
+- **THEN** 日志里没有这个 HTTP 请求的 INFO，也没有 PydanticAI 的横幅
+
 ### Requirement: 启动顺序
 
 `tradingagentspro run` SHALL 按下表的顺序启动，前一步完成才做下一步，全部完成后写「启动完成」，然后一直运行到收到停止信号：
 
 | 步骤 | 做什么 | 失败时 |
 | --- | --- | --- |
-| 1 读环境变量 | 见「环境变量」 | 启动失败 |
+| 1 读配置文件 | 见「读配置文件」 | 启动失败 |
 | 2 数据库 | 连接状态库，升级到最新的迁移版本（state-store spec「表的归属和迁移」） | 启动失败 |
 | 3 交易日历 | 按「交易日历的加载范围」加载纽交所日历 | 启动失败 |
 | 4 装配 | 按「模拟盘的装配」建出全部部件，开始连接 OpenD（不等连上） | 启动失败 |
@@ -221,7 +168,8 @@
 
 | 失败 | 步骤 | 例子 |
 | --- | --- | --- |
-| 环境变量缺少或格式不对 | 1 | 见「环境变量」 |
+| 配置文件出错 | 1 | 见 settings-file spec「文件出错」 |
+| 模型文件出错 | 1 | 见 model-config spec「文件出错」 |
 | 数据库连不上 | 2 | 地址或密码不对，PostgreSQL 没有运行 |
 | 数据库升级失败 | 2 | 迁移的建表语句报错；升级在一个事务里，失败时数据库不变 |
 | Alpaca 认证失败 | 5 | key 不对，Alpaca 回答 401 或 403 |
@@ -245,6 +193,13 @@ OpenD 没有运行或没有登录 SHALL NOT 算启动失败，见「第一次健
 - **THEN** 启动失败，错误日志写明数据库这一步和建表的错误
 - **AND** 数据库里没有迁移版本的记录，没有新建别的表
 - **AND** 没有连接 Alpaca、OpenD、Discord
+
+#### Scenario: 模型文件出错
+
+- **GIVEN** 模型文件里 Critic 和 PM 是同一家厂商
+- **WHEN** 运行 `tradingagentspro run`
+- **THEN** 启动失败，错误日志写明读配置文件这一步和配置的错误
+- **AND** 没有连接数据库、Alpaca、OpenD、Discord
 
 #### Scenario: Alpaca 认证失败
 
@@ -278,7 +233,7 @@ OpenD 没有运行或没有登录 SHALL NOT 算启动失败，见「第一次健
 
 ### Requirement: 数据库
 
-程序 SHALL 用 `TRADINGAGENTSPRO_DATABASE_URL` 连接状态库（会话时区 UTC，见 state-store spec），在调用任何外部系统之前升级到最新的迁移版本。DBOS SHALL 用同一个数据库，它的表放在 `dbos` schema 里，和本系统在 `public` 里的表分开。
+程序 SHALL 用配置文件的 `database.url` 连接状态库（会话时区 UTC，见 state-store spec），在调用任何外部系统之前升级到最新的迁移版本。DBOS SHALL 用同一个数据库，它的表放在 `dbos` schema 里，和本系统在 `public` 里的表分开。
 
 #### Scenario: 空数据库
 
@@ -315,21 +270,21 @@ OpenD 没有运行或没有登录 SHALL NOT 算启动失败，见「第一次健
 
 ### Requirement: 模拟盘的装配
 
-`tradingagentspro run` SHALL 按模拟盘装配，各部件如下。全部模块共用同一个系统时钟和同一份交易日历；阈值都取各自配置的默认值，不读配置文件。
+`tradingagentspro run` SHALL 按模拟盘装配，各部件如下。全部模块共用同一个系统时钟和同一份交易日历；阈值都来自配置文件（settings-file spec），写在里面的项用写的值，其余用默认值；模型和预算额度来自模型文件（model-config spec）。下表写的默认值就是这个意思。
 
 | 部件 | 装配 |
 | --- | --- |
-| 券商 | Alpaca 模拟盘：普通订单和止损单两个适配器共用一个客户端，key 来自环境变量；估算费用用的每笔佣金 SHALL 等于风控配置的每笔佣金（默认 2） |
-| 执行模块 | 订单、止损保护、交易记录存在状态库；执行配置的「买单和止损单错开」SHALL 打开（Alpaca 不允许同一只股票的买单和止损卖单同时挂着），其余用默认值 |
+| 券商 | Alpaca 模拟盘：普通订单和止损单两个适配器共用一个客户端，key 来自配置文件；估算费用用的每笔佣金 SHALL 等于风控配置的每笔佣金（默认 2） |
+| 执行模块 | 订单、止损保护、交易记录存在状态库；执行配置的「买单和止损单错开」SHALL 打开（Alpaca 不允许同一只股票的买单和止损卖单同时挂着），这一项不写在配置文件里，其余用默认值 |
 | 风控 | 预留存在状态库；风控配置用默认值 |
 | 股票池、跟进、案件记录 | 记录都存在状态库；股票池配置和跟进配置用默认值 |
-| Agent 网关 | 任务、Result 和费用记录存在状态库；模型配置是替身的模型（stand-ins spec「替身的模型」），调用 agent 的是替身（stand-ins spec），替身配置用默认值；网关配置用默认值（普通预算 2.00、持仓保留预算 1.00、寻股预算 0.50） |
+| Agent 网关 | 任务、Result 和费用记录存在状态库；模型配置和三个预算额度来自模型文件（model-config spec「读到以后怎么用」），调用模型时按厂商分派（model-adapter spec「按厂商分派」），替身（stand-ins spec）的配置用默认值，适配器的配置用默认值（输出上限 16,000）；网关配置的其他项用默认值 |
 | 新闻和公告、公司数据、寻股粗筛 | 新闻源是 Alpaca 新闻、公告源是 SEC EDGAR、公司数据源是 Finnhub，寻股的日线来自 Alpaca、股票列表来自 moomoo（和行情共用一个 OpenD 行情连接）；Alpaca 的 key 和模拟盘的是同一组；记录都存在状态库；各自的配置用默认值，粗筛和股票池用同一份股票池配置 |
-| 快照 | 存在状态库；读下面装配好的事件；快照配置的指数是 SPY、QQQ、VIXY，其余用默认值 |
+| 快照 | 存在状态库；读下面装配好的事件；快照配置用默认值 |
 | 紧急退出、健康监控 | 各自配置的默认值 |
 | 行情 | 行情源是 OpenD（默认 127.0.0.1:11111）；VIX 源是 Cboe；行情配置用默认值（参考股票 SPY） |
 | 到价提醒 | moomoo 到价提醒（moomoo-price-alerts spec），和行情共用一个 OpenD 行情连接 |
-| 通知 | 通知通道是 Discord 机器人，配置来自环境变量；通知配置用默认值（确认超时 30 分钟，模型退出自动执行和紧急退出要确认都关闭） |
+| 通知 | 通知通道是 Discord 机器人，配置来自配置文件；通知配置用默认值（确认超时 30 分钟，模型退出自动执行和紧急退出要确认都关闭） |
 | `/plan` | 方案 ID 用随机 UUID；提交接口是下单流程的（order-flow spec「提交方案」） |
 | 确认按钮的回调 | 紧急退出流程在等这个方案的确认时送给紧急退出流程（emergency-exit-flow spec「紧急退出的人工确认」），否则送给下单流程（order-flow spec「按钮的结果只送给在等确认的方案」） |
 | 锁 | 全程序一把进程内的锁（session-patrol spec「执行模块和风控的调用串行」）；巡检（包括其中的紧急退出）和下单流程用的是同一把 |
@@ -537,7 +492,7 @@ Alpaca 账户设置之后、Discord 和 DBOS 之前，程序 SHALL 让执行模�
 
 #### Scenario: 启动时持仓保留预算已经用完
 
-- **GIVEN** 状态库里今天记到持仓保留预算的费用已经是 1.00
+- **GIVEN** 状态库里今天记到持仓保留预算的费用已经到模型文件里持仓保留预算的额度
 - **WHEN** 正常启动
 - **THEN** 进入降级模式，异常的检查是调用预算，有一条 WARNING 写明
 - **AND** Discord 连上以后、DBOS 启动以前收到一条告警，写明启动时处于降级模式、调用预算
@@ -607,7 +562,7 @@ Discord 启动之后，程序 SHALL 用状态库所在的数据库启动 DBOS，
 程序启动完成以后收到 SIGTERM 或 SIGINT，SHALL：
 
 1. 写一条 INFO：收到停止信号，开始停止
-2. 按打开的相反顺序关闭：盘中巡检 → 收盘心跳 → 事件检测 → 排队运行 → DBOS → Discord → OpenD 行情连接 → 数据库连接。每一项关闭写一条 INFO。盘中巡检按 session-patrol spec「巡检的开始、间隔和停止」停下：正在做的那一项做完才算关闭；收盘心跳按 close-heartbeat spec「什么时候做」停下：正在做的判断做完才算关闭，已经开始的收盘心跳不等；事件检测按 event-detection spec「什么时候做一轮」、排队运行按 queue-runner spec「什么时候做一轮」停下：正在做的一轮做完才算关闭
+2. 按打开的相反顺序关闭：盘中巡检 → 收盘心跳 → 事件检测 → 排队运行 → DBOS → Discord → OpenD 行情连接 → 模型调用 → 数据库连接。每一项关闭写一条 INFO。盘中巡检按 session-patrol spec「巡检的开始、间隔和停止」停下：正在做的那一项做完才算关闭；收盘心跳按 close-heartbeat spec「什么时候做」停下：正在做的判断做完才算关闭，已经开始的收盘心跳不等；事件检测按 event-detection spec「什么时候做一轮」、排队运行按 queue-runner spec「什么时候做一轮」停下：正在做的一轮做完才算关闭
 3. 某一项关闭出错时写 ERROR（带异常栈），接着关闭下一项
 4. 全部关完写「已停止」，以退出码 0 立即结束进程：SHALL NOT 等还在等确认、等开盘、等重试的下单流程、运行中的案件和没做完的收盘心跳（它们由下次启动的 DBOS 恢复，order-flow spec「持久化和恢复」，case-workflow spec「崩溃恢复」，close-heartbeat spec「同一天只做一次」）
 
@@ -652,3 +607,47 @@ Discord 启动之后，程序 SHALL 用状态库所在的数据库启动 DBOS，
 - **WHEN** 收到 SIGTERM
 - **THEN** 按顺序关闭，写出已停止，退出码 0，没有等到截止时刻
 - **AND** 写出已停止以后进程立即结束；这个方案的下单流程由下次启动的 DBOS 恢复（order-flow spec「持久化和恢复」）
+
+### Requirement: 读配置文件
+
+程序 SHALL 在启动的第一步生成还不存在的配置文件和模型文件，再一次读完这两个文件：配置文件见 settings-file spec，模型文件见 model-config spec。本系统的代码 MUST NOT 读环境变量。
+
+- 读配置文件失败时，SHALL NOT 连接数据库、Alpaca、OpenD、Discord
+- 全程序测试 SHALL 用自己的配置文件和模型文件，不碰工作目录下的 `config/`：里面可能有真的密钥
+
+#### Scenario: 全部写好
+
+- **WHEN** 正常启动
+- **THEN** 启动完成，九个必填项都用上了：用数据库地址连接状态库，用两项 Alpaca 的 key 调用 Alpaca（模拟盘、新闻和日线），用四项 Discord 的配置连接 Discord，用 Finnhub 的 key 调用 Finnhub，用 User-Agent 访问 SEC EDGAR
+
+#### Scenario: 一次列出全部缺少的项
+
+- **GIVEN** 配置文件的 `alpaca.secret_key` 没有写，`discord.user_id` 是空字符串
+- **WHEN** 运行 `tradingagentspro run`
+- **THEN** 启动失败，错误日志写明读配置文件这一步，在一条里列出 `alpaca.secret_key` 和 `discord.user_id`
+- **AND** 没有连接数据库、Alpaca、OpenD、Discord
+
+#### Scenario: 数据库地址写错
+
+- **GIVEN** `database.url` 是 `pw-9f3k@db`（不是数据库地址）
+- **WHEN** 运行 `tradingagentspro run`
+- **THEN** 启动失败，错误日志写明 `database.url` 不是数据库地址
+- **AND** 日志里没有 `pw-9f3k`
+
+#### Scenario: 数据库地址不写驱动
+
+- **GIVEN** 数据库地址写成 `postgresql://用户:密码@主机:端口/数据库`
+- **WHEN** 正常启动
+- **THEN** 用 psycopg 连上数据库，启动完成
+
+#### Scenario: 两个文件都生成
+
+- **GIVEN** 配置文件和模型文件都不存在
+- **WHEN** 运行 `tradingagentspro run`
+- **THEN** 两个文件都生成了，启动失败，错误日志列出九个必填项
+
+#### Scenario: 环境变量不起作用
+
+- **GIVEN** 配置文件的必填项全部写好，进程的环境变量里有一个不同的 `APCA_API_SECRET_KEY`
+- **WHEN** 正常启动
+- **THEN** 用配置文件里的 secret 调用 Alpaca

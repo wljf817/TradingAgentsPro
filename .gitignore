@@ -13,6 +13,7 @@ wheels/
 .env
 .env.*
 !.env.example
+config/
 
 # Tool caches
 .pytest_cache/

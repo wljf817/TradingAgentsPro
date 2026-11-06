@@ -1,17 +1,8 @@
-"""替身的配置和替身的模型配置，见 stand-ins spec「替身的配置」「替身的模型」和 add-stand-ins 的
-design D7、D11。
-"""
+"""替身的配置，见 stand-ins spec「替身的配置」和 add-stand-ins 的 design D7、D11。"""
 
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt
-
-from tradingagentspro.contracts.agent import Agent
-from tradingagentspro.contracts.model import ModelRef
-from tradingagentspro.modules.gateway import AgentModels, ModelAssignments, ModelPrice
-
-_VENDOR = "standin"
-_CRITIC_VENDOR = "standin-critic"  # 和 PM 不同厂商，满足厂商校验
 
 
 class StandInConfig(BaseModel):
@@ -36,16 +27,3 @@ class StandInConfig(BaseModel):
     catalyst_sessions: PositiveInt = 8
     # 寻股加入粗筛名单的前几只
     exploration_additions: PositiveInt = 2
-
-
-def stand_in_models() -> ModelAssignments:
-    """替身的模型配置：每个 agent 一个模型，没有备用模型，单价 0。"""
-    models = {agent: ModelRef(vendor=_VENDOR, name=agent.value) for agent in Agent}
-    models[Agent.CRITIC] = ModelRef(vendor=_CRITIC_VENDOR, name=Agent.CRITIC.value)
-    return ModelAssignments(
-        agents={agent: AgentModels(primary=model) for agent, model in models.items()},
-        prices=tuple(
-            ModelPrice(model=model, input_price=Decimal(0), output_price=Decimal(0))
-            for model in models.values()
-        ),
-    )

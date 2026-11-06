@@ -76,7 +76,7 @@ class SnapshotConfig(BaseModel):
 
     # 每份快照都带这些指数的行情
     indexes: tuple[Annotated[str, Field(min_length=1)], ...] = Field(
-        default=("SPY", "QQQ"), min_length=1
+        default=("SPY", "QQQ", "VIXY"), min_length=1
     )
     # 新闻回看的交易日数，含当前交易日
     news_sessions: int = Field(default=5, gt=0)

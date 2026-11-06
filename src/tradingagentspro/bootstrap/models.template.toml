@@ -1,0 +1,54 @@
+# 模型文件的模板：程序第一次启动时把它复制成 config/models.toml，之后只改那一份，含义见 model-config spec。
+# 模板进 git，这里不写 key；config/models.toml 不进 git，地址、模型和 key 都写在那里。
+# 模型文件在启动时读一次，改了要重启才生效。模型写作"厂商/模型名"。
+
+# 三个预算的额度：每个交易日多少美元
+[budgets]
+general = 20.00
+reserve = 10.00
+exploration = 5.00
+
+# 厂商：interface 是 anthropic、openai（OpenAI 兼容）或 standin（替身）。真实的厂商这样写：
+#
+# [vendors.anthropic]
+# interface = "anthropic"
+# base_url = "https://api.anthropic.com"
+# api_key = ""
+#
+# [vendors.deepseek]
+# interface = "openai"
+# base_url = "https://api.deepseek.com"
+# api_key = ""
+[vendors.standin]
+interface = "standin"
+
+[vendors.standin-critic]
+interface = "standin"
+
+# 每个 agent 的主模型和按顺序的备用模型（fallbacks）。Critic 和 PM 不能是同一家厂商
+[agents.pm]
+primary = "standin/pm"
+
+[agents.news]
+primary = "standin/news"
+
+[agents.quant]
+primary = "standin/quant"
+
+[agents.fundamentals]
+primary = "standin/fundamentals"
+
+[agents.critic]
+primary = "standin-critic/critic"
+
+[agents.reviewer]
+primary = "standin/reviewer"
+
+# 模型的单价：美元/百万 token
+[prices]
+"standin/pm" = { input = 0, output = 0 }
+"standin/news" = { input = 0, output = 0 }
+"standin/quant" = { input = 0, output = 0 }
+"standin/fundamentals" = { input = 0, output = 0 }
+"standin-critic/critic" = { input = 0, output = 0 }
+"standin/reviewer" = { input = 0, output = 0 }

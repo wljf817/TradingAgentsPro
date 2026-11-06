@@ -43,7 +43,7 @@
 
 ### Requirement: Cboe 数据源
 
-适配器 SHALL 读 `https://cdn-api.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv`，第一行是表头 DATE、OPEN、HIGH、LOW、CLOSE，日期写成 MM/DD/YYYY，把每一行映射为日期和收盘值，收盘值用 Decimal。
+适配器 SHALL 读配置的地址（默认 `https://cdn-api.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv`，不能为空），第一行是表头 DATE、OPEN、HIGH、LOW、CLOSE，日期写成 MM/DD/YYYY，把每一行映射为日期和收盘值，收盘值用 Decimal。
 
 下面的情况 SHALL 报 VIX 不可用，不重试：超时、连不上、回复不是 200、表头不对、某一行的日期或收盘值读不出来、没有数据行。
 

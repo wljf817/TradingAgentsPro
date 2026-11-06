@@ -23,8 +23,12 @@ class SecConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    # 写明联系方式，由人填写；部署时放在环境变量 SEC_USER_AGENT 里
+    # 写明联系方式，由人填写
     user_agent: str = Field(min_length=1)
+    # 代码表和公告原文的地址
+    base_url: str = Field(default=SEC_URL, min_length=1)
+    # 公司公告列表的地址
+    data_url: str = Field(default=SEC_DATA_URL, min_length=1)
     # 每次请求等多久没有响应就算超时
     timeout: timedelta = Field(default=timedelta(seconds=10), gt=timedelta(0))
     # SEC 的上限是每秒 10 次，超过就封 10 分钟
@@ -93,6 +97,8 @@ class SecFilingSource:
             timeout=config.timeout.total_seconds(),
             transport=transport,
         )
+        self._base_url = config.base_url
+        self._data_url = config.data_url
         self._interval = timedelta(seconds=1) / config.max_requests_per_second
         self._pause = pause
         self._lock = threading.Lock()  # 一次调用从头到尾持有：请求依次发出，代码表不被同时改
@@ -131,12 +137,12 @@ class SecFilingSource:
         return {cik: tuple(members) for cik, members in groups.items()}
 
     def _download_ciks(self) -> dict[str, int]:
-        response = self._get(f"{SEC_URL}/files/company_tickers.json")
+        response = self._get(f"{self._base_url}/files/company_tickers.json")
         return {e.ticker: e.cik_str for e in _TICKERS.validate_json(response.content).values()}
 
     def _read(self, cik: int, members: tuple[str, ...], since: datetime) -> Iterator[Filing]:
         """一家公司 since（含）以来受理的公告，标注 members。"""
-        response = self._get(f"{SEC_DATA_URL}/submissions/CIK{cik:010d}.json")
+        response = self._get(f"{self._data_url}/submissions/CIK{cik:010d}.json")
         recent = _Submissions.model_validate_json(response.content).filings.recent
         rows = zip(
             recent.accession_number,
@@ -149,7 +155,7 @@ class SecFilingSource:
         for accession, form, acceptance, items, document in rows:
             accepted_at = datetime.fromisoformat(acceptance)
             if accepted_at >= since:
-                folder = f"{SEC_URL}/Archives/edgar/data/{cik}/{accession.replace('-', '')}"
+                folder = f"{self._base_url}/Archives/edgar/data/{cik}/{accession.replace('-', '')}"
                 yield Filing(
                     accession_number=accession,
                     symbols=members,

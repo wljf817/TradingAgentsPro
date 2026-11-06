@@ -25,6 +25,8 @@ class CboeConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    # VIX 历史文件的地址
+    url: str = Field(default=CBOE_VIX_URL, min_length=1)
     # 每次请求等多久没有响应就算超时
     timeout: timedelta = Field(default=timedelta(seconds=10), gt=timedelta(0))
 
@@ -33,12 +35,13 @@ class CboeVixSource:
     """满足 VixSource：每次调用读一次文件。"""
 
     def __init__(self, config: CboeConfig, *, transport: httpx.BaseTransport | None = None) -> None:
+        self._url = config.url
         self._http = httpx.Client(timeout=config.timeout.total_seconds(), transport=transport)
 
     def closes(self) -> tuple[VixClose, ...]:
         """文件里的全部收盘值，按文件的顺序。读不到或格式不对时抛 VixUnavailableError。"""
         try:
-            response = self._http.get(CBOE_VIX_URL)
+            response = self._http.get(self._url)
         except httpx.TransportError as error:  # 超时也是 TransportError
             raise VixUnavailableError(f"Cboe VIX 文件：{error}") from error
         if response.status_code != httpx.codes.OK:

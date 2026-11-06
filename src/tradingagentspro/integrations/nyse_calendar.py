@@ -3,12 +3,20 @@
 from datetime import UTC, date, timedelta
 
 import exchange_calendars
+from pydantic import BaseModel, ConfigDict, Field
 
 from tradingagentspro.shared.trading_calendar import TradingCalendar, TradingSession
 
-# 默认加载范围：起点固定；终点是启动时刻往后 DEFAULT_LOOKAHEAD，远超最长的前瞻（60 个交易日）。
-DEFAULT_FIRST_DAY = date(2020, 1, 1)
-DEFAULT_LOOKAHEAD = timedelta(days=730)
+
+class CalendarConfig(BaseModel):
+    """交易日历的加载范围，含义见 bootstrap spec「交易日历的加载范围」。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # 交易日历的起点
+    first_day: date = date(2020, 1, 1)
+    # 交易日历的终点 = 启动时刻往后这么久，远超最长的前瞻（60 个交易日）
+    lookahead: timedelta = Field(default=timedelta(days=730), gt=timedelta(0))
 
 
 def load_nyse_calendar(start: date, end: date) -> TradingCalendar:

@@ -29,7 +29,7 @@ _TIMES: Final[Mapping[str, ReleaseTime]] = {
 
 
 class FinnhubConfig(BaseModel):
-    """Finnhub 的配置，见 finnhub-company-data spec「Finnhub 配置」。key 由环境变量提供。"""
+    """Finnhub 的配置，见 finnhub-company-data spec「Finnhub 配置」。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

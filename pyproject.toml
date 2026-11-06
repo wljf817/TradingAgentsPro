@@ -13,6 +13,7 @@ dependencies = [
     "moomoo-api>=10.11.7108",
     "psycopg[binary]>=3.3.6",
     "pydantic>=2.13.5",
+    "pydantic-ai-slim[anthropic,openai]>=2.66.0",
     "sqlalchemy>=2.1.3",
 ]
 

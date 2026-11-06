@@ -56,42 +56,42 @@
 
 ### Requirement: Discord 配置
 
-Discord 适配器的配置 SHALL 如下，前 4 项从环境变量读取：
+Discord 适配器的配置 SHALL 如下，都写在配置文件的 `discord` 一节（settings-file spec），前 4 项是必填项：
 
-| 配置 | 环境变量 | 要求 |
+| 配置 | 配置文件里的项 | 要求 |
 | --- | --- | --- |
-| 机器人 token | `DISCORD_BOT_TOKEN` | 必填，非空 |
-| 服务器 ID | `DISCORD_GUILD_ID` | 必填，正整数 |
-| 频道 ID | `DISCORD_CHANNEL_ID` | 必填，正整数；告警和确认都发到这个频道 |
-| 用户 ID | `DISCORD_USER_ID` | 必填，正整数；只接受这个用户按按钮，告警和确认都 @ 他 |
-| 连接超时 | 无 | 默认 30 秒，大于 0 |
-| 发送超时 | 无 | 默认 10 秒，大于 0 |
+| 机器人 token | `discord.token` | 必填，非空 |
+| 服务器 ID | `discord.guild_id` | 必填，正整数 |
+| 频道 ID | `discord.channel_id` | 必填，正整数；告警和确认都发到这个频道 |
+| 用户 ID | `discord.user_id` | 必填，正整数；只接受这个用户按按钮，告警和确认都 @ 他 |
+| 连接超时 | `discord.connect_timeout` | 默认 30 秒，大于 0 |
+| 发送超时 | `discord.send_timeout` | 默认 10 秒，大于 0 |
 
-环境变量没有或者为空，都算缺少。缺少时 SHALL 报配置错误，列出缺少的全部变量名。
+必填项没有写或者为空，都算缺少。缺少时 SHALL 报配置错误，列出缺少的全部项。
 
 token MUST NOT 出现在代码、仓库里的文件、日志、错误信息、配置的字符串形式和测试输出里。
 
-#### Scenario: 4 个环境变量齐全
+#### Scenario: 4 个必填项齐全
 
-- **GIVEN** 环境变量 `DISCORD_BOT_TOKEN`=某个 token，`DISCORD_GUILD_ID`=3003，`DISCORD_CHANNEL_ID`=2002，`DISCORD_USER_ID`=1001
-- **WHEN** 从环境变量读配置
+- **GIVEN** 配置文件的 `discord.token` 是某个 token，`discord.guild_id` 3003，`discord.channel_id` 2002，`discord.user_id` 1001
+- **WHEN** 读配置文件
 - **THEN** 服务器 3003、频道 2002、用户 1001，连接超时 30 秒，发送超时 10 秒
 
-#### Scenario: 缺少环境变量
+#### Scenario: 缺少必填项
 
-- **GIVEN** 没有 `DISCORD_GUILD_ID`，`DISCORD_USER_ID` 为空字符串，另外两个齐全
-- **WHEN** 从环境变量读配置
-- **THEN** 报配置错误，错误信息里有 `DISCORD_GUILD_ID` 和 `DISCORD_USER_ID`，没有 token
+- **GIVEN** 没有 `discord.guild_id`，`discord.user_id` 为空字符串，另外两项齐全
+- **WHEN** 读配置文件
+- **THEN** 报配置错误，错误信息里有 `discord.guild_id` 和 `discord.user_id`，没有 token
 
 #### Scenario: ID 不是正整数
 
-- **WHEN** `DISCORD_CHANNEL_ID` 是 "general" 或 "0"
-- **THEN** 报配置错误，错误信息里有 `DISCORD_CHANNEL_ID`，没有 token
+- **WHEN** `discord.channel_id` 是 "general" 或 0
+- **THEN** 报配置错误，错误信息里有 `discord.channel_id`，没有 token
 
 #### Scenario: token 不外露
 
 - **GIVEN** token 是 "abc.def.ghi"
-- **WHEN** 读出配置，把配置转成字符串，并在缺少或非法的变量上报错
+- **WHEN** 读出配置，把配置转成字符串，并在缺少或非法的项上报错
 - **THEN** 字符串形式和错误信息里都没有 "abc.def.ghi"
 
 #### Scenario: 超时不是正数

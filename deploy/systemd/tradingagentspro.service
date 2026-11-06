@@ -12,7 +12,6 @@ Type=exec
 User=tradingagentspro
 Group=tradingagentspro
 WorkingDirectory=/opt/tradingagentspro/app
-EnvironmentFile=/etc/tradingagentspro/tradingagentspro.env
 # moomoo SDK 往 stdout 写日志：不按块缓冲，journald 里的先后才对
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/tradingagentspro/app/.venv/bin/tradingagentspro run

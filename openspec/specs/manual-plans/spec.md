@@ -285,7 +285,7 @@ Discord 适配器启动时 SHALL 在配置的服务器里注册 `/plan`，注册
 | --- | --- | --- |
 | 提交超时 | 60 秒 | 大于 0，小于 15 分钟（Discord 只在应答后 15 分钟内接受回复） |
 
-提交超时是 Discord 适配器的配置，不从环境变量读。
+提交超时是 Discord 适配器的配置，写在配置文件的 `discord.submit_timeout`（settings-file spec）。
 
 #### Scenario: 提交接口抛错
 

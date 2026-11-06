@@ -31,7 +31,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     configure_logging()
     stop = threading.Event()
     stop_on_signals(stop)
-    return run(os.environ, stop)
+    return run(stop)
 
 
 def entry() -> None:

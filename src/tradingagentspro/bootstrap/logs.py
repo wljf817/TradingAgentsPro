@@ -11,7 +11,7 @@ from typing import TextIO
 FORMAT = "%(asctime)s %(levelname)s [%(threadName)s] %(name)s: %(message)s"
 
 # 每个请求写一条 INFO 的库：只输出 WARNING 及以上
-QUIET = ("httpx", "httpcore")
+QUIET = ("httpx", "httpcore", "httpx2", "httpcore2")
 
 
 class UtcFormatter(logging.Formatter):
