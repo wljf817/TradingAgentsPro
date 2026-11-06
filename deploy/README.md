@@ -126,31 +126,6 @@ cd /opt/tradingagentspro/app/deploy && sudo docker compose exec postgres psql --
 
 `config/settings.toml` holds the app's parameters and secrets. Items whose value is `""` are required. The rest are comments showing the default: remove the leading `#` to set one. Durations are in seconds. Restart to apply; the log lists the items that differ from their defaults, and a mistake fails startup with the items named. The file is not in backups, so write it again on a new host.
 
-## Move to the settings file
-
-Once, on a host still using `/etc/tradingagentspro/tradingagentspro.env`. The app no longer reads environment variables, so do this instead of a normal update.
-
-1. Back up and stop the app (`# admin`): `sudo systemctl start tradingagentspro-backup`, `sudo systemctl stop tradingagentspro`
-2. Update and generate the file (`# service`): `cd ~/app && git pull --ff-only && uv sync --locked --no-dev`, then `.venv/bin/tradingagentspro run`. It lists the nine required items and exits without connecting to anything
-3. Copy the nine values from `sudo cat /etc/tradingagentspro/tradingagentspro.env` into `config/settings.toml`, inside the quotes:
-
-   | Old variable | New item |
-   | --- | --- |
-   | `TRADINGAGENTSPRO_DATABASE_URL` | `[database]` `url` |
-   | `APCA_API_KEY_ID` | `[alpaca]` `key_id` |
-   | `APCA_API_SECRET_KEY` | `[alpaca]` `secret_key` |
-   | `DISCORD_BOT_TOKEN` | `[discord]` `token` |
-   | `DISCORD_GUILD_ID` | `[discord]` `guild_id` |
-   | `DISCORD_CHANNEL_ID` | `[discord]` `channel_id` |
-   | `DISCORD_USER_ID` | `[discord]` `user_id` |
-   | `FINNHUB_API_KEY` | `[finnhub]` `api_key` |
-   | `SEC_USER_AGENT` | `[sec]` `user_agent` |
-
-4. Install the new unit and start (`# admin`): `sudo install -m 644 /opt/tradingagentspro/app/deploy/systemd/tradingagentspro.service /etc/systemd/system/`, `sudo systemctl daemon-reload`, `sudo systemctl start tradingagentspro`. The log shows `启动完成`
-5. Once it runs, delete the old file: `sudo rm /etc/tradingagentspro/tradingagentspro.env`
-
-Rollback before step 5: check out the previous commit, sync, reinstall the old unit, `daemon-reload`, start.
-
 ## Update
 
 1. Back up: `sudo systemctl start tradingagentspro-backup`
