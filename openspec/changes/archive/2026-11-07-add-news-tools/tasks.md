@@ -24,4 +24,4 @@
 ## 4. 文档和冒烟
 
 - [x] 4.1 完整版 Proposal「News」的工具规则：改写补抓那一条，写上默认范围、条数和最早范围、列表返回的新闻可以引用
-- [ ] 4.2 主机冒烟：提交部署以后，用部署的代码和生产 venv、真实 Alpaca、deepseek-flash 和 Haiku 5.5，内存存储，key 走 ssh stdin，不留东西：两个模型都调用 `list_news`、`read_news` 并交回引用工具内容的信号；没有正文的稿件和 90 天的长范围各看一次
+- [x] 4.2 主机冒烟：提交部署以后，用部署的代码和生产 venv、真实 Alpaca、deepseek-flash 和 Haiku 5.5，内存存储，key 走 ssh stdin，不留东西：两个模型都调用 `list_news`、`read_news` 并交回引用工具内容的信号；没有正文的稿件和 90 天的长范围各看一次

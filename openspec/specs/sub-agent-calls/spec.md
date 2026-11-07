@@ -109,9 +109,9 @@ News 和 Fundamentals SHALL 只用下面两个工具交出结果：
 
 - 这些 ID SHALL NOT 带快照版本的前缀，MUST NOT 和快照的条目 ID 相同
 - 只算这次运行：换模型或者重试时重新开始，失败的运行返回过的内容不算
-- 读取工具按子 agent 注册，News 和 Fundamentals 现在没有读取工具
+- 读取工具按子 agent 注册：News 的见 news-tools spec，Fundamentals 现在没有读取工具
 
-本 requirement 的场景里，News 注册了读取工具 lookup，返回 `news/1` 的内容。
+本 requirement 的场景里，News 注册的读取工具换成 lookup，返回 `news/1` 的内容。
 
 #### Scenario: 调用工具以后交回
 
