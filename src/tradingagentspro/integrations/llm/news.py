@@ -132,7 +132,8 @@ def _entry_id(article: NewsArticle) -> str:
     return f"news/{article.id}"
 
 
-def _plain_text(html: str) -> str:
+def plain_text(html: str) -> str:
+    """新闻正文去掉 HTML，见 news-tools spec「读一条新闻」；文字稿也用它。"""
     parser = _TextParser()
     parser.feed(html)
     parser.close()
@@ -170,7 +171,7 @@ def _listing(search: NewsSearch) -> _Listing:
                 source=article.source,
                 published_at=article.published_at,
                 tagged_symbols=len(article.symbols),
-                has_body=bool(_plain_text(article.content)),
+                has_body=bool(plain_text(article.content)),
             )
             for article in search.articles
         ),
@@ -180,7 +181,7 @@ def _listing(search: NewsSearch) -> _Listing:
 
 
 def _article(article: NewsArticle) -> _Article:
-    body = _plain_text(article.content)
+    body = plain_text(article.content)
     return _Article(
         entry_id=_entry_id(article),
         headline=article.headline,

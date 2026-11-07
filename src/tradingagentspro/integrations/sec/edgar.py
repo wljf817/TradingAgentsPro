@@ -1,7 +1,7 @@
 """SEC EDGAR 公告源：用 SEC 的股票代码表和每家公司的 submissions 实现新闻和公告模块的
-FilingSource。
+FilingSource；公告的文件从公告的目录页读。
 
-见 sec-filings spec 和 add-news-and-filings 的 design D6、D7。
+见 sec-filings spec、add-news-and-filings 的 design D6、D7 和 add-filing-tools 的 design D6。
 """
 
 import threading
@@ -11,7 +11,8 @@ from datetime import datetime, timedelta
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from tradingagentspro.contracts.news import Filing
+from tradingagentspro.contracts.news import Filing, FilingDocument
+from tradingagentspro.integrations.sec.documents import files_to_read, plain_text
 from tradingagentspro.modules.news import SourceUnavailableError
 
 SEC_URL = "https://www.sec.gov"
@@ -77,7 +78,8 @@ def _wait(duration: timedelta) -> None:
 
 
 class SecFilingSource:
-    """满足 FilingSource：按股票查 CIK，读每家公司的 submissions，取起始时刻以来受理的公告。
+    """满足 FilingSource：按股票查 CIK，读每家公司的 submissions，取起始时刻以来受理的公告；读一份
+    公告的目录页和要读的文件。
 
     同一个进程里对 SEC 的请求一个接一个地发，每个请求结束以后等 1 / 每秒最多请求数 秒。调用失败按
     sec-filings spec「公告请求失败的分类」处理：超时、连不上、403、429 和 5xx 抛
@@ -118,6 +120,20 @@ class SecFilingSource:
                         filing = known.model_copy(update={"symbols": merged})
                     found[filing.accession_number] = filing
             return tuple(found.values())
+
+    def documents(self, filing: Filing) -> tuple[FilingDocument, ...]:
+        """这份公告要读的文件和纯文本，按目录页的顺序；目录页在主文件那一级 accession 目录下。"""
+        folder = _folder(filing)
+        with self._lock:
+            index = self._get(f"{folder}/{filing.accession_number}-index.htm")
+            return tuple(
+                FilingDocument(
+                    doc_type=doc_type,
+                    name=name,
+                    text=plain_text(name, self._get(f"{folder}/{name}").text),
+                )
+                for doc_type, name in files_to_read(index.text)
+            )
 
     def _companies(self, symbols: Sequence[str]) -> dict[int, tuple[str, ...]]:
         """按 CIK 分组的股票，组内按调用方给出的顺序；查不到的股票不在里面。
@@ -178,6 +194,13 @@ class SecFilingSource:
         if response.status_code in (403, 429) or response.status_code >= 500:
             raise SourceUnavailableError(f"SEC GET {url}：{response.status_code}")
         return response.raise_for_status()
+
+
+def _folder(filing: Filing) -> str:
+    """主文件地址里 accession number 去掉横线的那一级目录。"""
+    folder = filing.accession_number.replace("-", "")
+    prefix, _, _ = filing.url.partition(f"/{folder}/")
+    return f"{prefix}/{folder}"
 
 
 def _sec_ticker(symbol: str) -> str:

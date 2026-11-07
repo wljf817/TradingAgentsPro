@@ -1,6 +1,6 @@
 """新闻和公告的条目：新闻和公告模块存下它们，事件检测、状态库快照和 Agent 网关读它们。
 
-见 news-and-filings spec「新闻和公告的条目」和 add-news-and-filings 的 design D2。
+见 news-and-filings spec「新闻和公告的条目」「公告的文件」和 add-news-and-filings 的 design D2。
 """
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict
@@ -33,3 +33,13 @@ class Filing(BaseModel):
     items: tuple[str, ...]  # 8-K 和 8-K/A 列出的 item，比如 2.02；别的表单为空
     accepted_at: AwareDatetime  # SEC 受理的时刻
     url: str  # 主文件地址
+
+
+class FilingDocument(BaseModel):
+    """一份公告里的一个文件，转成了纯文本，见 sec-filings spec「公告的文件」。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    doc_type: str  # 文件类型，目录页的写法，比如 8-K、EX-99.1
+    name: str  # 文件名，比如 ex991.htm
+    text: str  # 纯文本；起点和查找的位置按它算

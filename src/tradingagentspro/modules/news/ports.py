@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol
 
-from tradingagentspro.contracts.news import Filing, NewsArticle
+from tradingagentspro.contracts.news import Filing, FilingDocument, NewsArticle
 
 
 class SourceUnavailableError(RuntimeError):
@@ -37,9 +37,13 @@ class FilingSource(Protocol):
         """这些股票所属公司 since（含）以来受理的公告；查不到公司的股票没有公告。"""
         ...
 
+    def documents(self, filing: Filing) -> Sequence[FilingDocument]:
+        """这份公告要读的文件，按公告里的顺序，第一个是主文件；没有要读的文件时为空。"""
+        ...
+
 
 class NewsStore(Protocol):
-    """新闻和公告的存储：只追加，一条一行，见 news-and-filings spec「新闻和公告的存储」。
+    """新闻、公告和公告文件的存储：只追加，一条一行，见 news-and-filings spec「新闻和公告的存储」。
 
     数据库的错误和读不出来的条目原样抛出，不当作没有条目，也不当作已经存下。
     """
@@ -65,4 +69,16 @@ class NewsStore(Protocol):
 
     def filings(self, symbol: str, since: datetime) -> tuple[Filing, ...]:
         """标注了 symbol、受理时刻不早于 since 的公告，按受理时刻、accession number 排序。"""
+        ...
+
+    def filing(self, accession_number: str) -> Filing | None:
+        """这个 accession number 的公告；没有时为 None。"""
+        ...
+
+    def add_documents(self, accession_number: str, documents: Sequence[FilingDocument]) -> None:
+        """写入这份公告的文件，按传入的顺序；已经存过的不写、不改。"""
+        ...
+
+    def documents(self, accession_number: str) -> tuple[FilingDocument, ...]:
+        """存下的这份公告的文件，按存入的顺序；没有时为空。"""
         ...

@@ -33,7 +33,7 @@ from tradingagentspro.modules.gateway import GatewayConfig
 from tradingagentspro.modules.health import HealthConfig
 from tradingagentspro.modules.heartbeat import HeartbeatConfig
 from tradingagentspro.modules.marketdata import MarketDataConfig
-from tradingagentspro.modules.news import NewsConfig
+from tradingagentspro.modules.news import FilingConfig, NewsConfig
 from tradingagentspro.modules.notification import NotificationConfig
 from tradingagentspro.modules.risk import RiskConfig
 from tradingagentspro.modules.scheduler import SchedulerConfig
@@ -105,6 +105,7 @@ class Settings(BaseModel):
     alpaca_bars: AlpacaBarsConfig
     alpaca_news: AlpacaNewsConfig
     news: NewsConfig = NewsConfig()
+    filings: FilingConfig = FilingConfig()
     cboe: CboeConfig = CboeConfig()
     moomoo: MoomooConfig = MoomooConfig()
     moomoo_securities: MoomooSecuritiesConfig = MoomooSecuritiesConfig()

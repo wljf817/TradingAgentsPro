@@ -86,8 +86,8 @@ from tradingagentspro.integrations.llm import (
     SubAgentSetup,
     ToolBuilder,
     VendorRouter,
+    filing_tools,
     news_tools,
-    no_tools,
 )
 from tradingagentspro.integrations.moomoo import (
     MoomooConfig,
@@ -148,6 +148,7 @@ from tradingagentspro.modules.marketdata import (
     VixSource,
 )
 from tradingagentspro.modules.news import (
+    FilingLookupService,
     FilingSource,
     NewsLookupService,
     NewsService,
@@ -387,11 +388,15 @@ def _sub_agent_setup(charter: Charter, prompt_file: Path, tools: ToolBuilder) ->
     return SubAgentSetup(f"{charter.text}\n\n{load_role_prompt(prompt_file)}", tools)
 
 
-def sub_agent_setups(charter: Charter, news: NewsLookupService) -> dict[SubAgent, SubAgentSetup]:
-    """接上真实模型的子 agent：News 有新闻工具，Fundamentals 还没有读取工具。"""
+def sub_agent_setups(
+    charter: Charter, news: NewsLookupService, filings: FilingLookupService
+) -> dict[SubAgent, SubAgentSetup]:
+    """接上真实模型的子 agent：News 有新闻工具，Fundamentals 有公告工具。"""
     return {
         SubAgent.NEWS: _sub_agent_setup(charter, NEWS_PROMPT_FILE, news_tools(news)),
-        SubAgent.FUNDAMENTALS: _sub_agent_setup(charter, FUNDAMENTALS_PROMPT_FILE, no_tools),
+        SubAgent.FUNDAMENTALS: _sub_agent_setup(
+            charter, FUNDAMENTALS_PROMPT_FILE, filing_tools(filings)
+        ),
     }
 
 
@@ -400,13 +405,28 @@ def news_lookup(news: NewsService, clock: Clock, settings: Settings) -> NewsLook
     return NewsLookupService(news, clock, settings.news, settings.event_detection.lookback)
 
 
+def filing_lookup(
+    news: NewsService, clock: Clock, settings: Settings, pool: StockPoolService
+) -> FilingLookupService:
+    """公告工具的查询：补抓的界线用事件检测的回看时长，股票在不在股票池问股票池，见
+    add-filing-tools 的 design D4。
+    """
+    return FilingLookupService(
+        news,
+        clock,
+        settings.filings,
+        settings.event_detection.lookback,
+        lambda symbol: pool.entry(symbol) is not None,
+    )
+
+
 def _model_backend(
     file: ModelFile,
     stand_in: StandInBackend,
     llm: LlmClient,
     charter: Charter,
     history: HistoryQueryService,
-    news: NewsLookupService,
+    lookups: tuple[NewsLookupService, FilingLookupService],
 ) -> VendorRouter:
     """按 model-adapter spec「按厂商分派」：替身的厂商交给替身，其他交给真实模型的后端。"""
     real = LlmBackend(
@@ -414,7 +434,7 @@ def _model_backend(
         f"{charter.text}\n\n{load_role_prompt(PM_PROMPT_FILE)}",
         history,
         file.gateway.max_history_queries,
-        sub_agent_setups(charter, news),
+        sub_agent_setups(charter, *lookups),
         file.gateway.max_sub_agent_tool_calls,
     )
     return VendorRouter(
@@ -461,7 +481,7 @@ def _case_side(
         llm,
         charter,
         HistoryQueryService(case_history, gateway, program_log),
-        news_lookup(news, clock, settings),
+        (news_lookup(news, clock, settings), filing_lookup(news, clock, settings, stock_pool)),
     )
     agents = AgentCallService(
         backend, fallback, budget, tasks, PostgresModelCallStore(engine), clock
