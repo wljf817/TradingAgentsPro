@@ -18,4 +18,4 @@
 ## 4. 收尾
 
 - [x] 4.1 完整版 Proposal「程序日志」的 Agent 网关一行加一句：完整输入和输出单独存表，运行 `uv run pytest`、`uv run mypy`、`uv run ruff check`、`uv run lint-imports`、`openspec validate add-model-call-trace --strict` 全部通过
-- [ ] 4.2 提交并部署以后在主机冒烟：Sonnet 5.5、Opus 5.5、`deepseek-flash` 各跑一次带工具的运行和一次超时，确认消息能还原，含系统指令和工具返回，迁移 0016 已运行，不留下数据
+- [x] 4.2 提交并部署以后在主机冒烟：Sonnet 5.5、Opus 5.5、`deepseek-flash` 各跑一次带工具的运行和一次超时，确认消息能还原，含系统指令和工具返回，迁移 0016 已运行，不留下数据
