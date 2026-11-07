@@ -84,7 +84,9 @@ from tradingagentspro.integrations.llm import (
     LlmBackend,
     LlmClient,
     SubAgentSetup,
+    ToolBuilder,
     VendorRouter,
+    news_tools,
     no_tools,
 )
 from tradingagentspro.integrations.moomoo import (
@@ -145,7 +147,13 @@ from tradingagentspro.modules.marketdata import (
     MarketDataService,
     VixSource,
 )
-from tradingagentspro.modules.news import FilingSource, NewsService, NewsSource, PostgresNewsStore
+from tradingagentspro.modules.news import (
+    FilingSource,
+    NewsLookupService,
+    NewsService,
+    NewsSource,
+    PostgresNewsStore,
+)
 from tradingagentspro.modules.notification import (
     ConfirmationOutcome,
     DecisionHandler,
@@ -374,9 +382,22 @@ class _CaseSide:
     events: EventService
 
 
-def _sub_agent_setup(charter: Charter, prompt_file: Path) -> SubAgentSetup:
+def _sub_agent_setup(charter: Charter, prompt_file: Path, tools: ToolBuilder) -> SubAgentSetup:
     """子 agent 的系统指令和读取工具，见 sub-agent-calls spec「调用子 agent 的消息」。"""
-    return SubAgentSetup(f"{charter.text}\n\n{load_role_prompt(prompt_file)}", no_tools)
+    return SubAgentSetup(f"{charter.text}\n\n{load_role_prompt(prompt_file)}", tools)
+
+
+def sub_agent_setups(charter: Charter, news: NewsLookupService) -> dict[SubAgent, SubAgentSetup]:
+    """接上真实模型的子 agent：News 有新闻工具，Fundamentals 还没有读取工具。"""
+    return {
+        SubAgent.NEWS: _sub_agent_setup(charter, NEWS_PROMPT_FILE, news_tools(news)),
+        SubAgent.FUNDAMENTALS: _sub_agent_setup(charter, FUNDAMENTALS_PROMPT_FILE, no_tools),
+    }
+
+
+def news_lookup(news: NewsService, clock: Clock, settings: Settings) -> NewsLookupService:
+    """新闻工具的查询：补抓的界线用事件检测的回看时长，见 add-news-tools 的 design D2。"""
+    return NewsLookupService(news, clock, settings.news, settings.event_detection.lookback)
 
 
 def _model_backend(
@@ -385,6 +406,7 @@ def _model_backend(
     llm: LlmClient,
     charter: Charter,
     history: HistoryQueryService,
+    news: NewsLookupService,
 ) -> VendorRouter:
     """按 model-adapter spec「按厂商分派」：替身的厂商交给替身，其他交给真实模型的后端。"""
     real = LlmBackend(
@@ -392,10 +414,7 @@ def _model_backend(
         f"{charter.text}\n\n{load_role_prompt(PM_PROMPT_FILE)}",
         history,
         file.gateway.max_history_queries,
-        {
-            SubAgent.NEWS: _sub_agent_setup(charter, NEWS_PROMPT_FILE),
-            SubAgent.FUNDAMENTALS: _sub_agent_setup(charter, FUNDAMENTALS_PROMPT_FILE),
-        },
+        sub_agent_setups(charter, news),
         file.gateway.max_sub_agent_tool_calls,
     )
     return VendorRouter(
@@ -431,20 +450,21 @@ def _case_side(
     tasks = TaskDispatchService(PostgresTaskStore(engine), clock, ids, gateway, program_log)
     charter = load_charter(CHARTER_FILE, settings.risk)
     case_history = CaseHistory(case_records, execution)
+    news = NewsService(
+        externals.news(settings.alpaca_news),
+        externals.filings(settings.sec),
+        PostgresNewsStore(engine, clock),
+    )
     backend = _model_backend(
         configured,
         StandInBackend(calendar, settings.standin),
         llm,
         charter,
         HistoryQueryService(case_history, gateway, program_log),
+        news_lookup(news, clock, settings),
     )
     agents = AgentCallService(
         backend, fallback, budget, tasks, PostgresModelCallStore(engine), clock
-    )
-    news = NewsService(
-        externals.news(settings.alpaca_news),
-        externals.filings(settings.sec),
-        PostgresNewsStore(engine, clock),
     )
     company_data = CompanyDataService(
         externals.finnhub(settings.finnhub),

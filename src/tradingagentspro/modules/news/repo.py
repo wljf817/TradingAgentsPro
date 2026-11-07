@@ -96,6 +96,11 @@ class PostgresNewsStore:
         )
         return tuple(NewsArticle.model_validate(data) for data in self._read(query))
 
+    def article(self, article_id: int) -> NewsArticle | None:
+        query = select(ARTICLES.c.data).where(ARTICLES.c.id == article_id)
+        rows = self._read(query)
+        return NewsArticle.model_validate(rows[0]) if rows else None
+
     def filings(self, symbol: str, since: datetime) -> tuple[Filing, ...]:
         query = (
             select(FILINGS.c.data)

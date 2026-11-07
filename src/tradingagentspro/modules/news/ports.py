@@ -17,8 +17,13 @@ class NewsSource(Protocol):
     symbols 非空、不重复，由模块保证。失败时抛 SourceUnavailableError，不重试。
     """
 
-    def articles(self, symbols: Sequence[str], since: datetime) -> Sequence[NewsArticle]:
-        """since（含）以来发布、标注了这些股票中至少一只的新闻，全部取完。"""
+    def articles(
+        self, symbols: Sequence[str], since: datetime, until: datetime | None = None
+    ) -> Sequence[NewsArticle]:
+        """since（含）以来发布、标注了这些股票中至少一只的新闻，全部取完。
+
+        给了 until 时只取 until（含）以前发布的。
+        """
         ...
 
 
@@ -52,6 +57,10 @@ class NewsStore(Protocol):
 
     def articles(self, symbol: str, since: datetime) -> tuple[NewsArticle, ...]:
         """标注了 symbol、发布时刻不早于 since 的新闻，按发布时刻、新闻 ID 排序。"""
+        ...
+
+    def article(self, article_id: int) -> NewsArticle | None:
+        """这个新闻 ID 的新闻；没有时为 None。"""
         ...
 
     def filings(self, symbol: str, since: datetime) -> tuple[Filing, ...]:

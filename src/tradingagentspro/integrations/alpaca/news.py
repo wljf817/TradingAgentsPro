@@ -76,20 +76,31 @@ class AlpacaNewsSource:
             transport=transport,
         )
 
-    def articles(self, symbols: Sequence[str], since: datetime) -> tuple[NewsArticle, ...]:
-        """since（含）以来发布的新闻。start 舍去秒以下的部分，回来以后去掉发布时刻早于 since 的。"""
+    def articles(
+        self, symbols: Sequence[str], since: datetime, until: datetime | None = None
+    ) -> tuple[NewsArticle, ...]:
+        """since（含）以来发布的新闻，给了 until 时到 until（含）为止。
+
+        start 舍去秒以下的部分，end 舍去秒以下的部分再加 1 秒，回来以后去掉范围之外的。
+        """
         params: dict[str, str] = {
             "symbols": ",".join(symbols),
-            "start": since.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "start": _timestamp(since),
             "include_content": "true",
             "limit": str(_PAGE_SIZE),
             "sort": "asc",
         }
+        if until is not None:
+            params["end"] = _timestamp(until + timedelta(seconds=1))
         found: list[NewsArticle] = []
         token: str | None = None
         while True:
             page = _Page.model_validate_json(self._get(params, token).content)
-            found.extend(_article(a) for a in page.news if a.created_at >= since)
+            found.extend(
+                _article(a)
+                for a in page.news
+                if a.created_at >= since and (until is None or a.created_at <= until)
+            )
             token = page.next_page_token
             if token is None:
                 return tuple(found)
@@ -105,6 +116,10 @@ class AlpacaNewsSource:
         if response.status_code == 429 or response.status_code >= 500:
             raise SourceUnavailableError(f"Alpaca 新闻 GET {path}：{response.status_code}")
         return response.raise_for_status()
+
+
+def _timestamp(moment: datetime) -> str:
+    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _article(article: _Article) -> NewsArticle:
