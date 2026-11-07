@@ -31,4 +31,4 @@
 ## 6. 文档和冒烟
 
 - [x] 6.1 完整版 Proposal「Fundamentals」：工具表和工具规则改成按位置读和查找、只列能读的表单、20-F 和 6-K、文字稿的找法；用 `rg` 确认没有剩下「按章节读」
-- [ ] 6.2 主机冒烟：提交部署以后，用部署的代码和生产 venv、真实 SEC 和 Alpaca、deepseek-flash 和 Haiku 5.5，内存存储，key 走 ssh stdin，不留东西：两个模型都调用三个工具并交回引用工具内容的信号；看一次 JPM 的 `list_filings` 和一份 10-K 第一次读的耗时
+- [x] 6.2 主机冒烟：提交部署以后，用部署的代码和生产 venv、真实 SEC 和 Alpaca、deepseek-flash 和 Haiku 5.5，内存存储，key 走 ssh stdin，不留东西：两个模型都调用三个工具并交回引用工具内容的信号；看一次 JPM 的 `list_filings` 和一份 10-K 第一次读的耗时

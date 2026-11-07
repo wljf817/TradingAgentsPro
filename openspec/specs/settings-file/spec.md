@@ -76,6 +76,7 @@ user_agent = "tradingagentspro test@example.com"
 | `alpaca_bars` | Alpaca 日线 | alpaca-bars spec「Alpaca 日线配置」 |
 | `alpaca_news` | Alpaca 新闻 | alpaca-news spec「Alpaca 新闻配置」 |
 | `news` | 新闻工具 | news-tools spec「新闻工具的配置」 |
+| `filings` | 公告工具 | filing-tools spec「公告工具的配置」 |
 | `cboe` | Cboe | market-context spec「Cboe 数据源」 |
 | `moomoo` | OpenD 的连接 | moomoo-quotes spec「连接配置」 |
 | `moomoo_securities` | moomoo 股票列表 | moomoo-securities spec「moomoo 股票列表配置」 |

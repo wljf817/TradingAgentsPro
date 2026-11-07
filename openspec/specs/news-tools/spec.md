@@ -46,7 +46,7 @@
 #### Scenario: Fundamentals 没有这两个工具
 
 - **WHEN** 调用 Fundamentals 运行 K-1 的财报请求
-- **THEN** 请求里没有读取工具
+- **THEN** 请求里没有 `list_news`、`read_news`
 
 ### Requirement: 列出新闻
 

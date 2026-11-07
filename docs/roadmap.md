@@ -41,7 +41,7 @@ There are three statuses: Not started, In progress, Done.
 | M2 Trading side on paper | In progress | 16 / 16 |
 | M3 Case-side core | Done | 12 / 12 |
 | M4 Case flow end to end | In progress | 19 / 19 |
-| M5 Models | In progress | 15 / 20 |
+| M5 Models | In progress | 16 / 20 |
 | M6 Retrospectives and evaluation | Not started | — |
 | M7 Small-capital live | Not started | — |
 
@@ -153,7 +153,7 @@ The PM, News and Fundamentals are split; Quant, the Critic and leveraged instrum
 | News and Fundamentals | Sub-agent calls | New; Modify: Agent calls, Task dispatch, Signal format, Stand-ins, Program log, Settings file | Done |
 | | Model call trace | New; Modify: Model adapter, State store design | Done |
 | | News tools | New; Modify: News and filings, Alpaca news, Sub-agent calls, Startup and wiring, Settings file | Done |
-| | Filing tools | New; Modify: News and filings, News tools, Sub-agent calls, Startup and wiring, Settings file, State store design | In progress |
+| | Filing tools | New; Modify: News and filings, News tools, Sub-agent calls, Startup and wiring, Settings file, State store design | Done |
 | | Financial figures | New; Modify: Earnings calendar and sectors, Sub-agent calls, Startup and wiring | Not started |
 | | Valuation | New; Modify: Stock search screen, Financial figures, Sub-agent calls, Startup and wiring | Not started |
 | Going live | Write the prompts | New | Not started |
