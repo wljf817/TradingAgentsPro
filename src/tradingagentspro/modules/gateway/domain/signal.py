@@ -1,11 +1,12 @@
 """收到输出时的校验：子 agent 的输出和 PM 结论里的信号，见 signal-format spec「收到输出时的校验」
-「结论里的信号」。
+「结论里的信号」「子 agent 引用的条目」。
 
 格式错误由 contracts 的模型在构造时给出；这里只对已经构造好的信号检查依赖配置和"现在"的两项，
 给出第一项不通过的原因。不通过和格式错误一样是格式不合法；这是模型输出的正常结果，所以作为返回值，
 不抛异常。只在收到输出时检查：已经写入的信号读回时不再查，改配置不影响它们。
 """
 
+from collections.abc import Set
 from datetime import datetime
 from enum import StrEnum
 
@@ -32,6 +33,11 @@ def signal_rejection(
     if output.data_as_of > now:
         return SignalRejection.DATA_AFTER_NOW
     return None
+
+
+def unknown_entries(output: SubAgentOutput, known: Set[str]) -> tuple[str, ...]:
+    """子 agent 引用的条目里不在 known 里的，按引用的先后；都在时为空。"""
+    return tuple(entry for entry in output.cited_entries if entry not in known)
 
 
 def conclusion_signal_rejection(

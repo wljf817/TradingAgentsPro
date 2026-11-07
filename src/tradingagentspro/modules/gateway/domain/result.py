@@ -1,18 +1,21 @@
 """子 agent 的输出、调用失败、超时和被拒绝变成 Result，见 task-dispatch spec「子 agent 的输出变成
 Result」「超时」「调用失败」「Result 的格式」。
 
-截止时间先看：晚于截止时间收到的输出或调用失败，不论合不合法都是超时。格式不合法的两个来源合在
-一起：结构错误由调用方解析时给出 Malformed，评估窗口和数据截至时刻由 signal-format 的
-signal_rejection 检查；都记为失败、原因是格式不合法，这就是任务最终的 Result，不重新调用子 agent。
+截止时间先看：晚于截止时间收到的输出或调用失败，不论合不合法都是超时。格式不合法的三个来源合在
+一起：结构错误由调用方给出 InvalidReply，评估窗口和数据截至时刻由 signal-format 的 signal_rejection
+检查，引用的条目由 unknown_entries 检查；都记为失败、原因是格式不合法，这就是任务最终的 Result，
+不重新调用子 agent。
 
 完成、无信号和格式不合法的失败记下调用方给出的实际使用的模型（model-fallback spec「实际使用的
 模型」）；超时、调用失败和被拒绝没有输出，不记模型。
 """
 
-from dataclasses import dataclass
+from collections.abc import Set
 from datetime import datetime, timedelta
 from decimal import Decimal
+from typing import Final
 
+from tradingagentspro.contracts.agent_call import InvalidReply
 from tradingagentspro.contracts.model import ModelUse
 from tradingagentspro.contracts.signal import NoSignal, Signal, SubAgentOutput
 from tradingagentspro.contracts.task import (
@@ -23,34 +26,34 @@ from tradingagentspro.contracts.task import (
     TaskRejection,
 )
 from tradingagentspro.modules.gateway.config import GatewayConfig
-from tradingagentspro.modules.gateway.domain.signal import signal_rejection
+from tradingagentspro.modules.gateway.domain.signal import signal_rejection, unknown_entries
 
-
-@dataclass(frozen=True, slots=True)
-class Malformed:
-    """不能解析成格式正确的信号或无信号的输出。detail 指出是哪一项、为什么。"""
-
-    detail: str
+_UNKNOWN_ENTRIES: Final = "引用了未知的条目"
 
 
 def received(
     task: Task,
-    output: SubAgentOutput | Malformed,
+    output: SubAgentOutput | InvalidReply,
+    known: Set[str],
     now: datetime,
     cost: Decimal,
     model_use: ModelUse,
     config: GatewayConfig,
 ) -> Result:
-    """收到子 agent 的输出时的 Result。now 是收到输出的时刻，cost 是这个任务的费用，model_use 是
-    给出这个输出的模型。
+    """收到子 agent 的输出时的 Result。known 是已知的条目，now 是收到输出的时刻，cost 是这个任务的
+    费用，model_use 是给出这个输出的模型。
     """
     if now > task.deadline:
         return _settled(task, ResultStatus.TIMED_OUT, now, cost)
-    if isinstance(output, Malformed):
-        return _failed(task, TaskFailure.FORMAT_INVALID, output.detail, now, cost, model_use)
+    if isinstance(output, InvalidReply):
+        return _failed(task, TaskFailure.FORMAT_INVALID, output.reason, now, cost, model_use)
     rejection = signal_rejection(output, now, config)
     if rejection is not None:
         return _failed(task, TaskFailure.FORMAT_INVALID, rejection.value, now, cost, model_use)
+    unknown = unknown_entries(output, known)
+    if unknown:
+        detail = f"{_UNKNOWN_ENTRIES}：{'、'.join(unknown)}"
+        return _failed(task, TaskFailure.FORMAT_INVALID, detail, now, cost, model_use)
     status = ResultStatus.COMPLETED if isinstance(output, Signal) else ResultStatus.NO_SIGNAL
     return _settled(task, status, now, cost, output, model_use)
 

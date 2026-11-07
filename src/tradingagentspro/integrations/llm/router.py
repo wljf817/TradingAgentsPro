@@ -13,6 +13,7 @@ from tradingagentspro.contracts.agent_call import (
     PmResponseReply,
     RetrospectiveReport,
     ReviewerRequest,
+    SubAgentReply,
     SubAgentRequest,
 )
 from tradingagentspro.contracts.model import ModelRef
@@ -40,7 +41,7 @@ class VendorRouter:
 
     def sub_agent(
         self, model: ModelRef, timeout: timedelta, request: SubAgentRequest
-    ) -> ModelReply[str]:
+    ) -> ModelReply[SubAgentReply]:
         return self._backends[model.vendor].sub_agent(model, timeout, request)
 
     def reviewer(

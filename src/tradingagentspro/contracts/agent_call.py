@@ -25,6 +25,7 @@ from tradingagentspro.contracts.conclusion import (
 from tradingagentspro.contracts.event import Event
 from tradingagentspro.contracts.history import HistoryIndex
 from tradingagentspro.contracts.review import CriticReview, PlanResponse, Verdict
+from tradingagentspro.contracts.signal import EntryId, SubAgentOutput
 from tradingagentspro.contracts.snapshot import Snapshot
 from tradingagentspro.contracts.task import Result, Task, TaskRequest
 from tradingagentspro.contracts.thesis import InvestmentThesis, WatchThesis
@@ -105,12 +106,23 @@ class SubmitReview(BaseModel):
 
 
 class InvalidReply(BaseModel):
-    """PM 的输出不合法：模型的原文和原因，见 pm-calls spec「PM 的输出不合法」。"""
+    """PM 或子 agent 的输出不合法：模型的原文和原因，见 pm-calls spec「PM 的输出不合法」和
+    sub-agent-calls spec「子 agent 的输出不合法」。
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid", str_strip_whitespace=True)
 
     text: str = Field(min_length=1)
     reason: str = Field(min_length=1)
+
+
+class SubAgentReply(BaseModel):
+    """子 agent 的回复：输出，和这次运行的工具返回过的内容的 ID。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    output: SubAgentOutput | InvalidReply
+    tool_entries: frozenset[EntryId] = frozenset()
 
 
 type PmReply = DispatchTasks | SubmitConclusion | InvalidReply  # PM 研究时的回复

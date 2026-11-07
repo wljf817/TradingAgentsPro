@@ -92,6 +92,7 @@ from tradingagentspro.workflows.case_entries import (
     open_case_text,
     rejection_text,
     stage_text,
+    task_wake_text,
     unavailable_alert,
     wake_failed_text,
     wake_text,
@@ -333,8 +334,13 @@ class CaseFlow:
         return self._s.tasks.dispatch(scope, dispatcher, requests)
 
     def run_task(self, task_id: UUID, case_id: UUID, version: int) -> None:
-        """运行一个派发出去的任务，读第 version 版快照；已经有 Result 时不再调用模型。"""
+        """运行一个派发出去的任务，读第 version 版快照；已经有 Result 时不调用模型，也不写日志。"""
+        record = self._s.tasks.record(task_id)
+        if record.result is not None:
+            return
         self._s.agents.run_task(task_id, self._snapshot(case_id, version))
+        text = task_wake_text(record.task.target, task_id, self._charter_version, version)
+        self._write(Action.WAKE_AGENT, case_id, text)
 
     def outcomes(self, task_ids: Sequence[UUID]) -> tuple[TaskOutcome, ...]:
         """每个请求的 Task 和 Result，按请求的顺序；派发出去的任务都已经有 Result。"""

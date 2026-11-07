@@ -13,6 +13,7 @@ from tradingagentspro.contracts.agent_call import (
     PmResponseReply,
     RetrospectiveReport,
     ReviewerRequest,
+    SubAgentReply,
     SubAgentRequest,
 )
 from tradingagentspro.contracts.case import CaseType
@@ -62,9 +63,8 @@ class ModelBackend(Protocol):
     usage 是各请求之和。
 
     超过 timeout 仍没有输出、或者没有拿到输出时抛 ModelCallError，不重试、不换模型；重试、切换
-    备用模型和记费用由 AgentCallService 做。PM、Critic、Reviewer 的输出是按 contracts 校验过的
-    模型，PM 不合法的输出是 InvalidReply；子 agent 的输出是原样的文本，由网关按 task-dispatch
-    spec 校验。见 agent-calls spec 和 add-stand-ins 的 design D1、D4。
+    备用模型和记费用由 AgentCallService 做。输出是按 contracts 校验过的模型，PM 和子 agent 不合法
+    的输出是 InvalidReply。见 agent-calls spec 和 add-stand-ins 的 design D1、D4。
     """
 
     def pm(self, model: ModelRef, timeout: timedelta, request: PmRequest) -> ModelReply[PmReply]:
@@ -85,8 +85,8 @@ class ModelBackend(Protocol):
 
     def sub_agent(
         self, model: ModelRef, timeout: timedelta, request: SubAgentRequest
-    ) -> ModelReply[str]:
-        """Task 的目标子 agent：信号或无信号的 JSON 文本。"""
+    ) -> ModelReply[SubAgentReply]:
+        """Task 的目标子 agent：信号或无信号，和工具返回过的内容的 ID。"""
         ...
 
     def reviewer(

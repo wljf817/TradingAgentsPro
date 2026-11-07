@@ -43,6 +43,8 @@ class GatewayConfig(BaseModel):
     max_critic_tasks: PositiveInt = 2
     # PM 的一次运行最多查几次历史
     max_history_queries: PositiveInt = 3
+    # News、Fundamentals 的一次运行最多调用几次读取工具
+    max_sub_agent_tool_calls: PositiveInt = 5
     # 一次查询的案件最多几条，交易最多几条，各算各的
     max_history_rows: PositiveInt = 20
     # 截止时间是派发时刻加这么久

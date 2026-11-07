@@ -37,7 +37,7 @@ from tradingagentspro.modules.gateway.domain.budget import (
     charged_budget,
     cost_of,
 )
-from tradingagentspro.modules.gateway.domain.context import pm_context
+from tradingagentspro.modules.gateway.domain.context import pm_context, sub_agent_context
 from tradingagentspro.modules.gateway.domain.dispatch import (
     CaseScope,
     Dispatch,
@@ -71,7 +71,6 @@ from tradingagentspro.modules.gateway.domain.fallback import (
     start,
 )
 from tradingagentspro.modules.gateway.domain.result import (
-    Malformed,
     call_failed,
     expired,
     received,
@@ -81,6 +80,7 @@ from tradingagentspro.modules.gateway.domain.signal import (
     SignalRejection,
     conclusion_signal_rejection,
     signal_rejection,
+    unknown_entries,
 )
 from tradingagentspro.modules.gateway.ports import (
     CostStore,
@@ -121,7 +121,6 @@ __all__ = [
     "GatewayConfig",
     "HistoryQueryService",
     "HistoryReader",
-    "Malformed",
     "ModelAssignments",
     "ModelBackend",
     "ModelCall",
@@ -160,6 +159,8 @@ __all__ = [
     "same_task",
     "signal_rejection",
     "start",
+    "sub_agent_context",
     "tasks_used",
+    "unknown_entries",
     "usage",
 ]

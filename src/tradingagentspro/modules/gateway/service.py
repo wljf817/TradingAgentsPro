@@ -2,7 +2,7 @@
 
 - TaskDispatchService：放行或拒绝 PM 和 Critic 的任务请求，把子 agent 的输出、调用失败和超时记成
   Result，给出本案件的任务，见 task-dispatch spec；每个 Task 和 Result 写一条程序日志，见
-  program-log spec「Agent 网关的动作」。这里只读当前时刻、生成 ID、解析输出、读写存储、写程序日志
+  program-log spec「Agent 网关的动作」。这里只读当前时刻、生成 ID、读写存储、写程序日志
 - ModelFallbackService：一次调用向哪个模型尝试、失败以后换不换，按模型熔断，记下案件内的起点，见
   model-fallback spec。这里只读当前时刻、查模型的配置，在内存里保存熔断状态和起点
 - CallBudgetService：记下每次尝试的费用，给出三个预算的情况，见 call-budget spec。这里只读当前时刻、
@@ -16,19 +16,17 @@
 """
 
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Sequence, Set
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Final
 from uuid import UUID
-
-from pydantic import TypeAdapter, ValidationError
 
 from tradingagentspro.contracts.agent import Agent
 from tradingagentspro.contracts.agent_call import (
     CriticReply,
     CriticRequest,
+    InvalidReply,
     PmReply,
     PmRequest,
     PmResponseReply,
@@ -80,7 +78,6 @@ from tradingagentspro.modules.gateway.domain.fallback import (
     start,
 )
 from tradingagentspro.modules.gateway.domain.result import (
-    Malformed,
     call_failed,
     expired,
     received,
@@ -98,8 +95,6 @@ from tradingagentspro.modules.programlog import Action, Actor, ProgramLog
 from tradingagentspro.shared.clock import Clock
 from tradingagentspro.shared.ids import IdGenerator
 from tradingagentspro.shared.trading_calendar import TradingCalendar
-
-_OUTPUT: Final[TypeAdapter[SubAgentOutput]] = TypeAdapter(SubAgentOutput)
 
 
 class TaskDispatchService:
@@ -166,14 +161,21 @@ class TaskDispatchService:
                 dispatches.append(Dispatch(task, DispatchAction.REJECTED))
         return tuple(dispatches)
 
-    def receive(self, task_id: UUID, output: str, cost: Decimal, model_use: ModelUse) -> Result:
-        """收到子 agent 的输出（JSON 文本）、这个任务的费用和给出输出的模型；"现在"是收到的时刻。
+    def receive(
+        self,
+        task_id: UUID,
+        output: SubAgentOutput | InvalidReply,
+        known: Set[str],
+        cost: Decimal,
+        model_use: ModelUse,
+    ) -> Result:
+        """收到子 agent 的输出、已知的条目、这个任务的费用和给出输出的模型；"现在"是收到的时刻。
 
         已经有 Result 时返回它，不改变。
         """
         return self._settle(
             task_id,
-            lambda task, now: received(task, _parse(output), now, cost, model_use, self._config),
+            lambda task, now: received(task, output, known, now, cost, model_use, self._config),
         )
 
     def fail(self, task_id: UUID, detail: str, cost: Decimal) -> Result:
@@ -479,7 +481,9 @@ class AgentCallService:
         )
         match outcome:
             case Answered():
-                return self._tasks.receive(task_id, outcome.output, cost, outcome.model_use)
+                reply = outcome.output
+                known = {entry.entry_id for entry in snapshot.entries()} | reply.tool_entries
+                return self._tasks.receive(task_id, reply.output, known, cost, outcome.model_use)
             case AllUnavailable():
                 return self._tasks.fail(task_id, outcome.detail, cost)
             case DeadlineReached():
@@ -531,16 +535,3 @@ class AgentCallService:
         if usage is None:
             return Decimal(0)
         return self._budget.record(scope, agent, model, usage).cost
-
-
-def _parse(output: str) -> SubAgentOutput | Malformed:
-    """把 JSON 文本解析成信号或无信号；解析不了时说明每条错误的位置和原因。"""
-    try:
-        return _OUTPUT.validate_json(output)
-    except ValidationError as error:
-        return Malformed("; ".join(f"{_location(e['loc'])}: {e['msg']}" for e in error.errors()))
-
-
-def _location(loc: tuple[int | str, ...]) -> str:
-    """错误的位置，比如 Signal.risks；不是 JSON 时位置为空，写"输出"。"""
-    return ".".join(str(part) for part in loc) or "输出"

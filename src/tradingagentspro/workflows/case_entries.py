@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Final
 from uuid import UUID
 
-from tradingagentspro.contracts.agent import Agent
+from tradingagentspro.contracts.agent import Agent, SubAgent
 from tradingagentspro.contracts.agent_call import (
     DispatchTasks,
     InvalidReply,
@@ -275,6 +275,11 @@ def wake_text(
 def wake_failed_text(agent: Agent, why: str, detail: str, charter: int, snapshot: int) -> str:
     """唤醒 agent 但调用失败：网关给出的说明、宪章和快照的版本。"""
     return f"{AGENTS[agent]}：{why}；调用失败：{detail}；{_versions(charter, snapshot)}"
+
+
+def task_wake_text(target: SubAgent, task_id: UUID, charter: int, snapshot: int) -> str:
+    """运行子 agent 的任务：哪个 agent、任务 ID 和两个版本；其他的在生成 Result 里。"""
+    return f"{AGENTS[Agent(target.value)]}：任务 {task_id}；{_versions(charter, snapshot)}"
 
 
 def _versions(charter: int, snapshot: int) -> str:

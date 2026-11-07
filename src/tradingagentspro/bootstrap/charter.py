@@ -1,5 +1,6 @@
 """系统宪章和角色 prompt：读宪章文件，接上由配置生成的风控限额，见 shared-context spec「系统宪章」、
-add-shared-context 的 design D4、D5 和 pm-calls spec「PM 的角色 prompt」。
+add-shared-context 的 design D4、D5、pm-calls spec「PM 的角色 prompt」和 sub-agent-calls spec
+「子 agent 的角色 prompt」。
 """
 
 import tomllib
@@ -10,6 +11,8 @@ from tradingagentspro.modules.risk import RiskConfig
 
 CHARTER_FILE = Path(__file__).with_name("charter.toml")
 PM_PROMPT_FILE = Path(__file__).with_name("pm_prompt.md")
+NEWS_PROMPT_FILE = Path(__file__).with_name("news_prompt.md")
+FUNDAMENTALS_PROMPT_FILE = Path(__file__).with_name("fundamentals_prompt.md")
 
 
 def load_charter(path: Path, risk: RiskConfig) -> Charter:

@@ -35,6 +35,8 @@ from sqlalchemy import Engine
 
 from tradingagentspro.bootstrap.charter import (
     CHARTER_FILE,
+    FUNDAMENTALS_PROMPT_FILE,
+    NEWS_PROMPT_FILE,
     PM_PROMPT_FILE,
     load_charter,
     load_role_prompt,
@@ -57,6 +59,7 @@ from tradingagentspro.bootstrap.startup import (
     record_shutdown,
     record_startup,
 )
+from tradingagentspro.contracts.agent import SubAgent
 from tradingagentspro.contracts.charter import Charter
 from tradingagentspro.integrations.alpaca import (
     AlpacaBarSource,
@@ -77,7 +80,13 @@ from tradingagentspro.integrations.discord import (
     PlanCommand,
 )
 from tradingagentspro.integrations.finnhub import FinnhubConfig, FinnhubSource
-from tradingagentspro.integrations.llm import LlmBackend, LlmClient, VendorRouter
+from tradingagentspro.integrations.llm import (
+    LlmBackend,
+    LlmClient,
+    SubAgentSetup,
+    VendorRouter,
+    no_tools,
+)
 from tradingagentspro.integrations.moomoo import (
     MoomooConfig,
     MoomooPriceAlerts,
@@ -364,6 +373,11 @@ class _CaseSide:
     events: EventService
 
 
+def _sub_agent_setup(charter: Charter, prompt_file: Path) -> SubAgentSetup:
+    """子 agent 的系统指令和读取工具，见 sub-agent-calls spec「调用子 agent 的消息」。"""
+    return SubAgentSetup(f"{charter.text}\n\n{load_role_prompt(prompt_file)}", no_tools)
+
+
 def _model_backend(
     file: ModelFile,
     stand_in: StandInBackend,
@@ -377,6 +391,11 @@ def _model_backend(
         f"{charter.text}\n\n{load_role_prompt(PM_PROMPT_FILE)}",
         history,
         file.gateway.max_history_queries,
+        {
+            SubAgent.NEWS: _sub_agent_setup(charter, NEWS_PROMPT_FILE),
+            SubAgent.FUNDAMENTALS: _sub_agent_setup(charter, FUNDAMENTALS_PROMPT_FILE),
+        },
+        file.gateway.max_sub_agent_tool_calls,
     )
     return VendorRouter(
         {

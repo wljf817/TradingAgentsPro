@@ -1,9 +1,10 @@
 """真实模型的后端：各 agent 的调用由它们各自的变更接上，见 add-model-adapter 的 design D9。"""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import timedelta
 from typing import Final
 
+from tradingagentspro.contracts.agent import SubAgent
 from tradingagentspro.contracts.agent_call import (
     CriticReply,
     CriticRequest,
@@ -13,6 +14,7 @@ from tradingagentspro.contracts.agent_call import (
     PmResponseReply,
     RetrospectiveReport,
     ReviewerRequest,
+    SubAgentReply,
     SubAgentRequest,
 )
 from tradingagentspro.contracts.model import ModelRef
@@ -24,7 +26,12 @@ from tradingagentspro.integrations.llm.pm import (
     history_tool,
     pm_messages,
 )
-from tradingagentspro.modules.gateway import HistoryQueryService, ModelReply
+from tradingagentspro.integrations.llm.sub_agent import REPLY_TOOLS, SubAgentSetup
+from tradingagentspro.modules.gateway import (
+    HistoryQueryService,
+    ModelReply,
+    sub_agent_context,
+)
 
 _EMPTY_ANSWER: Final = "（空回答）"  # 厂商不收空的文字块，见 add-pm-calls 的 design D7
 
@@ -38,11 +45,15 @@ class LlmBackend:
         pm_instructions: str,
         history: HistoryQueryService,
         max_history_queries: int,
+        sub_agents: Mapping[SubAgent, SubAgentSetup],
+        max_sub_agent_tool_calls: int,
     ) -> None:
         self._client = client
         self._pm_instructions = pm_instructions
         self._history = history
         self._max_history_queries = max_history_queries
+        self._sub_agents = sub_agents
+        self._max_sub_agent_tool_calls = max_sub_agent_tool_calls
 
     def pm(self, model: ModelRef, timeout: timedelta, request: PmRequest) -> ModelReply[PmReply]:
         return self._run_pm(model, timeout, request, RESEARCH_TOOLS)
@@ -59,8 +70,27 @@ class LlmBackend:
 
     def sub_agent(
         self, model: ModelRef, timeout: timedelta, request: SubAgentRequest
-    ) -> ModelReply[str]:
-        raise NotImplementedError("子 agent 还没有接上真实模型")
+    ) -> ModelReply[SubAgentReply]:
+        """运行一次；工具返回过的内容每次运行重新记，见 add-sub-agent-calls 的 design D3。"""
+        target = request.task.target
+        if target not in self._sub_agents:
+            raise NotImplementedError(f"{target} 还没有接上真实模型")
+        setup = self._sub_agents[target]
+        returned: set[str] = set()
+        try:
+            reply = self._client.run(
+                model,
+                timeout,
+                setup.instructions,
+                sub_agent_context(request).model_dump_json(),
+                REPLY_TOOLS,
+                tools=setup.tools(request, returned.update),
+                tool_limit=self._max_sub_agent_tool_calls,
+            )
+        except InvalidOutput as invalid:
+            return ModelReply(SubAgentReply(output=_invalid_reply(invalid)), invalid.usage)
+        output = SubAgentReply(output=reply.output, tool_entries=frozenset(returned))
+        return ModelReply(output, reply.usage, reply.served_model)
 
     def reviewer(
         self, model: ModelRef, timeout: timedelta, request: ReviewerRequest
@@ -87,6 +117,9 @@ class LlmBackend:
                 history=pm_messages(request),
             )
         except InvalidOutput as invalid:
-            text = invalid.text.strip() or _EMPTY_ANSWER
-            return ModelReply(InvalidReply(text=text, reason=invalid.reason), invalid.usage)
+            return ModelReply(_invalid_reply(invalid), invalid.usage)
         return ModelReply(reply.output, reply.usage, reply.served_model)
+
+
+def _invalid_reply(invalid: InvalidOutput) -> InvalidReply:
+    return InvalidReply(text=invalid.text.strip() or _EMPTY_ANSWER, reason=invalid.reason)

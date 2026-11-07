@@ -7,6 +7,11 @@ from tradingagentspro.integrations.llm.client import LlmClient, ReadTool, ReplyT
 from tradingagentspro.integrations.llm.config import Endpoint, Interface, LlmConfig
 from tradingagentspro.integrations.llm.errors import InvalidOutput
 from tradingagentspro.integrations.llm.router import VendorRouter
+from tradingagentspro.integrations.llm.sub_agent import (
+    RecordEntries,
+    SubAgentSetup,
+    no_tools,
+)
 
 __all__ = [
     "Endpoint",
@@ -16,6 +21,9 @@ __all__ = [
     "LlmClient",
     "LlmConfig",
     "ReadTool",
+    "RecordEntries",
     "ReplyTool",
+    "SubAgentSetup",
     "VendorRouter",
+    "no_tools",
 ]
