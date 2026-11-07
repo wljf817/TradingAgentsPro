@@ -14,7 +14,7 @@ Agent 网关 SHALL 按下表把输入交给 agent，收下它的输出：
 | PM（研究） | 案件上下文、本案件现在的快照、PM 在本案件的对话 | 派发任务：一个或多个任务请求（task-dispatch spec「任务请求的格式」）；或者提交结论：case-types spec 的四种结论之一；或者输出不合法（pm-calls spec「PM 的输出不合法」） |
 | PM（回应） | 同上，对话的最后一轮交回的是 Critic 的质询 | 对这轮质询的回应（case-stages spec「Critic 审核和 PM 回应的格式」）；或者输出不合法 |
 | Critic | 案件上下文、快照、要审核的结论（带交易方案的持仓或关注的结论）、PM 在本案件派过的任务和 Result、Critic 在本案件的对话 | 补充研究：一个或多个任务请求；或者一次审核：通过、质询或否决（case-stages spec「Critic 审核和 PM 回应的格式」） |
-| News、Quant、Fundamentals | Task 和快照 | 输出文本：按 task-dispatch spec「子 agent 的输出变成 Result」校验 |
+| News、Quant、Fundamentals | Task 和快照 | 信号、无信号或者输出不合法（sub-agent-calls spec「子 agent 的输出不合法」），和这次运行的工具返回过的内容的 ID（sub-agent-calls spec「工具返回过的内容」）；按 task-dispatch spec「子 agent 的输出变成 Result」校验 |
 | Reviewer | 快照 | 复盘报告：一段总结 |
 
 案件上下文是快照以外 PM 和 Critic 要看的、由调用方给出的内容；案件 ID、案件类型和股票在快照里（state-snapshot spec「每种案件的快照」）：
@@ -34,7 +34,7 @@ Agent 网关 SHALL 按下表把输入交给 agent，收下它的输出：
 | 跟进 | 跟进案件开出它的跟进：申请（case-types spec「跟进申请的格式」）和提出申请的案件的结论；其他案件没有 |
 
 - PM 回应质询时 SHALL NOT 派发任务：Proposal 规定回应需要的新信息由 Critic 的补充研究提供
-- 子 agent 只看到 Task 和快照，看不到案件上下文、别的任务和 Result
+- 子 agent 的调用收到 Task 和快照，看不到案件上下文、别的任务和 Result；真实模型看到的内容是 sub-agent-calls spec「子 agent 的上下文」
 - 任务请求、结论、回应、审核的格式就是表里引用的 spec 的格式；问题去掉首尾空白后为空、复盘报告的总结去掉首尾空白后为空，都 MUST 是格式错误
 - 网关只调用、收下输出，SHALL NOT 检查结论：结论的校验、备用模型的限制和结论里的信号由调用方按 case-types、model-fallback、signal-format spec 检查
 
@@ -220,7 +220,7 @@ Agent 网关调用一个 agent 时 SHALL 按 model-fallback spec 的步骤向模
 - Result 的费用是这次调用的费用：各次尝试记下的费用之和
 - 几个任务可以同时运行
 
-本 requirement 的场景里，Quant 的主模型是 google/s-1，备用模型是 openai/s-2；"T-1"指 K-1 的 PM 派发价格请求派发出的 T-1。
+本 requirement 的场景里，Quant 的主模型是 google/s-1，备用模型是 openai/s-2；"T-1"指 K-1 的 PM 派发价格请求派发出的 T-1；基准信号引用的 E-1 和 E-2 是这次运行的工具返回过的。
 
 #### Scenario: 拿到合法的信号
 
@@ -230,9 +230,20 @@ Agent 网关调用一个 agent 时 SHALL 按 model-fallback spec 的步骤向模
 
 #### Scenario: 输出格式不合法
 
-- **WHEN** 运行 T-1，s-1 给出不是 JSON 的文字"看多，理由见上"，用量 8,000/1,000
-- **THEN** T-1 失败，原因是格式不合法，模型 s-1，费用 0.0049
+- **WHEN** 运行 T-1，s-1 给出输出不合法，原因"没有调用交回工具"，用量 8,000/1,000
+- **THEN** T-1 失败，原因是格式不合法，说明"没有调用交回工具"，模型 s-1，费用 0.0049
 - **AND** 没有再向 s-1 或 s-2 发请求
+
+#### Scenario: 引用未知的条目
+
+- **WHEN** 运行 T-1，s-1 给出基准信号，这次运行的工具只返回过 E-1，用量 8,000/1,000
+- **THEN** T-1 失败，原因是格式不合法，说明写明未知的条目 E-2，模型 s-1，费用 0.0049
+- **AND** 没有再向 s-1 或 s-2 发请求
+
+#### Scenario: 引用快照里的条目
+
+- **WHEN** 运行 T-1，s-1 给出引用 s1/market 的信号，这次运行没有调用工具
+- **THEN** T-1 完成
 
 #### Scenario: 换备用模型以后完成
 

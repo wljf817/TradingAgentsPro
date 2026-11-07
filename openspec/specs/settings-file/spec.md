@@ -91,7 +91,7 @@ user_agent = "tradingagentspro test@example.com"
 | `patrol` | 盘中巡检 | session-patrol spec「巡检配置」 |
 | `stockpool` | 股票池 | stock-pool spec「股票池配置」 |
 | `followups` | 跟进 | follow-ups spec「跟进的配置」 |
-| `gateway` | Agent 网关 | signal-format spec「信号的配置」、task-dispatch spec「派发的配置」、model-fallback spec「备用模型的配置」、history-query spec「查询的上限」 |
+| `gateway` | Agent 网关 | signal-format spec「信号的配置」、task-dispatch spec「派发的配置」、model-fallback spec「备用模型的配置」、history-query spec「查询的上限」、sub-agent-calls spec「工具次数」 |
 | `scheduler` | 调度器 | case-types spec「研究要求的配置」、case-queue spec「队列配置」、case-stages spec「案件阶段的配置」 |
 | `heartbeat` | 复查日和收盘检查 | review-dates spec「复查日与催化剂的配置」、close-check spec「收盘检查的配置」 |
 | `close_heartbeat` | 收盘心跳 | close-heartbeat spec「收盘心跳的配置」 |

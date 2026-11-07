@@ -361,7 +361,7 @@ Critic 替身 SHALL 不派补充研究，第一次审核就通过：理由是固
 
 ### Requirement: 子 agent 替身
 
-News、Quant、Fundamentals 的替身 SHALL 对任何任务都交回替身的信号的 JSON 文本，引用 Task 的输入；输入为空时引用快照的市场状态条目。
+News、Quant、Fundamentals 的替身 SHALL 对任何任务都交回替身的信号，引用 Task 的输入；输入为空时引用快照的市场状态条目。
 
 #### Scenario: 引用 Task 的输入
 

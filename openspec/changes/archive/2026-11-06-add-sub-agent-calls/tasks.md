@@ -27,4 +27,4 @@
 ## 6. 验证
 
 - [x] 6.1 运行 `uv run pytest`、`uv run ruff check`、`uv run ruff format --check`、`uv run mypy` 和 `uv run lint-imports`，全部通过
-- [ ] 6.2 在主机上用真实 key、占位 prompt 和一个假的读取工具跑一次 News，deepseek-flash 和 Haiku 5.5 各一次：调用工具以后用 `submit_signal` 交回，引用工具返回的 ID，经网关得到完成的 Result；记下是否被厂商接受和实际用量，写进 model-vendor-facts 的记忆
+- [x] 6.2 在主机上用真实 key、占位 prompt 和一个假的读取工具跑一次 News，deepseek-flash 和 Haiku 5.5 各一次：调用工具以后用 `submit_signal` 交回，引用工具返回的 ID，经网关得到完成的 Result；记下是否被厂商接受和实际用量，写进 model-vendor-facts 的记忆
