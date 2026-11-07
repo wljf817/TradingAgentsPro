@@ -31,4 +31,4 @@
 ## 6. 文档和冒烟
 
 - [x] 6.1 完整版 Proposal「Fundamentals」的工具规则：一致预期来自状态库的版本，没记下过时现取并写明；第四季度的 EPS 和股数写缺失；只用快照时刻前一天以前提交的数字；用 `rg` 确认和本变更一致
-- [ ] 6.2 主机冒烟：提交部署以后，用部署的代码和生产 venv、真实 SEC 和 Finnhub、deepseek-flash 和 Haiku 5.5，内存存储，key 走 ssh stdin，不留东西：两个模型都调用 `financials` 并交回引用 `financials/<股票>` 的信号，deepseek-flash 不再多传 `symbol`；看一次 JPM 的 `financials` 耗时
+- [x] 6.2 主机冒烟：提交部署以后，用部署的代码和生产 venv、真实 SEC 和 Finnhub、deepseek-flash 和 Haiku 5.5，内存存储，key 走 ssh stdin，不留东西：两个模型都调用 `financials` 并交回引用 `financials/<股票>` 的信号，deepseek-flash 不再多传 `symbol`；看一次 JPM 的 `financials` 耗时
