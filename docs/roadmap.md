@@ -41,7 +41,7 @@ There are three statuses: Not started, In progress, Done.
 | M2 Trading side on paper | In progress | 16 / 16 |
 | M3 Case-side core | Done | 12 / 12 |
 | M4 Case flow end to end | In progress | 19 / 19 |
-| M5 Models | In progress | 12 / 14 |
+| M5 Models | In progress | 12 / 19 |
 | M6 Retrospectives and evaluation | Not started | — |
 | M7 Small-capital live | Not started | — |
 
@@ -134,7 +134,7 @@ Grouped by dependency; the order in the table is the implementation order: stora
 
 ### M5 Models
 
-The PM is split first; the sub-agents and the Critic are added when they are split. The order of the table is the order of implementation. These changes build the skeleton only; prompts are written once it stands.
+The PM, News and Fundamentals are split; Quant, the Critic and leveraged instruments are added when they are split. The order of the table is the order of implementation. These changes build the skeleton only; prompts are written once it stands.
 
 | Group | Change | Type | Status |
 | --- | --- | --- | --- |
@@ -150,5 +150,10 @@ The PM is split first; the sub-agents and the Critic are added when they are spl
 | | Opening score | Modify: Case types and conclusions | Done |
 | | Watching rules | Modify: Case types and conclusions, Stock pool, Agent calls, Case workflow, Stand-ins | Done |
 | | History queries | New; Modify: Agent calls, PM calls, Case workflow, Case records, Trade records, State store design, Program log, Settings file | Done |
+| News and Fundamentals | Sub-agent calls | New; Modify: Agent calls, Task dispatch, Signal format, Stand-ins, Program log, Settings file | In progress |
+| | News tools | New; Modify: News and filings, Sub-agent calls, Startup and wiring | Not started |
+| | Filing tools | New; Modify: News and filings, Sub-agent calls, Startup and wiring | Not started |
+| | Financial figures | New; Modify: Earnings calendar and sectors, Sub-agent calls, Startup and wiring | Not started |
+| | Valuation | New; Modify: Stock search screen, Financial figures, Sub-agent calls, Startup and wiring | Not started |
 | Going live | Write the prompts | New | Not started |
 | | Switch to real models | Modify: Model configuration | Not started |
