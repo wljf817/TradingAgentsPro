@@ -86,7 +86,9 @@ from tradingagentspro.integrations.llm import (
     SubAgentSetup,
     ToolBuilder,
     VendorRouter,
+    combined,
     filing_tools,
+    financials_tools,
     news_tools,
 )
 from tradingagentspro.integrations.moomoo import (
@@ -108,7 +110,10 @@ from tradingagentspro.modules.caserecords import CaseRecordService, PostgresCase
 from tradingagentspro.modules.companydata import (
     CompanyDataService,
     CompanyDataSource,
+    FinancialFactSource,
+    FinancialsService,
     PostgresEarningsStore,
+    PostgresFinancialFactStore,
 )
 from tradingagentspro.modules.emergency import EmergencyService
 from tradingagentspro.modules.events import (
@@ -208,6 +213,12 @@ _log = logging.getLogger(__name__)
 APP_NAME = "tradingagentspro"
 
 
+class SecSource(FilingSource, FinancialFactSource, Protocol):
+    """SEC 适配器：同一个实例既是公告源、也是财务事实源，请求一个接一个地发，见
+    add-financial-figures 的 design D10。
+    """
+
+
 class QuoteContext(SnapshotContext, SecuritiesContext, ReminderContext, Protocol):
     """OpenD 行情连接里装配用到的部分：取快照、条件选股和股票的静态信息、到价提醒，退出时关闭。"""
 
@@ -233,7 +244,7 @@ class Externals:
     discord: Callable[[DiscordConfig, PlanCommand], Gateway]
     wait: Callable[[float], str | None]
     news: Callable[[AlpacaNewsConfig], NewsSource]
-    filings: Callable[[SecConfig], FilingSource]
+    filings: Callable[[SecConfig], SecSource]
     sleep: Callable[[float], None]
     finnhub: Callable[[FinnhubConfig], CompanyDataSource]
     vix: Callable[[CboeConfig], VixSource]
@@ -389,14 +400,16 @@ def _sub_agent_setup(charter: Charter, prompt_file: Path, tools: ToolBuilder) ->
 
 
 def sub_agent_setups(
-    charter: Charter, news: NewsLookupService, filings: FilingLookupService
+    charter: Charter,
+    news: NewsLookupService,
+    filings: FilingLookupService,
+    financials: FinancialsService,
 ) -> dict[SubAgent, SubAgentSetup]:
-    """接上真实模型的子 agent：News 有新闻工具，Fundamentals 有公告工具。"""
+    """接上真实模型的子 agent：News 有新闻工具，Fundamentals 有公告工具和 financials。"""
+    fundamentals = combined(filing_tools(filings), financials_tools(financials))
     return {
         SubAgent.NEWS: _sub_agent_setup(charter, NEWS_PROMPT_FILE, news_tools(news)),
-        SubAgent.FUNDAMENTALS: _sub_agent_setup(
-            charter, FUNDAMENTALS_PROMPT_FILE, filing_tools(filings)
-        ),
+        SubAgent.FUNDAMENTALS: _sub_agent_setup(charter, FUNDAMENTALS_PROMPT_FILE, fundamentals),
     }
 
 
@@ -426,7 +439,7 @@ def _model_backend(
     llm: LlmClient,
     charter: Charter,
     history: HistoryQueryService,
-    lookups: tuple[NewsLookupService, FilingLookupService],
+    lookups: tuple[NewsLookupService, FilingLookupService, FinancialsService],
 ) -> VendorRouter:
     """按 model-adapter spec「按厂商分派」：替身的厂商交给替身，其他交给真实模型的后端。"""
     real = LlmBackend(
@@ -470,10 +483,21 @@ def _case_side(
     tasks = TaskDispatchService(PostgresTaskStore(engine), clock, ids, gateway, program_log)
     charter = load_charter(CHARTER_FILE, settings.risk)
     case_history = CaseHistory(case_records, execution)
-    news = NewsService(
-        externals.news(settings.alpaca_news),
-        externals.filings(settings.sec),
-        PostgresNewsStore(engine, clock),
+    sec = externals.filings(settings.sec)
+    news = NewsService(externals.news(settings.alpaca_news), sec, PostgresNewsStore(engine, clock))
+    company_data = CompanyDataService(
+        externals.finnhub(settings.finnhub),
+        PostgresEarningsStore(engine, clock),
+        clock,
+        settings.companydata,
+    )
+    financials = FinancialsService(
+        company_data, sec, PostgresFinancialFactStore(engine, clock), settings.companydata
+    )
+    lookups = (
+        news_lookup(news, clock, settings),
+        filing_lookup(news, clock, settings, stock_pool),
+        financials,
     )
     backend = _model_backend(
         configured,
@@ -481,16 +505,10 @@ def _case_side(
         llm,
         charter,
         HistoryQueryService(case_history, gateway, program_log),
-        (news_lookup(news, clock, settings), filing_lookup(news, clock, settings, stock_pool)),
+        lookups,
     )
     agents = AgentCallService(
         backend, fallback, budget, tasks, PostgresModelCallStore(engine), clock
-    )
-    company_data = CompanyDataService(
-        externals.finnhub(settings.finnhub),
-        PostgresEarningsStore(engine, clock),
-        clock,
-        settings.companydata,
     )
     screener = ScreenerService(
         MoomooSecuritySource(quotes, settings.moomoo_securities),

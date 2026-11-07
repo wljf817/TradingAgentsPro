@@ -3,25 +3,41 @@
 
 规则见 openspec 的 company-data spec。数据源和财报的存储由 bootstrap 注入；财报存在状态库里，只由
 这个模块写入：财报日历在 companydata_earnings_releases 表，surprise 在
-companydata_earnings_surprises 表，数据库实现是 PostgresEarningsStore。模块之外的代码只能 import
-这里导出的名字。
+companydata_earnings_surprises 表，数据库实现是 PostgresEarningsStore。
+
+还从 SEC 取财务事实，存在 companydata_financial_facts 表（PostgresFinancialFactStore），按财季
+算出 financials 的结果（FinancialsService），见 financials-tool spec。模块之外的代码只能 import 这里
+导出的名字。
 """
 
 from tradingagentspro.modules.companydata.config import CompanyDataConfig
 from tradingagentspro.modules.companydata.domain.earnings import (
     EarningsRelease,
     EarningsSurprise,
+    ReleaseBeat,
     ReleaseTime,
     SurpriseHistory,
+)
+from tradingagentspro.modules.companydata.domain.financials import (
+    Figure,
+    FinancialFact,
+    FinancialReport,
+    Item,
+    QuarterFigures,
 )
 from tradingagentspro.modules.companydata.domain.sector import SectorEtf, sector_of
 from tradingagentspro.modules.companydata.ports import (
     CompanyDataSource,
     CompanyDataUnavailableError,
     EarningsStore,
+    FinancialFactSource,
+    FinancialFactStore,
 )
-from tradingagentspro.modules.companydata.repo import PostgresEarningsStore
-from tradingagentspro.modules.companydata.service import CompanyDataService
+from tradingagentspro.modules.companydata.repo import (
+    PostgresEarningsStore,
+    PostgresFinancialFactStore,
+)
+from tradingagentspro.modules.companydata.service import CompanyDataService, FinancialsService
 
 __all__ = [
     "CompanyDataConfig",
@@ -31,7 +47,17 @@ __all__ = [
     "EarningsRelease",
     "EarningsStore",
     "EarningsSurprise",
+    "Figure",
+    "FinancialFact",
+    "FinancialFactSource",
+    "FinancialFactStore",
+    "FinancialReport",
+    "FinancialsService",
+    "Item",
     "PostgresEarningsStore",
+    "PostgresFinancialFactStore",
+    "QuarterFigures",
+    "ReleaseBeat",
     "ReleaseTime",
     "SectorEtf",
     "SurpriseHistory",

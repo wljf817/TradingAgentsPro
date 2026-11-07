@@ -1,5 +1,6 @@
 """财报：一次财报发布和最近几个季度的 EPS surprise，见 company-data spec「财报的记录」和
-add-earnings-calendar-and-sector 的 design D4。
+add-earnings-calendar-and-sector 的 design D4；超预期幅度和下一次发布见 financials-tool spec
+「一致预期和实际值」。
 """
 
 from collections.abc import Iterable
@@ -8,6 +9,8 @@ from datetime import date
 from decimal import Decimal
 from enum import StrEnum
 from typing import Self
+
+from tradingagentspro.modules.companydata.domain.ratios import percent
 
 
 class ReleaseTime(StrEnum):
@@ -74,3 +77,36 @@ class SurpriseHistory:
     def of(cls, symbol: str, surprises: Iterable[EarningsSurprise]) -> Self:
         """按报告期从新到旧排好：数据源换了顺序时内容不变，不会多存一个版本。"""
         return cls(symbol, tuple(sorted(surprises, key=lambda s: s.period, reverse=True)))
+
+
+@dataclass(frozen=True, slots=True)
+class ReleaseBeat:
+    """一次财报发布和代码算的 EPS、营收的超预期幅度（百分数）；算不了时为 None。"""
+
+    release: EarningsRelease
+    eps_beat: Decimal | None
+    revenue_beat: Decimal | None
+
+    @classmethod
+    def of(cls, release: EarningsRelease) -> Self:
+        return cls(
+            release,
+            beat(release.eps_actual, release.eps_estimate),
+            beat(release.revenue_actual, release.revenue_estimate),
+        )
+
+
+def beat(actual: Decimal | None, estimate: Decimal | None) -> Decimal | None:
+    """超预期幅度：实际减预期，除以预期的绝对值，写成百分数。
+
+    没有实际值、预期为空或为 0 时为 None。
+    """
+    if actual is None or estimate is None or estimate == 0:
+        return None
+    return percent(actual - estimate, abs(estimate))
+
+
+def next_release(releases: Iterable[EarningsRelease], day: date) -> EarningsRelease | None:
+    """发布日不早于 day 的最早一次；没有时为 None。"""
+    upcoming = [release for release in releases if release.day >= day]
+    return min(upcoming, key=lambda r: r.day) if upcoming else None

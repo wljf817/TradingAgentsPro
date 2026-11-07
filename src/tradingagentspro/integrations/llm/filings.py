@@ -11,7 +11,7 @@ from tradingagentspro.contracts.agent_call import SubAgentRequest
 from tradingagentspro.contracts.news import Filing, FilingDocument, NewsArticle
 from tradingagentspro.integrations.llm.client import ReadTool
 from tradingagentspro.integrations.llm.news import plain_text
-from tradingagentspro.integrations.llm.sub_agent import RecordEntries, ToolBuilder
+from tradingagentspro.integrations.llm.sub_agent import STOCK_IS_SET, RecordEntries, ToolBuilder
 from tradingagentspro.modules.news import (
     FilingLookupService,
     FilingMatches,
@@ -167,11 +167,13 @@ def filing_tools(lookup: FilingLookupService) -> ToolBuilder:
             return _transcript(search.article, search).model_dump_json()
 
         return (
-            ReadTool("list_filings", "列出这只股票能读的公告", list_filings),
+            ReadTool("list_filings", f"列出这只股票能读的公告。{STOCK_IS_SET}", list_filings),
             ReadTool(
-                "read_filing", "读一份公告里的一个文件，或者在文件里查找一段文字", read_filing
+                "read_filing",
+                f"读一份公告里的一个文件，或者在文件里查找一段文字。{STOCK_IS_SET}",
+                read_filing,
             ),
-            ReadTool("read_transcript", "读一篇财报电话会文字稿", read_transcript),
+            ReadTool("read_transcript", f"读一篇财报电话会文字稿。{STOCK_IS_SET}", read_transcript),
         )
 
     return build

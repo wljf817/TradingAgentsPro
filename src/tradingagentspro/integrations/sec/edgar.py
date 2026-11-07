@@ -1,18 +1,24 @@
 """SEC EDGAR 公告源：用 SEC 的股票代码表和每家公司的 submissions 实现新闻和公告模块的
-FilingSource；公告的文件从公告的目录页读。
+FilingSource；公告的文件从公告的目录页读；一家公司的财务事实从 companyfacts 读，实现公司数据模块的
+FinancialFactSource。
 
-见 sec-filings spec、add-news-and-filings 的 design D6、D7 和 add-filing-tools 的 design D6。
+见 sec-filings spec、add-news-and-filings 的 design D6、D7、add-filing-tools 的 design D6 和
+add-financial-figures 的 design D2、D10。
 """
 
+import json
 import threading
-from collections.abc import Callable, Iterator, Sequence
-from datetime import datetime, timedelta
+from collections.abc import Callable, Collection, Iterator, Sequence
+from datetime import date, datetime, timedelta
+from decimal import Decimal
+from typing import Any
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from tradingagentspro.contracts.news import Filing, FilingDocument
 from tradingagentspro.integrations.sec.documents import files_to_read, plain_text
+from tradingagentspro.modules.companydata import CompanyDataUnavailableError, FinancialFact
 from tradingagentspro.modules.news import SourceUnavailableError
 
 SEC_URL = "https://www.sec.gov"
@@ -72,6 +78,22 @@ class _Submissions(BaseModel):
     filings: _Filings
 
 
+class _Fact(BaseModel):
+    """companyfacts 里一个单位下的一项：只取用到的字段；某一天的余额没有 start。"""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    start: date | None = None
+    end: date
+    val: Decimal
+    accn: str
+    form: str
+    filed: date
+
+
+_UNITS = TypeAdapter(dict[str, tuple[_Fact, ...]])
+
+
 def _wait(duration: timedelta) -> None:
     """阻塞等待这么久；time 模块全项目禁用。"""
     threading.Event().wait(duration.total_seconds())
@@ -79,7 +101,7 @@ def _wait(duration: timedelta) -> None:
 
 class SecFilingSource:
     """满足 FilingSource：按股票查 CIK，读每家公司的 submissions，取起始时刻以来受理的公告；读一份
-    公告的目录页和要读的文件。
+    公告的目录页和要读的文件。也满足 FinancialFactSource：读一家公司的 companyfacts。
 
     同一个进程里对 SEC 的请求一个接一个地发，每个请求结束以后等 1 / 每秒最多请求数 秒。调用失败按
     sec-filings spec「公告请求失败的分类」处理：超时、连不上、403、429 和 5xx 抛
@@ -134,6 +156,49 @@ class SecFilingSource:
                 )
                 for doc_type, name in files_to_read(index.text)
             )
+
+    def financial_facts(
+        self, symbol: str, concepts: Collection[str]
+    ) -> tuple[FinancialFact, ...] | None:
+        """这只股票所属公司 us-gaap 下 concepts 这些科目有起始日的全部事实。
+
+        代码表里查不到、或者 companyfacts 返回 404 时为 None；数据源不可用时抛公司数据模块的
+        CompanyDataUnavailableError。
+        """
+        with self._lock:
+            try:
+                ciks = self._companies([symbol])
+                if not ciks:
+                    return None
+                [cik] = ciks
+                response = self._get(f"{self._data_url}/api/xbrl/companyfacts/CIK{cik:010d}.json")
+            except SourceUnavailableError as error:
+                raise CompanyDataUnavailableError(str(error)) from error
+            except httpx.HTTPStatusError as error:
+                if error.response.status_code == httpx.codes.NOT_FOUND:  # 没有 XBRL 财务事实
+                    return None
+                raise
+        gaap: dict[str, Any] = json.loads(response.content, parse_float=Decimal)["facts"].get(
+            "us-gaap", {}
+        )
+        return tuple(
+            FinancialFact(
+                symbol=symbol,
+                concept=concept,
+                unit=unit,
+                start=fact.start,
+                end=fact.end,
+                value=fact.val,
+                accession_number=fact.accn,
+                form=fact.form,
+                filed=fact.filed,
+            )
+            for concept in concepts
+            if concept in gaap
+            for unit, facts in _UNITS.validate_python(gaap[concept]["units"]).items()
+            for fact in facts
+            if fact.start is not None
+        )
 
     def _companies(self, symbols: Sequence[str]) -> dict[int, tuple[str, ...]]:
         """按 CIK 分组的股票，组内按调用方给出的顺序；查不到的股票不在里面。

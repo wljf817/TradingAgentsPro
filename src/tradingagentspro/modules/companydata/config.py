@@ -12,3 +12,5 @@ class CompanyDataConfig(BaseModel):
     lookback_days: int = Field(default=30, gt=0)
     # 刷新财报日历时，取到当前 UTC 日期往后这么多天为止的发布；盖住最晚 60 个交易日以后的催化剂
     lookahead_days: int = Field(default=90, gt=0)
+    # financials 最多列多少个季度、多少次财报发布：两年，同比增长要往后数 4 个季度
+    financial_quarters: int = Field(default=8, gt=0)

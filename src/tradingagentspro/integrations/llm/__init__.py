@@ -7,12 +7,14 @@ from tradingagentspro.integrations.llm.client import LlmClient, ReadTool, ReplyT
 from tradingagentspro.integrations.llm.config import Endpoint, Interface, LlmConfig
 from tradingagentspro.integrations.llm.errors import InvalidOutput
 from tradingagentspro.integrations.llm.filings import filing_tools
+from tradingagentspro.integrations.llm.financials import financials_tools
 from tradingagentspro.integrations.llm.news import news_tools
 from tradingagentspro.integrations.llm.router import VendorRouter
 from tradingagentspro.integrations.llm.sub_agent import (
     RecordEntries,
     SubAgentSetup,
     ToolBuilder,
+    combined,
     no_tools,
 )
 
@@ -29,7 +31,9 @@ __all__ = [
     "SubAgentSetup",
     "ToolBuilder",
     "VendorRouter",
+    "combined",
     "filing_tools",
+    "financials_tools",
     "news_tools",
     "no_tools",
 ]

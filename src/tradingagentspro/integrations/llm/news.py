@@ -11,7 +11,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict
 from tradingagentspro.contracts.agent_call import SubAgentRequest
 from tradingagentspro.contracts.news import NewsArticle
 from tradingagentspro.integrations.llm.client import ReadTool
-from tradingagentspro.integrations.llm.sub_agent import RecordEntries, ToolBuilder
+from tradingagentspro.integrations.llm.sub_agent import STOCK_IS_SET, RecordEntries, ToolBuilder
 from tradingagentspro.modules.news import NewsLookupService, NewsSearch
 
 # 新闻 ID 是 PostgreSQL 的 BIGINT，位数再多的不可能是新闻 ID
@@ -121,8 +121,8 @@ def news_tools(lookup: NewsLookupService) -> ToolBuilder:
             return _article(article).model_dump_json()
 
         return (
-            ReadTool("list_news", "列出这只股票的新闻", list_news),
-            ReadTool("read_news", "读一条新闻的全文", read_news),
+            ReadTool("list_news", f"列出这只股票的新闻。{STOCK_IS_SET}", list_news),
+            ReadTool("read_news", f"读一条新闻的全文。{STOCK_IS_SET}", read_news),
         )
 
     return build
