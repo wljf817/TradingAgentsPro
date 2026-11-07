@@ -34,7 +34,13 @@ from pydantic_ai.exceptions import (
     UnexpectedModelBehavior,
     UsageLimitExceeded,
 )
-from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelMessagesTypeAdapter,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+)
 from pydantic_ai.models import Model
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.openai import OpenAIChatModel
@@ -289,12 +295,14 @@ async def _attempt(
                     usage_limits=limits,
                 )
         except ContentFilterError as error:  # 模型拒绝回答，排在它的父类前面
-            raise ModelCallError(CallError.OTHER, _spent(new())) from error
+            raise ModelCallError(CallError.OTHER, _spent(new()), _transcript(captured)) from error
         except (UnexpectedModelBehavior, UsageLimitExceeded) as error:
-            raise _invalid_output(new(), error) from error
+            raise _invalid_output(new(), error, _transcript(captured)) from error
         except (TimeoutError, ModelAPIError) as error:
-            raise ModelCallError(call_error(error), _spent(new())) from error
-        return ModelReply(result.output, _usage(result.usage), result.response.model_name)
+            raise ModelCallError(call_error(error), _spent(new()), _transcript(captured)) from error
+        return ModelReply(
+            result.output, _usage(result.usage), result.response.model_name, _transcript(captured)
+        )
 
 
 async def _require_tool_output[T](
@@ -303,8 +311,14 @@ async def _require_tool_output[T](
     """有交回工具时只回文字算输出不合法，见 update-model-tool-loop 的 design D3。"""
     reply = await attempt
     if isinstance(reply.output, str):
-        raise InvalidOutput(reply.output, _NO_REPLY_TOOL, reply.usage)
-    return ModelReply(reply.output, reply.usage, reply.served_model)
+        assert reply.transcript is not None
+        raise InvalidOutput(reply.output, _NO_REPLY_TOOL, reply.usage, reply.transcript)
+    return ModelReply(reply.output, reply.usage, reply.served_model, reply.transcript)
+
+
+def _transcript(captured: Sequence[ModelMessage]) -> str:
+    """这次尝试的全部消息，见 add-model-call-trace 的 design D4。"""
+    return ModelMessagesTypeAdapter.dump_json(list(captured)).decode()
 
 
 def _new_messages(captured: Sequence[ModelMessage], history_length: int) -> Sequence[ModelMessage]:
@@ -331,7 +345,9 @@ def _spent(messages: Sequence[ModelMessage]) -> TokenUsage | None:
     )
 
 
-def _invalid_output(messages: Sequence[ModelMessage], error: Exception) -> InvalidOutput:
+def _invalid_output(
+    messages: Sequence[ModelMessage], error: Exception, transcript: str
+) -> InvalidOutput:
     """模型最后一个回答的原文、原因和各请求的用量之和：工具调用的原文是它的参数，原因是校验的错误。"""
     parts = _responses(messages)[-1].parts
     text = "".join(part.content for part in parts if isinstance(part, TextPart))
@@ -340,4 +356,4 @@ def _invalid_output(messages: Sequence[ModelMessage], error: Exception) -> Inval
     reason = str(error.__cause__ or error) if original else _NO_REPLY_TOOL
     spent = _spent(messages)
     assert spent is not None
-    return InvalidOutput(original, reason, spent)
+    return InvalidOutput(original, reason, spent, transcript)

@@ -88,9 +88,10 @@ class LlmBackend:
                 tool_limit=self._max_sub_agent_tool_calls,
             )
         except InvalidOutput as invalid:
-            return ModelReply(SubAgentReply(output=_invalid_reply(invalid)), invalid.usage)
+            output = SubAgentReply(output=_invalid_reply(invalid))
+            return ModelReply(output, invalid.usage, transcript=invalid.transcript)
         output = SubAgentReply(output=reply.output, tool_entries=frozenset(returned))
-        return ModelReply(output, reply.usage, reply.served_model)
+        return ModelReply(output, reply.usage, reply.served_model, reply.transcript)
 
     def reviewer(
         self, model: ModelRef, timeout: timedelta, request: ReviewerRequest
@@ -117,8 +118,8 @@ class LlmBackend:
                 history=pm_messages(request),
             )
         except InvalidOutput as invalid:
-            return ModelReply(_invalid_reply(invalid), invalid.usage)
-        return ModelReply(reply.output, reply.usage, reply.served_model)
+            return ModelReply(_invalid_reply(invalid), invalid.usage, transcript=invalid.transcript)
+        return ModelReply(reply.output, reply.usage, reply.served_model, reply.transcript)
 
 
 def _invalid_reply(invalid: InvalidOutput) -> InvalidReply:

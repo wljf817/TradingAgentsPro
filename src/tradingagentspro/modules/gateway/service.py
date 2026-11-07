@@ -9,8 +9,8 @@
   查交易日历和单价、读写存储
 - HistoryQueryService：PM 查询历史，经 HistoryReader 读出结果，写一条程序日志，见 history-query spec
 - AgentCallService：调用 agent，按 ModelFallbackService 的步骤经 ModelBackend 向模型逐次尝试，每次
-  拿到用量就经 CallBudgetService 记一条费用；子 agent 的任务经 TaskDispatchService 生成 Result，见
-  agent-calls spec
+  拿到用量就经 CallBudgetService 记一条费用，真实模型的尝试写一条调用记录；子 agent 的任务经
+  TaskDispatchService 生成 Result，见 agent-calls spec、model-call-trace spec
 
 规则都在 domain 里。
 """
@@ -20,6 +20,7 @@ from collections.abc import Callable, Sequence, Set
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from functools import partial
 from uuid import UUID
 
 from tradingagentspro.contracts.agent import Agent
@@ -77,6 +78,7 @@ from tradingagentspro.modules.gateway.domain.fallback import (
     exhausted,
     start,
 )
+from tradingagentspro.modules.gateway.domain.model_call import ModelCallRecord
 from tradingagentspro.modules.gateway.domain.result import (
     call_failed,
     expired,
@@ -88,6 +90,7 @@ from tradingagentspro.modules.gateway.ports import (
     HistoryReader,
     ModelBackend,
     ModelCallError,
+    ModelCallStore,
     ModelReply,
     TaskStore,
 )
@@ -414,8 +417,8 @@ class Answered[T]:
 
 
 class AgentCallService:
-    """调用 agent：按备用模型的步骤向模型尝试，每次拿到用量就记一条费用，见 agent-calls spec 和
-    add-stand-ins 的 design D5。
+    """调用 agent：按备用模型的步骤向模型尝试，每次拿到用量就记一条费用，真实模型的尝试写一条调用
+    记录，见 agent-calls spec、model-call-trace spec 和 add-stand-ins 的 design D5。
 
     不检查结论：结论的校验、备用模型的限制和结论里的信号由调用方做。全部不可用时不告警，由调用方
     告警。可以同时调用：备用模型的状态由 ModelFallbackService 的锁保护，费用和 Result 本来就可以
@@ -428,11 +431,15 @@ class AgentCallService:
         fallback: ModelFallbackService,
         budget: CallBudgetService,
         tasks: TaskDispatchService,
+        model_calls: ModelCallStore,
+        clock: Clock,
     ) -> None:
         self._backend = backend
         self._fallback = fallback
         self._budget = budget
         self._tasks = tasks
+        self._model_calls = model_calls
+        self._clock = clock
 
     def pm(self, request: PmRequest) -> Answered[PmReply] | AllUnavailable:
         """调用 PM 做研究：派发任务或提交结论。"""
@@ -478,6 +485,7 @@ class AgentCallService:
             Agent(task.target.value),
             task.deadline,
             lambda model, timeout: self._backend.sub_agent(model, timeout, request),
+            task.task_id,
         )
         match outcome:
             case Answered():
@@ -507,26 +515,61 @@ class AgentCallService:
         agent: Agent,
         deadline: datetime | None,
         attempt: Callable[[ModelRef, timedelta], ModelReply[T]],
+        task_id: UUID | None = None,
     ) -> tuple[Answered[T] | AllUnavailable | DeadlineReached, Decimal]:
         """一次调用：按备用模型的步骤逐次尝试，给出结果和这次调用记下的费用之和。
 
-        案件 ID 和案件类型取自快照：费用记录要案件开始时确定的类型。
+        案件 ID 和案件类型取自快照：费用记录要案件开始时确定的类型。每次尝试先记费用，再写调用记录。
         """
         scope = CaseScope(snapshot.case_id, snapshot.case_type, snapshot.symbol)
         step = self._fallback.begin(scope.case_id, agent, deadline)
         cost = Decimal(0)
         while isinstance(step, Attempt):
             model = step.call.model
+            record = partial(self._record_call, snapshot, task_id, agent, model, self._clock.now())
             try:
                 reply = attempt(model, step.timeout)
             except ModelCallError as failure:
                 cost += self._charge(scope, agent, model, failure.usage)
+                record(failure.transcript, failure.usage, failure.error)
                 step = self._fallback.fail(step.call, failure.error)
                 continue
             cost += self._charge(scope, agent, model, reply.usage)
+            record(reply.transcript, reply.usage, None, reply.served_model)
             used = self._fallback.succeed(step.call)
             return Answered(reply.output, used, cost, reply.served_model), cost
         return step, cost
+
+    def _record_call(
+        self,
+        snapshot: Snapshot,
+        task_id: UUID | None,
+        agent: Agent,
+        model: ModelRef,
+        started_at: datetime,
+        transcript: str | None,
+        usage: TokenUsage | None,
+        error: CallError | None,
+        served_model: str | None = None,
+    ) -> None:
+        """写一条调用记录；替身没有消息，不写，见 add-model-call-trace 的 design D5。"""
+        if transcript is None:
+            return
+        self._model_calls.add(
+            ModelCallRecord(
+                case_id=snapshot.case_id,
+                task_id=task_id,
+                agent=agent,
+                model=model,
+                served_model=served_model,
+                snapshot_version=snapshot.version,
+                started_at=started_at,
+                ended_at=self._clock.now(),
+                usage=usage,
+                error=error,
+                transcript=transcript,
+            )
+        )
 
     def _charge(
         self, scope: CaseScope, agent: Agent, model: ModelRef, usage: TokenUsage | None

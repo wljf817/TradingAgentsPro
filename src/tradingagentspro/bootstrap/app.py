@@ -135,6 +135,7 @@ from tradingagentspro.modules.gateway import (
     HistoryQueryService,
     ModelFallbackService,
     PostgresCostStore,
+    PostgresModelCallStore,
     PostgresTaskStore,
     TaskDispatchService,
 )
@@ -437,7 +438,9 @@ def _case_side(
         charter,
         HistoryQueryService(case_history, gateway, program_log),
     )
-    agents = AgentCallService(backend, fallback, budget, tasks)
+    agents = AgentCallService(
+        backend, fallback, budget, tasks, PostgresModelCallStore(engine), clock
+    )
     news = NewsService(
         externals.news(settings.alpaca_news),
         externals.filings(settings.sec),

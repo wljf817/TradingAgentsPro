@@ -1,8 +1,9 @@
-"""Agent 网关的表：任务表 gateway_tasks、Result 表 gateway_results、费用表 gateway_costs，以及
-TaskStore、CostStore 的数据库实现。
+"""Agent 网关的表：任务表 gateway_tasks、Result 表 gateway_results、费用表 gateway_costs、调用记录表
+gateway_model_calls，以及 TaskStore、CostStore、ModelCallStore 的数据库实现。
 
-三张表都只追加、一行一条，写入以后不改：Task 生成时一行，一个 Task 最多一行 Result（主键是
-task_id），每次尝试一行费用。见 task-dispatch spec「任务的存储」、call-budget spec「费用的存储」和
+四张表都只追加、一行一条，写入以后不改：Task 生成时一行，一个 Task 最多一行 Result（主键是
+task_id），每次尝试一行费用，每次向真实模型的尝试一行调用记录。见 task-dispatch spec「任务的存储」、
+call-budget spec「费用的存储」、model-call-trace spec「调用记录的存储」和
 update-task-cost-storage 的 design D1。
 """
 
@@ -23,6 +24,7 @@ from sqlalchemy import (
     Select,
     String,
     Table,
+    Text,
     Uuid,
     insert,
     select,
@@ -36,6 +38,8 @@ from tradingagentspro.contracts.model import ModelRef, TokenUsage
 from tradingagentspro.contracts.task import Result, Task
 from tradingagentspro.modules.gateway.domain.budget import Budget, CallCost
 from tradingagentspro.modules.gateway.domain.dispatch import TaskRecord
+from tradingagentspro.modules.gateway.domain.fallback import CallError
+from tradingagentspro.modules.gateway.domain.model_call import ModelCallRecord
 
 # seq 是写入的先后：一次派发的 Task 派发时刻相同，本案件的任务按它排序
 TASKS = Table(
@@ -70,6 +74,27 @@ COSTS = Table(
     Column("cost", Numeric, nullable=False),
     Column("budget", String, nullable=False),
     Index("gateway_costs_recorded_at", "recorded_at"),
+)
+
+# transcript 用 Text：JSONB 不收 \u0000，见 add-model-call-trace 的 design D2
+MODEL_CALLS = Table(
+    "gateway_model_calls",
+    MetaData(),
+    Column("id", BigInteger, Identity(always=True), primary_key=True),
+    Column("case_id", Uuid, nullable=False),
+    Column("task_id", Uuid, nullable=True),
+    Column("agent", String, nullable=False),
+    Column("model_vendor", String, nullable=False),
+    Column("model_name", String, nullable=False),
+    Column("served_model", String, nullable=True),
+    Column("snapshot_version", Integer, nullable=False),
+    Column("started_at", DateTime(timezone=True), nullable=False),
+    Column("ended_at", DateTime(timezone=True), nullable=False),
+    Column("input_tokens", Integer, nullable=True),
+    Column("output_tokens", Integer, nullable=True),
+    Column("error", String, nullable=True),
+    Column("transcript", Text, nullable=False),
+    Index("gateway_model_calls_case_id", "case_id"),
 )
 
 
@@ -155,6 +180,43 @@ class PostgresCostStore:
             )
 
 
+class PostgresModelCallStore:
+    """满足 ModelCallStore：调用记录逐列存在 gateway_model_calls 表里，一条一个事务；数据库的错误
+    原样抛出。
+    """
+
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+
+    def add(self, record: ModelCallRecord) -> None:
+        with self._engine.begin() as connection:
+            connection.execute(
+                insert(MODEL_CALLS).values(
+                    case_id=record.case_id,
+                    task_id=record.task_id,
+                    agent=record.agent.value,
+                    model_vendor=record.model.vendor,
+                    model_name=record.model.name,
+                    served_model=record.served_model,
+                    snapshot_version=record.snapshot_version,
+                    started_at=record.started_at,
+                    ended_at=record.ended_at,
+                    input_tokens=None if record.usage is None else record.usage.input_tokens,
+                    output_tokens=None if record.usage is None else record.usage.output_tokens,
+                    error=None if record.error is None else record.error.value,
+                    transcript=record.transcript,
+                )
+            )
+
+    def case_calls(self, case_id: UUID) -> tuple[ModelCallRecord, ...]:
+        query = (
+            select(MODEL_CALLS).where(MODEL_CALLS.c.case_id == case_id).order_by(MODEL_CALLS.c.id)
+        )
+        with self._engine.connect() as connection:
+            rows = connection.execute(query).all()
+        return tuple(_model_call(row) for row in rows)
+
+
 def _with_results() -> Select[tuple[Any, Any]]:
     """每个 Task 连上它的 Result：还没有 Result 时右边为空。"""
     return select(TASKS.c.data.label("task"), RESULTS.c.data.label("result")).select_from(
@@ -182,4 +244,23 @@ def _cost(row: Any) -> CallCost:
         cost=row.cost,
         budget=Budget(row.budget),
         recorded_at=row.recorded_at,
+    )
+
+
+def _model_call(row: Any) -> ModelCallRecord:
+    usage = None
+    if row.input_tokens is not None:
+        usage = TokenUsage(input_tokens=row.input_tokens, output_tokens=row.output_tokens)
+    return ModelCallRecord(
+        case_id=row.case_id,
+        task_id=row.task_id,
+        agent=Agent(row.agent),
+        model=ModelRef(vendor=row.model_vendor, name=row.model_name),
+        served_model=row.served_model,
+        snapshot_version=row.snapshot_version,
+        started_at=row.started_at,
+        ended_at=row.ended_at,
+        usage=usage,
+        error=None if row.error is None else CallError(row.error),
+        transcript=row.transcript,
     )

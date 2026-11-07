@@ -23,24 +23,33 @@ from tradingagentspro.contracts.task import Result, Task
 from tradingagentspro.modules.gateway.domain.budget import CallCost
 from tradingagentspro.modules.gateway.domain.dispatch import TaskRecord
 from tradingagentspro.modules.gateway.domain.fallback import CallError
+from tradingagentspro.modules.gateway.domain.model_call import ModelCallRecord
 
 
 class ModelCallError(RuntimeError):
-    """一次尝试没有拿到输出：调用错误，和厂商给出的这次的用量（拿不到时为 None）。"""
+    """一次尝试没有拿到输出：调用错误、厂商给出的这次的用量（拿不到时为 None）和到失败为止的
+    消息。
+    """
 
-    def __init__(self, error: CallError, usage: TokenUsage | None = None) -> None:
+    def __init__(
+        self, error: CallError, usage: TokenUsage | None = None, transcript: str | None = None
+    ) -> None:
         super().__init__(error.value)
         self.error = error
         self.usage = usage
+        self.transcript = transcript
 
 
 @dataclass(frozen=True, slots=True)
 class ModelReply[T]:
-    """一次拿到输出的尝试：输出、这次的用量和回答里写的模型名（替身和回答里没有时为 None）。"""
+    """一次拿到输出的尝试：输出、这次的用量、回答里写的模型名（替身和回答里没有时为 None）和这次的
+    全部消息（替身没有时为 None）。
+    """
 
     output: T
     usage: TokenUsage
     served_model: str | None = None
+    transcript: str | None = None
 
 
 class HistoryReader(Protocol):
@@ -141,4 +150,20 @@ class CostStore(Protocol):
 
     def add(self, entry: CallCost) -> None:
         """写入一条记录。"""
+        ...
+
+
+class ModelCallStore(Protocol):
+    """调用记录的存储。只追加：每次向真实模型的尝试写入一条，写入以后不改；同时写入的每一条都写进去。
+
+    网关是唯一的写入者；数据库实现是 repo 的 PostgresModelCallStore（表 gateway_model_calls），见
+    model-call-trace spec「调用记录的存储」。
+    """
+
+    def add(self, record: ModelCallRecord) -> None:
+        """写入一条。写入出错时抛出，不当作已经写入。"""
+        ...
+
+    def case_calls(self, case_id: UUID) -> tuple[ModelCallRecord, ...]:
+        """这个案件的全部记录，按写入的先后。"""
         ...

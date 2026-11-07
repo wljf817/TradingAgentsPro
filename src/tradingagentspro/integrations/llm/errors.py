@@ -38,10 +38,13 @@ def call_error(error: Exception) -> CallError:
 
 
 class InvalidOutput(RuntimeError):
-    """模型回答了，但不符合输出类型：不是调用错误，带回答的原文、原因和这次的用量，由调用方处理。"""
+    """模型回答了，但不符合输出类型：不是调用错误，带回答的原文、原因、这次的用量和全部消息，由调用方
+    处理。
+    """
 
-    def __init__(self, text: str, reason: str, usage: TokenUsage) -> None:
+    def __init__(self, text: str, reason: str, usage: TokenUsage, transcript: str) -> None:
         super().__init__("模型的输出不合法")
         self.text = text
         self.reason = reason
         self.usage = usage
+        self.transcript = transcript
