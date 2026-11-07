@@ -153,7 +153,7 @@ The PM, News and Fundamentals are split; Quant, the Critic and leveraged instrum
 | News and Fundamentals | Sub-agent calls | New; Modify: Agent calls, Task dispatch, Signal format, Stand-ins, Program log, Settings file | Done |
 | | Model call trace | New; Modify: Model adapter, State store design | Done |
 | | News tools | New; Modify: News and filings, Alpaca news, Sub-agent calls, Startup and wiring, Settings file | Done |
-| | Filing tools | New; Modify: News and filings, Sub-agent calls, Startup and wiring | Not started |
+| | Filing tools | New; Modify: News and filings, News tools, Sub-agent calls, Startup and wiring, Settings file, State store design | In progress |
 | | Financial figures | New; Modify: Earnings calendar and sectors, Sub-agent calls, Startup and wiring | Not started |
 | | Valuation | New; Modify: Stock search screen, Financial figures, Sub-agent calls, Startup and wiring | Not started |
 | Going live | Write the prompts | New | Not started |
