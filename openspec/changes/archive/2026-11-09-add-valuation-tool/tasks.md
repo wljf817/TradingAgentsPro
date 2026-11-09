@@ -26,4 +26,4 @@
 ## 5. 文档和冒烟
 
 - [x] 5.1 完整版 Proposal「Fundamentals」：`valuation` 一行写上价格的来源和过去 5 年的位置；工具规则里「PE 用最近四个季度的 EPS」改成全年加今年累计减去年同期累计，补上最近一期太旧不用、拆股按除权日换算、价格和拆股记录每次向 Alpaca 取不存；用 `rg` 确认和本变更一致
-- [ ] 5.2 主机冒烟：提交部署以后，用部署的代码和生产 venv、真实 SEC 和 Alpaca、deepseek-flash 和 Haiku 5.5，内存存储，key 走 ssh stdin，不留东西：两个模型都调用 `valuation` 并交回引用 `valuation/<股票>` 的信号；看 JPM 和 NVDA 的耗时，NVDA、WMT 的 PE 和 Finnhub 的 `peTTM` 差在 3% 以内，拆股那天没有跳变
+- [x] 5.2 主机冒烟：提交部署以后，用部署的代码和生产 venv、真实 SEC 和 Alpaca、deepseek-flash 和 Haiku 5.5，内存存储，key 走 ssh stdin，不留东西：两个模型都调用 `valuation` 并交回引用 `valuation/<股票>` 的信号；看 JPM 和 NVDA 的耗时，NVDA、WMT 的 PE 和 Finnhub 的 `peTTM` 差在 3% 以内，拆股那天没有跳变

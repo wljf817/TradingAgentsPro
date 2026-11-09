@@ -280,8 +280,10 @@
 | 窗口往前天数 | 30 | 刷新财报日历时，取当前 UTC 日期往前这么多天以来的发布 |
 | 窗口往后天数 | 90 | 刷新财报日历时，取到当前 UTC 日期往后这么多天为止的发布 |
 | `financial_quarters` | 8 | `financials` 最多列多少个季度、多少次财报发布（financials-tool spec） |
+| `valuation_years` | 5 | `valuation` 的历史位置往前看多少年（valuation-tool spec「历史位置」） |
+| `max_figures_age_days` | 200 | `valuation` 的数字最近一期结束超过这么多天就不用（valuation-tool spec「太旧的数字」） |
 
-三项都 SHALL 是大于 0 的整数，否则配置报错。
+五项都 SHALL 是大于 0 的整数，否则配置报错。
 
 #### Scenario: 默认配置
 
@@ -296,7 +298,7 @@
 
 #### Scenario: 配置非法
 
-- **WHEN** 窗口往前天数为 0，或者窗口往后天数为 -1，或者 `financial_quarters` 为 0
+- **WHEN** 窗口往前天数为 0，或者窗口往后天数为 -1，或者 `financial_quarters`、`valuation_years`、`max_figures_age_days` 为 0
 - **THEN** 配置报错
 
 ### Requirement: 财务事实的记录

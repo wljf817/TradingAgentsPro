@@ -278,8 +278,8 @@ OpenD 没有运行或没有登录 SHALL NOT 算启动失败，见「第一次健
 | 执行模块 | 订单、止损保护、交易记录存在状态库；执行配置的「买单和止损单错开」SHALL 打开（Alpaca 不允许同一只股票的买单和止损卖单同时挂着），这一项不写在配置文件里，其余用默认值 |
 | 风控 | 预留存在状态库；风控配置用默认值 |
 | 股票池、跟进、案件记录 | 记录都存在状态库；股票池配置和跟进配置用默认值 |
-| Agent 网关 | 任务、Result 和费用记录存在状态库；模型配置和三个预算额度来自模型文件（model-config spec「读到以后怎么用」），调用模型时按厂商分派（model-adapter spec「按厂商分派」），替身（stand-ins spec）的配置用默认值，适配器的配置用默认值（输出上限 16,000）；网关配置的其他项用默认值；News 的读取工具（news-tools spec）查下面装配好的新闻和公告，补抓的界线用事件检测的回看时长；Fundamentals 的公告工具（filing-tools spec）查下面装配好的新闻和公告，补抓的界线用事件检测的回看时长，股票在不在股票池看上面装配好的股票池；Fundamentals 的 `financials`（financials-tool spec）查下面装配好的公司数据 |
-| 新闻和公告、公司数据、寻股粗筛 | 新闻源是 Alpaca 新闻、公告源是 SEC EDGAR、公司数据源是 Finnhub、财务事实的数据源是 SEC EDGAR（和公告源是同一个适配器，请求一个接一个地发），寻股的日线来自 Alpaca、股票列表来自 moomoo（和行情共用一个 OpenD 行情连接）；Alpaca 的 key 和模拟盘的是同一组；记录都存在状态库；各自的配置用默认值，新闻工具的配置来自配置文件的 `news` 一节，公告工具的配置来自 `filings` 一节，粗筛和股票池用同一份股票池配置 |
+| Agent 网关 | 任务、Result 和费用记录存在状态库；模型配置和三个预算额度来自模型文件（model-config spec「读到以后怎么用」），调用模型时按厂商分派（model-adapter spec「按厂商分派」），替身（stand-ins spec）的配置用默认值，适配器的配置用默认值（输出上限 16,000）；网关配置的其他项用默认值；News 的读取工具（news-tools spec）查下面装配好的新闻和公告，补抓的界线用事件检测的回看时长；Fundamentals 的公告工具（filing-tools spec）查下面装配好的新闻和公告，补抓的界线用事件检测的回看时长，股票在不在股票池看上面装配好的股票池；Fundamentals 的 `financials`（financials-tool spec）查下面装配好的公司数据；Fundamentals 的 `valuation`（valuation-tool spec）查下面装配好的公司数据 |
+| 新闻和公告、公司数据、寻股粗筛 | 新闻源是 Alpaca 新闻、公告源是 SEC EDGAR、公司数据源是 Finnhub、财务事实的数据源是 SEC EDGAR（和公告源是同一个适配器，请求一个接一个地发），寻股的日线来自 Alpaca，公司数据的原始收盘价和拆股记录也来自 Alpaca（和寻股的日线是同一个适配器），股票列表来自 moomoo（和行情共用一个 OpenD 行情连接）；Alpaca 的 key 和模拟盘的是同一组；记录都存在状态库；各自的配置用默认值，新闻工具的配置来自配置文件的 `news` 一节，公告工具的配置来自 `filings` 一节，粗筛和股票池用同一份股票池配置 |
 | 快照 | 存在状态库；读下面装配好的事件；快照配置用默认值 |
 | 紧急退出、健康监控 | 各自配置的默认值 |
 | 行情 | 行情源是 OpenD（默认 127.0.0.1:11111）；VIX 源是 Cboe；行情配置用默认值（参考股票 SPY） |
@@ -398,8 +398,9 @@ OpenD 没有运行或没有登录 SHALL NOT 算启动失败，见「第一次健
 #### Scenario: Fundamentals 的读取工具
 
 - **WHEN** 按模拟盘装配
-- **THEN** Fundamentals 的读取工具是 `list_filings`、`read_filing`、`read_transcript` 和 `financials`
+- **THEN** Fundamentals 的读取工具是 `list_filings`、`read_filing`、`read_transcript`、`financials` 和 `valuation`
 - **AND** 财务事实和公告用同一个 SEC 适配器
+- **AND** 公司数据的原始收盘价、拆股记录和寻股的日线用同一个 Alpaca 日线适配器
 
 ### Requirement: 启动对账
 
