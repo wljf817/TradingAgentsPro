@@ -469,7 +469,7 @@ class CaseFlow:
 
 def _outcome(record: TaskRecord) -> TaskOutcome:
     assert record.result is not None  # 派发出去的任务都已经运行完
-    return TaskOutcome(task=record.task, result=record.result)
+    return TaskOutcome(task=record.task, result=record.result, quant=record.quant)
 
 
 def _recent(record: CaseRecord) -> RecentCase:

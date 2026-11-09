@@ -300,6 +300,8 @@ def _quote(version: int, quote: Quote) -> QuoteEntry:
         symbol=quote.symbol,
         last_price=quote.last_price,
         previous_close=quote.previous_close,
+        volume_ratio=quote.volume_ratio,
+        volume=quote.volume,
         updated_at=quote.updated_at,
     )
 

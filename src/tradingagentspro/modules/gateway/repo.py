@@ -1,10 +1,11 @@
 """Agent 网关的表：任务表 gateway_tasks、Result 表 gateway_results、费用表 gateway_costs、调用记录表
-gateway_model_calls，以及 TaskStore、CostStore、ModelCallStore 的数据库实现。
+gateway_model_calls、量化指标表 gateway_indicators，以及 TaskStore、CostStore、ModelCallStore 的
+数据库实现。
 
-四张表都只追加、一行一条，写入以后不改：Task 生成时一行，一个 Task 最多一行 Result（主键是
-task_id），每次尝试一行费用，每次向真实模型的尝试一行调用记录。见 task-dispatch spec「任务的存储」、
-call-budget spec「费用的存储」、model-call-trace spec「调用记录的存储」和
-update-task-cost-storage 的 design D1。
+五张表都只追加、一行一条，写入以后不改：Task 生成时一行，一个 Task 最多一行 Result 和一行量化指标
+条目（主键都是 task_id），每次尝试一行费用，每次向真实模型的尝试一行调用记录。见 task-dispatch spec
+「任务的存储」「Quant 任务的量化指标」、call-budget spec「费用的存储」、model-call-trace spec「调用
+记录的存储」、update-task-cost-storage 的 design D1 和 update-quant-entry 的 design D4。
 """
 
 from datetime import datetime
@@ -35,6 +36,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from tradingagentspro.contracts.agent import Agent
 from tradingagentspro.contracts.case import CaseType
 from tradingagentspro.contracts.model import ModelRef, TokenUsage
+from tradingagentspro.contracts.quant import QuantEntry
 from tradingagentspro.contracts.task import Result, Task
 from tradingagentspro.modules.gateway.domain.budget import Budget, CallCost
 from tradingagentspro.modules.gateway.domain.dispatch import TaskRecord
@@ -54,6 +56,14 @@ TASKS = Table(
 
 RESULTS = Table(
     "gateway_results",
+    MetaData(),
+    Column("task_id", Uuid, primary_key=True),
+    Column("data", JSONB, nullable=False),
+)
+
+# 一个 Quant 任务的量化指标条目，整份存成 JSON
+INDICATORS = Table(
+    "gateway_indicators",
     MetaData(),
     Column("task_id", Uuid, primary_key=True),
     Column("data", JSONB, nullable=False),
@@ -99,8 +109,9 @@ MODEL_CALLS = Table(
 
 
 class PostgresTaskStore:
-    """满足 TaskStore：Task 和 Result 存在状态库所在数据库的 gateway_tasks、gateway_results 表里，
-    整份存成 JSON。每个操作一个事务；数据库的错误、读不出来的记录原样抛出。
+    """满足 TaskStore：Task、Result 和量化指标条目存在状态库所在数据库的 gateway_tasks、
+    gateway_results、gateway_indicators 表里，整份存成 JSON。每个操作一个事务；数据库的错误（包括
+    同一个任务写第二次条目的主键冲突）、读不出来的记录原样抛出。
     """
 
     def __init__(self, engine: Engine) -> None:
@@ -124,6 +135,11 @@ class PostgresTaskStore:
         values = {"task_id": task.task_id, "case_id": task.case_id, "data": _json(task)}
         with self._engine.begin() as connection:
             connection.execute(insert(TASKS).values(values))
+
+    def add_quant(self, task_id: UUID, entry: QuantEntry) -> None:
+        values = {"task_id": task_id, "data": _json(entry)}
+        with self._engine.begin() as connection:
+            connection.execute(insert(INDICATORS).values(values))
 
     def add_result(self, result: Result) -> Result | None:
         """ON CONFLICT DO NOTHING：另一个事务正在写同一个 task_id 时等它结束；没有写入时在同一个
@@ -217,19 +233,27 @@ class PostgresModelCallStore:
         return tuple(_model_call(row) for row in rows)
 
 
-def _with_results() -> Select[tuple[Any, Any]]:
-    """每个 Task 连上它的 Result：还没有 Result 时右边为空。"""
-    return select(TASKS.c.data.label("task"), RESULTS.c.data.label("result")).select_from(
-        TASKS.outerjoin(RESULTS, TASKS.c.task_id == RESULTS.c.task_id)
+def _with_results() -> Select[tuple[Any, Any, Any]]:
+    """每个 Task 连上它的 Result 和量化指标条目：还没有的那一边为空。"""
+    columns = (
+        TASKS.c.data.label("task"),
+        RESULTS.c.data.label("result"),
+        INDICATORS.c.data.label("quant"),
+    )
+    return select(*columns).select_from(
+        TASKS.outerjoin(RESULTS, TASKS.c.task_id == RESULTS.c.task_id).outerjoin(
+            INDICATORS, TASKS.c.task_id == INDICATORS.c.task_id
+        )
     )
 
 
 def _record(row: Any) -> TaskRecord:
     result = None if row.result is None else Result.model_validate(row.result)
-    return TaskRecord(Task.model_validate(row.task), result)
+    quant = None if row.quant is None else QuantEntry.model_validate(row.quant)
+    return TaskRecord(Task.model_validate(row.task), result, quant)
 
 
-def _json(model: Task | Result) -> dict[str, Any]:
+def _json(model: Task | Result | QuantEntry) -> dict[str, Any]:
     """按 JSON 模式写出：金额、耗时、时刻都是文字，读回不丢精度。"""
     return model.model_dump(mode="json")
 

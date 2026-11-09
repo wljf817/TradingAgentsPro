@@ -62,6 +62,8 @@ from tradingagentspro.bootstrap.startup import (
 from tradingagentspro.contracts.agent import SubAgent
 from tradingagentspro.contracts.charter import Charter
 from tradingagentspro.integrations.alpaca import (
+    AlpacaBarHistory,
+    AlpacaBarsConfig,
     AlpacaBarSource,
     AlpacaBroker,
     AlpacaClient,
@@ -150,6 +152,9 @@ from tradingagentspro.modules.gateway import (
 )
 from tradingagentspro.modules.health import HealthService
 from tradingagentspro.modules.marketdata import (
+    BarHistorySource,
+    BarService,
+    IndicatorService,
     MarketContextService,
     MarketDataService,
     VixSource,
@@ -205,6 +210,7 @@ from tradingagentspro.workflows.order_workflow import (
 )
 from tradingagentspro.workflows.patrol import SessionPatrol
 from tradingagentspro.workflows.pool_sync import PoolSync
+from tradingagentspro.workflows.quant_numbers import SnapshotIndicators
 from tradingagentspro.workflows.queue_runner import DbosCases, QueueParts, QueueRunner
 from tradingagentspro.workflows.reconciliation import startup_text
 from tradingagentspro.workflows.snapshot_flow import SnapshotFlow
@@ -236,7 +242,8 @@ class Externals:
     取新闻和公告，测试换成替身，见 add-event-detection 的 design D15。sleep 是收盘心跳相邻两次刷新
     之间的持久化等待，finnhub 是公司数据源：收盘心跳在运行中刷新财报，测试换成替身，见
     add-close-heartbeat 的 design D6。vix 是 VIX 源：生成快照时读，测试换成替身，见
-    add-market-context 的 design D1。
+    add-market-context 的 design D1。bar_history 是 K 线源：Quant 的任务在运行中取 K 线，测试换成
+    替身，见 update-quant-entry 的 design D8。
     """
 
     clock: Clock
@@ -250,6 +257,7 @@ class Externals:
     sleep: Callable[[float], None]
     finnhub: Callable[[FinnhubConfig], CompanyDataSource]
     vix: Callable[[CboeConfig], VixSource]
+    bar_history: Callable[[AlpacaBarsConfig], BarHistorySource]
 
 
 SYSTEM_EXTERNALS = Externals(
@@ -264,6 +272,7 @@ SYSTEM_EXTERNALS = Externals(
     sleep=DBOS.sleep,
     finnhub=FinnhubSource,
     vix=CboeVixSource,
+    bar_history=AlpacaBarHistory,
 )
 
 
@@ -478,8 +487,9 @@ def _case_side(
     configured: ModelFile,
     llm: LlmClient,
 ) -> _CaseSide:
-    """按 bootstrap spec「模拟盘的装配」建出案件那一侧：网关（模型和额度来自模型文件，调用替身）、
-    新闻和公告、公司数据、寻股粗筛、快照和案件工作流的用例，见 add-queue-runner 的 design D12。
+    """按 bootstrap spec「模拟盘的装配」建出案件那一侧：网关（模型和额度来自模型文件，调用替身；
+    Quant 的任务的量化指标由行情模块算）、新闻和公告、公司数据、寻股粗筛、快照和案件工作流的用例，
+    见 add-queue-runner 的 design D12 和 update-quant-entry 的 design D8。
     """
     clock, ids = externals.clock, externals.ids
     execution, risk, market_data, quotes, notification = trade
@@ -516,8 +526,12 @@ def _case_side(
         HistoryQueryService(case_history, gateway, program_log),
         lookups,
     )
+    price_bars = BarService(
+        externals.bar_history(settings.alpaca_bars), calendar, settings.marketdata
+    )
+    quant = SnapshotIndicators(IndicatorService(price_bars, calendar, settings.marketdata))
     agents = AgentCallService(
-        backend, fallback, budget, tasks, PostgresModelCallStore(engine), clock
+        backend, fallback, budget, tasks, PostgresModelCallStore(engine), quant, clock
     )
     screener = ScreenerService(
         MoomooSecuritySource(quotes, settings.moomoo_securities),

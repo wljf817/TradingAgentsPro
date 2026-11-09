@@ -1,16 +1,18 @@
 """Agent 网关的用例。
 
-- TaskDispatchService：放行或拒绝 PM 和 Critic 的任务请求，把子 agent 的输出、调用失败和超时记成
-  Result，给出本案件的任务，见 task-dispatch spec；每个 Task 和 Result 写一条程序日志，见
-  program-log spec「Agent 网关的动作」。这里只读当前时刻、生成 ID、读写存储、写程序日志
+- TaskDispatchService：放行或拒绝 PM 和 Critic 的任务请求，把子 agent 的输出、调用失败、数据取不到
+  和超时记成 Result，存下 Quant 任务的量化指标条目，给出本案件的任务，见 task-dispatch spec；每个
+  Task 和 Result 写一条程序日志，见 program-log spec「Agent 网关的动作」。这里只读当前时刻、生成
+  ID、读写存储、写程序日志
 - ModelFallbackService：一次调用向哪个模型尝试、失败以后换不换，按模型熔断，记下案件内的起点，见
   model-fallback spec。这里只读当前时刻、查模型的配置，在内存里保存熔断状态和起点
 - CallBudgetService：记下每次尝试的费用，给出三个预算的情况，见 call-budget spec。这里只读当前时刻、
   查交易日历和单价、读写存储
 - HistoryQueryService：PM 查询历史，经 HistoryReader 读出结果，写一条程序日志，见 history-query spec
 - AgentCallService：调用 agent，按 ModelFallbackService 的步骤经 ModelBackend 向模型逐次尝试，每次
-  拿到用量就经 CallBudgetService 记一条费用，真实模型的尝试写一条调用记录；子 agent 的任务经
-  TaskDispatchService 生成 Result，见 agent-calls spec、model-call-trace spec
+  拿到用量就经 CallBudgetService 记一条费用，真实模型的尝试写一条调用记录；Quant 的任务先经
+  QuantNumbers 取得量化指标条目；子 agent 的任务经 TaskDispatchService 生成 Result，见 agent-calls
+  spec、model-call-trace spec
 
 规则都在 domain 里。
 """
@@ -23,7 +25,7 @@ from decimal import Decimal
 from functools import partial
 from uuid import UUID
 
-from tradingagentspro.contracts.agent import Agent
+from tradingagentspro.contracts.agent import Agent, SubAgent
 from tradingagentspro.contracts.agent_call import (
     CriticReply,
     CriticRequest,
@@ -38,6 +40,7 @@ from tradingagentspro.contracts.agent_call import (
 from tradingagentspro.contracts.case import CaseType
 from tradingagentspro.contracts.history import HistoryReport
 from tradingagentspro.contracts.model import ModelRef, ModelUse, TokenUsage
+from tradingagentspro.contracts.quant import QuantEntry, QuantIndicators, quant_entry_id
 from tradingagentspro.contracts.signal import SubAgentOutput
 from tradingagentspro.contracts.snapshot import Snapshot
 from tradingagentspro.contracts.task import Dispatcher, Result, Task, TaskRequest
@@ -81,6 +84,7 @@ from tradingagentspro.modules.gateway.domain.fallback import (
 from tradingagentspro.modules.gateway.domain.model_call import ModelCallRecord
 from tradingagentspro.modules.gateway.domain.result import (
     call_failed,
+    data_unavailable,
     expired,
     received,
     rejected,
@@ -92,6 +96,8 @@ from tradingagentspro.modules.gateway.ports import (
     ModelCallError,
     ModelCallStore,
     ModelReply,
+    QuantDataUnavailableError,
+    QuantNumbers,
     TaskStore,
 )
 from tradingagentspro.modules.programlog import Action, Actor, ProgramLog
@@ -185,6 +191,18 @@ class TaskDispatchService:
         """调用子 agent 失败、不再重试；detail 是说明。已经有 Result 时返回它，不改变。"""
         return self._settle(task_id, lambda task, now: call_failed(task, detail, now, cost))
 
+    def unavailable(self, task_id: UUID, reason: str) -> Result:
+        """Quant 的任务取不到 K 线、没有调用模型；reason 是行情模块给出的原因。已经有 Result 时
+        返回它，不改变。
+        """
+        return self._settle(task_id, lambda task, now: data_unavailable(task, reason, now))
+
+    def add_quant(self, task_id: UUID, indicators: QuantIndicators) -> QuantEntry:
+        """存下这个任务的量化指标条目，给出它；这个任务已经有条目时报错。"""
+        entry = QuantEntry(entry_id=quant_entry_id(task_id), indicators=indicators)
+        self._store.add_quant(task_id, entry)
+        return entry
+
     def expire(self, task_id: UUID, cost: Decimal) -> Result:
         """到截止时间仍没有 Result，记超时；早于截止时间抛 ValueError，不写入。
 
@@ -193,11 +211,11 @@ class TaskDispatchService:
         return self._settle(task_id, lambda task, now: expired(task, now, cost))
 
     def record(self, task_id: UUID) -> TaskRecord:
-        """一个任务和它的 Result；没有这个任务时抛 KeyError。"""
+        """一个任务和它的 Result、量化指标条目；没有这个任务时抛 KeyError。"""
         return self._store.record(task_id)
 
     def records(self, case_id: UUID) -> tuple[TaskRecord, ...]:
-        """本案件的任务和它们的 Result，按生成的先后。"""
+        """本案件的任务和它们的 Result、量化指标条目，按生成的先后。"""
         return self._store.case_records(case_id)
 
     def _settle(self, task_id: UUID, settle: Callable[[Task, datetime], Result]) -> Result:
@@ -432,6 +450,7 @@ class AgentCallService:
         budget: CallBudgetService,
         tasks: TaskDispatchService,
         model_calls: ModelCallStore,
+        quant: QuantNumbers,
         clock: Clock,
     ) -> None:
         self._backend = backend
@@ -439,6 +458,7 @@ class AgentCallService:
         self._budget = budget
         self._tasks = tasks
         self._model_calls = model_calls
+        self._quant = quant
         self._clock = clock
 
     def pm(self, request: PmRequest) -> Answered[PmReply] | AllUnavailable:
@@ -474,12 +494,22 @@ class AgentCallService:
         )
 
     def run_task(self, task_id: UUID, snapshot: Snapshot) -> Result:
-        """运行一个派发出去的任务，给出它的 Result；已经有 Result 时直接给出，不调用模型。"""
+        """运行一个派发出去的任务，给出它的 Result；已经有 Result 时直接给出，不调用模型。
+
+        Quant 的任务先取得量化指标条目：存过的用存下的，没有时算出来先存下；K 线取不到时记数据
+        取不到，不调用模型。见 update-quant-entry 的 design D2。
+        """
         record = self._tasks.record(task_id)
         if record.result is not None:
             return record.result
-        task = record.task
-        request = SubAgentRequest(task=task, snapshot=snapshot)
+        task, quant = record.task, record.quant
+        if task.target is SubAgent.QUANT and quant is None:
+            try:
+                indicators = self._quant.indicators(task, snapshot)
+            except QuantDataUnavailableError as error:
+                return self._tasks.unavailable(task_id, str(error))
+            quant = self._tasks.add_quant(task_id, indicators)
+        request = SubAgentRequest(task=task, snapshot=snapshot, quant=quant)
         outcome, cost = self._call(
             snapshot,
             Agent(task.target.value),
@@ -491,6 +521,8 @@ class AgentCallService:
             case Answered():
                 reply = outcome.output
                 known = {entry.entry_id for entry in snapshot.entries()} | reply.tool_entries
+                if quant is not None:
+                    known.add(quant.entry_id)
                 return self._tasks.receive(task_id, reply.output, known, cost, outcome.model_use)
             case AllUnavailable():
                 return self._tasks.fail(task_id, outcome.detail, cost)

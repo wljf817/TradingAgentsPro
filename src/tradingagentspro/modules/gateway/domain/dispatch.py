@@ -14,6 +14,7 @@ from uuid import UUID
 
 from tradingagentspro.contracts.agent import SubAgent
 from tradingagentspro.contracts.case import CaseType
+from tradingagentspro.contracts.quant import QuantEntry
 from tradingagentspro.contracts.task import (
     Dispatcher,
     Result,
@@ -40,10 +41,11 @@ class CaseScope:
 
 @dataclass(frozen=True, slots=True)
 class TaskRecord:
-    """一个任务和它的 Result；还在运行时没有 Result。"""
+    """一个任务、它的 Result 和量化指标条目；还在运行时没有 Result，只有 Quant 的任务可能有条目。"""
 
     task: Task
     result: Result | None = None
+    quant: QuantEntry | None = None
 
     @property
     def dispatched(self) -> bool:

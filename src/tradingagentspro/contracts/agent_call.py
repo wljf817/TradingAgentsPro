@@ -24,6 +24,7 @@ from tradingagentspro.contracts.conclusion import (
 )
 from tradingagentspro.contracts.event import Event
 from tradingagentspro.contracts.history import HistoryIndex
+from tradingagentspro.contracts.quant import QuantEntry
 from tradingagentspro.contracts.review import CriticReview, PlanResponse, Verdict
 from tradingagentspro.contracts.signal import EntryId, SubAgentOutput
 from tradingagentspro.contracts.snapshot import Snapshot
@@ -73,12 +74,15 @@ class CaseContext(BaseModel):
 
 
 class TaskOutcome(BaseModel):
-    """一个任务请求的处理结果：派发、被拒绝或复用的 Task，和它的 Result。"""
+    """一个任务请求的处理结果：派发、被拒绝或复用的 Task，它的 Result，和它的量化指标条目（Quant 的
+    任务有时才有，见 task-dispatch spec「Quant 任务的量化指标」）。
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     task: Task
     result: Result
+    quant: QuantEntry | None = None
 
 
 class DispatchTasks(BaseModel):
@@ -241,12 +245,13 @@ class CriticRequest(BaseModel):
 
 
 class SubAgentRequest(BaseModel):
-    """调用子 agent：它只看到 Task 和快照。"""
+    """调用子 agent：它只看到 Task 和快照，Quant 另有这个任务的量化指标条目。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     task: Task
     snapshot: Snapshot
+    quant: QuantEntry | None = None  # Quant 的任务才有
 
 
 class ReviewerRequest(BaseModel):

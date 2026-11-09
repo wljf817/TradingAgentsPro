@@ -1,4 +1,6 @@
-"""Agent 网关需要的外部接口：调用模型、任务和 Result 的存储、费用的存储。"""
+"""Agent 网关需要的外部接口：调用模型、任务和 Result 的存储、费用的存储、读历史、算 Quant 任务的
+量化指标。
+"""
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -19,6 +21,8 @@ from tradingagentspro.contracts.agent_call import (
 from tradingagentspro.contracts.case import CaseType
 from tradingagentspro.contracts.history import HistoryReport
 from tradingagentspro.contracts.model import ModelRef, TokenUsage
+from tradingagentspro.contracts.quant import QuantEntry, QuantIndicators
+from tradingagentspro.contracts.snapshot import Snapshot
 from tradingagentspro.contracts.task import Result, Task
 from tradingagentspro.modules.gateway.domain.budget import CallCost
 from tradingagentspro.modules.gateway.domain.dispatch import TaskRecord
@@ -50,6 +54,20 @@ class ModelReply[T]:
     usage: TokenUsage
     served_model: str | None = None
     transcript: str | None = None
+
+
+class QuantDataUnavailableError(RuntimeError):
+    """K 线取不到：行情模块报数据源不可用。说明是行情模块给出的原因。"""
+
+
+class QuantNumbers(Protocol):
+    """按 Task 和这次运行读的快照算出一个 Quant 任务的量化指标，见 task-dispatch spec「Quant 任务的
+    量化指标」。由 workflows 满足，见 update-quant-entry 的 design D2。
+    """
+
+    def indicators(self, task: Task, snapshot: Snapshot) -> QuantIndicators:
+        """算出量化指标；K 线取不到时抛 QuantDataUnavailableError，其他错误原样抛出。"""
+        ...
 
 
 class HistoryReader(Protocol):
@@ -106,22 +124,27 @@ class ModelBackend(Protocol):
 
 
 class TaskStore(Protocol):
-    """任务和 Result 的存储。只追加：Task 生成时写入，Result 出来时写入，写入以后都不再改。
+    """任务、Result 和量化指标条目的存储。只追加：Task 生成时写入，条目在调用 Quant 的模型以前写入，
+    Result 出来时写入，写入以后都不再改。
 
-    网关是 Task 和 Result 唯一的写入者；数据库实现是 repo 的 PostgresTaskStore（表 gateway_tasks、
-    gateway_results），见 task-dispatch spec「任务的存储」。
+    网关是唯一的写入者；数据库实现是 repo 的 PostgresTaskStore（表 gateway_tasks、gateway_results、
+    gateway_indicators），见 task-dispatch spec「任务的存储」「Quant 任务的量化指标」。
     """
 
     def case_records(self, case_id: UUID) -> tuple[TaskRecord, ...]:
-        """本案件的任务和它们的 Result，按 Task 写入的先后。"""
+        """本案件的任务和它们的 Result、条目，按 Task 写入的先后。"""
         ...
 
     def record(self, task_id: UUID) -> TaskRecord:
-        """一个任务和它的 Result；没有这个任务时抛 KeyError。"""
+        """一个任务和它的 Result、条目；没有这个任务时抛 KeyError。"""
         ...
 
     def add_task(self, task: Task) -> None:
         """写入一个新 Task。"""
+        ...
+
+    def add_quant(self, task_id: UUID, entry: QuantEntry) -> None:
+        """写入一个 Task 的量化指标条目；这个 Task 已经写入，还没有条目，否则报错。"""
         ...
 
     def add_result(self, result: Result) -> Result | None:

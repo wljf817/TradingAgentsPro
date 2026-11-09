@@ -152,6 +152,7 @@ class TaskFailure(StrEnum):
 
     FORMAT_INVALID = "format_invalid"  # 格式不合法：不重新调用，不切换模型
     CALL_FAILED = "call_failed"  # 调用失败：model-fallback spec 的全部不可用
+    DATA_UNAVAILABLE = "data_unavailable"  # 数据取不到：Quant 的任务取不到 K 线，没有调用模型
 
 
 # 有输出的状态和输出的类型；带原因的状态和原因的类型

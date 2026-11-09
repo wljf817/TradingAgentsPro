@@ -56,7 +56,11 @@ _STATUSES: Final = {
     ResultStatus.TIMED_OUT: "超时",
     ResultStatus.FAILED: "失败",
 }
-_FAILURES: Final = {TaskFailure.FORMAT_INVALID: "格式不合法", TaskFailure.CALL_FAILED: "调用失败"}
+_FAILURES: Final = {
+    TaskFailure.FORMAT_INVALID: "格式不合法",
+    TaskFailure.CALL_FAILED: "调用失败",
+    TaskFailure.DATA_UNAVAILABLE: "数据取不到",
+}
 # 格式不合法的 Result 的说明可能是 signal-format spec「收到输出时的校验」的原因代码，写成中文
 _SIGNAL_REJECTIONS: Final[dict[str, str]] = {
     SignalRejection.HORIZON_NOT_OFFERED: "评估窗口不在配置的选项里",

@@ -1,4 +1,5 @@
-"""量化指标：行情模块按一个 Quant 任务算出的数字，见 quant-indicators spec。
+"""量化指标：行情模块按一个 Quant 任务算出的数字，见 quant-indicators spec；Agent 网关把它存成这个
+任务的量化指标条目，见 task-dispatch spec「Quant 任务的量化指标」。
 
 价格按快照那天的口径；涨跌、偏离、斜率、变化、占比和位置写成小数（0.0123 是 1.23%），量比写成倍数；
 都保留四位小数。算不出的数字为 None。
@@ -7,9 +8,11 @@
 from datetime import date
 from decimal import Decimal
 from enum import StrEnum
+from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
+from tradingagentspro.contracts.signal import EntryId
 from tradingagentspro.contracts.task import BarWindow
 
 
@@ -122,3 +125,15 @@ class QuantIndicators(_Frozen):
     year_high: YearExtreme | None
     year_low: YearExtreme | None
     events: tuple[EventReaction, ...]  # 按请求里事件的顺序
+
+
+def quant_entry_id(task_id: UUID) -> str:
+    """一个 Quant 任务的量化指标条目的 ID：quant/ 加上 task_id。"""
+    return f"quant/{task_id}"
+
+
+class QuantEntry(_Frozen):
+    """一个 Quant 任务的量化指标条目：信号可以引用它，随 Task 和 Result 交给 PM 和 Critic。"""
+
+    entry_id: EntryId  # quant_entry_id(task_id)
+    indicators: QuantIndicators

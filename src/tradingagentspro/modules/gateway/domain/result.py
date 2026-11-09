@@ -1,5 +1,5 @@
-"""子 agent 的输出、调用失败、超时和被拒绝变成 Result，见 task-dispatch spec「子 agent 的输出变成
-Result」「超时」「调用失败」「Result 的格式」。
+"""子 agent 的输出、调用失败、数据取不到、超时和被拒绝变成 Result，见 task-dispatch spec「子 agent
+的输出变成 Result」「超时」「调用失败」「Result 的格式」和 agent-calls spec「子 agent 的任务」。
 
 截止时间先看：晚于截止时间收到的输出或调用失败，不论合不合法都是超时。格式不合法的三个来源合在
 一起：结构错误由调用方给出 InvalidReply，评估窗口和数据截至时刻由 signal-format 的 signal_rejection
@@ -63,6 +63,15 @@ def call_failed(task: Task, detail: str, now: datetime, cost: Decimal) -> Result
     if now > task.deadline:
         return _settled(task, ResultStatus.TIMED_OUT, now, cost)
     return _failed(task, TaskFailure.CALL_FAILED, detail, now, cost)
+
+
+def data_unavailable(task: Task, reason: str, now: datetime) -> Result:
+    """Quant 的任务取不到 K 线、没有调用模型时的 Result：费用 0，说明是"取不到 K 线："加上行情模块
+    给出的原因 reason；晚于截止时间是超时。
+    """
+    if now > task.deadline:
+        return _settled(task, ResultStatus.TIMED_OUT, now, Decimal(0))
+    return _failed(task, TaskFailure.DATA_UNAVAILABLE, f"取不到 K 线：{reason}", now, Decimal(0))
 
 
 def expired(task: Task, now: datetime, cost: Decimal) -> Result:

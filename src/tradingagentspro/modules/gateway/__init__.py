@@ -6,7 +6,8 @@
   输出、调用失败和超时变成 Result；给出本案件的任务、用量和交给结论校验的数（task-dispatch spec）。
   Task 和 Result 存在 gateway_tasks、gateway_results 表里（PostgresTaskStore），一个任务只有一个
   Result 由 Result 表的主键保证；每个 Task 和 Result 写一条程序日志（program-log spec「Agent 网关的
-  动作」）
+  动作」）。Quant 的任务在调用模型以前经 QuantNumbers 端口算出量化指标，存成条目（gateway_indicators
+  表），K 线取不到时记数据取不到（task-dispatch spec「Quant 任务的量化指标」）
 - 备用模型：各 agent 的模型配置和厂商校验；主模型不可用时按顺序切换备用模型，案件内不切回，按模型
   熔断；给出实际使用的模型、切换的事件、PM 和 Critic 是否还有可用的模型，以及 PM 用备用模型时不能
   提的决定（model-fallback spec）
@@ -75,6 +76,7 @@ from tradingagentspro.modules.gateway.domain.fallback import (
 from tradingagentspro.modules.gateway.domain.model_call import ModelCallRecord
 from tradingagentspro.modules.gateway.domain.result import (
     call_failed,
+    data_unavailable,
     expired,
     received,
     rejected,
@@ -92,6 +94,8 @@ from tradingagentspro.modules.gateway.ports import (
     ModelCallError,
     ModelCallStore,
     ModelReply,
+    QuantDataUnavailableError,
+    QuantNumbers,
     TaskStore,
 )
 from tradingagentspro.modules.gateway.repo import (
@@ -142,6 +146,8 @@ __all__ = [
     "PostgresCostStore",
     "PostgresModelCallStore",
     "PostgresTaskStore",
+    "QuantDataUnavailableError",
+    "QuantNumbers",
     "SignalRejection",
     "TaskDispatchService",
     "TaskRecord",
@@ -157,6 +163,7 @@ __all__ = [
     "completed_results",
     "conclusion_signal_rejection",
     "cost_of",
+    "data_unavailable",
     "dispatch_rejection",
     "dispatched_agents",
     "exhausted",

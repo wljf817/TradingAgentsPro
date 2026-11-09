@@ -147,11 +147,13 @@ class StockPoolEntry(SnapshotEntry):
 
 
 class QuoteEntry(SnapshotEntry):
-    """一只股票的行情。last_price：开盘后还没有成交时为 None。"""
+    """一只股票的行情。last_price、volume_ratio、volume：开盘后还没有成交时为 None。"""
 
     symbol: str
     last_price: Decimal | None
     previous_close: Decimal
+    volume_ratio: Decimal | None = None  # 量比；旧快照没有这一项
+    volume: int | None = None  # 当天常规时段的累计成交量（股）；旧快照没有这一项
     updated_at: AwareDatetime
 
 

@@ -88,9 +88,14 @@ class StandInBackend:
     def sub_agent(
         self, model: ModelRef, timeout: timedelta, request: SubAgentRequest
     ) -> ModelReply[SubAgentReply]:
-        """替身的信号，引用 Task 的输入；输入为空时引用快照的市场状态条目。"""
+        """替身的信号。Quant 只引用这个任务的量化指标条目；News 和 Fundamentals 引用 Task 的输入，
+        输入为空时引用快照的市场状态条目。
+        """
         snapshot = request.snapshot
-        cited = request.task.inputs or (snapshot.market.entry_id,)
+        if request.quant is not None:
+            cited: tuple[str, ...] = (request.quant.entry_id,)
+        else:
+            cited = request.task.inputs or (snapshot.market.entry_id,)
         signal = stand_in_signal(snapshot, cited, self._config)
         return ModelReply(SubAgentReply(output=signal), _NO_USAGE)
 
