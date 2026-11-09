@@ -1,5 +1,6 @@
 """Alpaca 适配器：用 Alpaca Trading API 实现执行模块的券商端口，模拟盘用它；用 Alpaca 市场数据
-API 的新闻接口实现新闻和公告模块的新闻源，历史 K 线接口实现寻股粗筛模块的日线。
+API 的新闻接口实现新闻和公告模块的新闻源，历史 K 线接口实现寻股粗筛模块的日线和公司数据模块的
+原始收盘价，公司行动接口实现公司数据模块的拆股记录。
 
 见 openspec 的 alpaca-broker spec、alpaca-news spec 和 alpaca-bars spec。装配时建一个 AlpacaClient，
 两个券商适配器共用；新闻源和日线各有自己的配置和连接，key 是同一组。

@@ -90,6 +90,7 @@ from tradingagentspro.integrations.llm import (
     filing_tools,
     financials_tools,
     news_tools,
+    valuation_tools,
 )
 from tradingagentspro.integrations.moomoo import (
     MoomooConfig,
@@ -114,6 +115,7 @@ from tradingagentspro.modules.companydata import (
     FinancialsService,
     PostgresEarningsStore,
     PostgresFinancialFactStore,
+    ValuationService,
 )
 from tradingagentspro.modules.emergency import EmergencyService
 from tradingagentspro.modules.events import (
@@ -404,9 +406,14 @@ def sub_agent_setups(
     news: NewsLookupService,
     filings: FilingLookupService,
     financials: FinancialsService,
+    valuation: ValuationService,
 ) -> dict[SubAgent, SubAgentSetup]:
-    """接上真实模型的子 agent：News 有新闻工具，Fundamentals 有公告工具和 financials。"""
-    fundamentals = combined(filing_tools(filings), financials_tools(financials))
+    """接上真实模型的子 agent：News 有新闻工具，Fundamentals 有公告工具、financials 和
+    valuation。
+    """
+    fundamentals = combined(
+        filing_tools(filings), financials_tools(financials), valuation_tools(valuation)
+    )
     return {
         SubAgent.NEWS: _sub_agent_setup(charter, NEWS_PROMPT_FILE, news_tools(news)),
         SubAgent.FUNDAMENTALS: _sub_agent_setup(charter, FUNDAMENTALS_PROMPT_FILE, fundamentals),
@@ -439,7 +446,7 @@ def _model_backend(
     llm: LlmClient,
     charter: Charter,
     history: HistoryQueryService,
-    lookups: tuple[NewsLookupService, FilingLookupService, FinancialsService],
+    lookups: tuple[NewsLookupService, FilingLookupService, FinancialsService, ValuationService],
 ) -> VendorRouter:
     """按 model-adapter spec「按厂商分派」：替身的厂商交给替身，其他交给真实模型的后端。"""
     real = LlmBackend(
@@ -494,10 +501,12 @@ def _case_side(
     financials = FinancialsService(
         company_data, sec, PostgresFinancialFactStore(engine, clock), settings.companydata
     )
+    bars = AlpacaBarSource(settings.alpaca_bars)  # 寻股的日线、估值的收盘价和拆股共用
     lookups = (
         news_lookup(news, clock, settings),
         filing_lookup(news, clock, settings, stock_pool),
         financials,
+        ValuationService(financials, bars, bars, settings.companydata),
     )
     backend = _model_backend(
         configured,
@@ -512,7 +521,7 @@ def _case_side(
     )
     screener = ScreenerService(
         MoomooSecuritySource(quotes, settings.moomoo_securities),
-        AlpacaBarSource(settings.alpaca_bars),
+        bars,
         company_data,
         PostgresScreenStore(engine, clock),
         clock,

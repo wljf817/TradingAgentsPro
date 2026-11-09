@@ -17,6 +17,7 @@ from tradingagentspro.integrations.llm.sub_agent import (
     combined,
     no_tools,
 )
+from tradingagentspro.integrations.llm.valuation import valuation_tools
 
 __all__ = [
     "Endpoint",
@@ -36,4 +37,5 @@ __all__ = [
     "financials_tools",
     "news_tools",
     "no_tools",
+    "valuation_tools",
 ]

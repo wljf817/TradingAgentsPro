@@ -1,4 +1,4 @@
-"""公司数据模块需要的外部接口：数据源、财务事实的数据源，以及财报和财务事实的存储。"""
+"""公司数据模块需要的外部接口：数据源、财务事实的数据源、价格和拆股的数据源，以及财报和财务事实的存储。"""
 
 from collections.abc import Collection, Sequence
 from datetime import date, datetime
@@ -10,6 +10,7 @@ from tradingagentspro.modules.companydata.domain.earnings import (
     SurpriseHistory,
 )
 from tradingagentspro.modules.companydata.domain.financials import FinancialFact
+from tradingagentspro.modules.companydata.domain.valuation import DailyClose, Split
 
 
 class CompanyDataUnavailableError(RuntimeError):
@@ -86,4 +87,20 @@ class FinancialFactStore(Protocol):
 
     def facts(self, symbol: str, filed_before: date) -> tuple[FinancialFact, ...]:
         """这只股票提交日早于 filed_before 的全部事实，顺序不保证。"""
+        ...
+
+
+class PriceSource(Protocol):
+    """原始收盘价的数据源。每次调用发请求，失败时抛 CompanyDataUnavailableError，不重试。"""
+
+    def daily_closes(self, symbol: str, start: date, end: date) -> tuple[DailyClose, ...]:
+        """start 到 end（含两端）每个交易日的原始收盘价，按交易日从早到晚；没有时为空。"""
+        ...
+
+
+class SplitSource(Protocol):
+    """拆股记录的数据源。每次调用发请求，失败时抛 CompanyDataUnavailableError，不重试。"""
+
+    def splits(self, symbol: str, end: date) -> tuple[Split, ...]:
+        """除权日不晚于 end 的全部拆股，按除权日从早到晚；没有时为空。"""
         ...

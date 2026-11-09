@@ -1,15 +1,17 @@
-"""公司数据的用例：查一只股票的板块，刷新和读取一只股票的财报；取、读财务事实，给出 financials 的
-结果。
+"""公司数据的用例：查一只股票的板块，刷新和读取一只股票的财报；取、读财务事实，给出 financials 和
+valuation 的结果。
 
-见 company-data spec、financials-tool spec、add-earnings-calendar-and-sector 的 design D6、D9 和
-add-financial-figures 的 design D2、D3、D7。
+见 company-data spec、financials-tool spec、valuation-tool spec、add-earnings-calendar-and-sector 的
+design D6、D9，add-financial-figures 的 design D2、D3、D7 和 add-valuation-tool 的 design D6、D9。
 """
 
 import logging
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from typing import Final
 from zoneinfo import ZoneInfo
 
+from tradingagentspro.contracts.snapshot import QuoteEntry
 from tradingagentspro.modules.companydata.config import CompanyDataConfig
 from tradingagentspro.modules.companydata.domain.earnings import (
     EarningsRelease,
@@ -24,12 +26,21 @@ from tradingagentspro.modules.companydata.domain.financials import (
     quarters,
 )
 from tradingagentspro.modules.companydata.domain.sector import SectorEtf, sector_of
+from tradingagentspro.modules.companydata.domain.valuation import (
+    DailyClose,
+    Price,
+    ValuationReport,
+    appraise,
+    window,
+)
 from tradingagentspro.modules.companydata.ports import (
     CompanyDataSource,
     CompanyDataUnavailableError,
     EarningsStore,
     FinancialFactSource,
     FinancialFactStore,
+    PriceSource,
+    SplitSource,
 )
 from tradingagentspro.shared.clock import Clock
 
@@ -167,6 +178,69 @@ class FinancialsService:
             estimates_refreshed=refreshed,
             estimates_unavailable=estimates_unavailable,
         )
+
+
+class ValuationService:
+    """valuation 的结果，见 valuation-tool spec。财务事实经 FinancialsService 取和读；价格和拆股每次
+    向数据源取，不存。数据源不可用按 spec 写进结果，别的错误原样抛出。
+    """
+
+    def __init__(
+        self,
+        financials: FinancialsService,
+        prices: PriceSource,
+        splits: SplitSource,
+        config: CompanyDataConfig,
+    ) -> None:
+        self._financials = financials
+        self._prices = prices
+        self._splits = splits
+        self._config = config
+
+    def report(self, symbol: str, before: datetime, quote: QuoteEntry | None) -> ValuationReport:
+        """before 是快照时刻 T，quote 是快照里这只股票的行情（没有时为 None）。
+
+        先向 SEC 取事实；未覆盖时不向价格和拆股的数据源请求，见 spec「补取和未覆盖」。
+        """
+        try:
+            found, unavailable = self._financials.fetch_facts(symbol), False
+        except CompanyDataUnavailableError:  # 用存过的，同 financials-tool spec「补取」
+            found, unavailable = True, True
+        day = _eastern_day(before)
+        start, end = window(day, self._config.valuation_years)
+        facts = self._financials.facts(symbol, before) if found else ()
+        empty = ValuationReport(
+            symbol=symbol,
+            filed_before=day,
+            covered=found and (unavailable or bool(quarters(facts, 1))),
+            facts_unavailable=unavailable,
+            prices_unavailable=False,
+            window_start=start,
+            window_end=end,
+            max_age_days=self._config.max_figures_age_days,
+            price=None,
+            appraisal=None,
+        )
+        if not empty.covered:
+            return empty
+        try:
+            closes = self._prices.daily_closes(symbol, start, end)
+            splits = self._splits.splits(symbol, day)
+        except CompanyDataUnavailableError:  # 见 spec「Alpaca 的请求和不可用」
+            return replace(empty, prices_unavailable=True)
+        price = _price(quote, closes)
+        appraisal = appraise(
+            facts, splits, closes, day, price.value, self._config.max_figures_age_days
+        )
+        return replace(empty, price=price, appraisal=appraisal)
+
+
+def _price(quote: QuoteEntry | None, closes: tuple[DailyClose, ...]) -> Price:
+    """快照的最新价，没有时用窗口里最后一天的收盘价，见 valuation-tool spec「价格」。"""
+    if quote is not None and quote.last_price is not None:
+        return Price(quote.last_price, quote.updated_at, None)
+    last = closes[-1]
+    return Price(last.close, None, last.day)
 
 
 def _by_day(releases: tuple[EarningsRelease, ...]) -> tuple[EarningsRelease, ...]:

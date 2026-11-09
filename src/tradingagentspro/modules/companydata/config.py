@@ -14,3 +14,7 @@ class CompanyDataConfig(BaseModel):
     lookahead_days: int = Field(default=90, gt=0)
     # financials 最多列多少个季度、多少次财报发布：两年，同比增长要往后数 4 个季度
     financial_quarters: int = Field(default=8, gt=0)
+    # valuation 的历史位置往前看多少年：Quant 日线范围的上限 1260 个交易日约 5 年
+    valuation_years: int = Field(default=5, gt=0)
+    # valuation 的数字最近一期结束超过这么多天就不用：按时申报的公司最长约 181 天
+    max_figures_age_days: int = Field(default=200, gt=0)
