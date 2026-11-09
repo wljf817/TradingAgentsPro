@@ -155,6 +155,6 @@ The PM, News and Fundamentals are split; Quant, the Critic and leveraged instrum
 | | News tools | New; Modify: News and filings, Alpaca news, Sub-agent calls, Startup and wiring, Settings file | Done |
 | | Filing tools | New; Modify: News and filings, News tools, Sub-agent calls, Startup and wiring, Settings file, State store design | Done |
 | | Financial figures | New; Modify: Earnings calendar and sectors, News and filings, News tools, Filing tools, Sub-agent calls, Startup and wiring, State store design | Done |
-| | Valuation | New; Modify: Stock search screen, Financial figures, Sub-agent calls, Startup and wiring | Not started |
+| | Valuation | New; Modify: Alpaca daily bars, Earnings calendar and sectors, Sub-agent calls, Startup and wiring | In progress |
 | Going live | Write the prompts | New | Not started |
 | | Switch to real models | Modify: Model configuration | Not started |
