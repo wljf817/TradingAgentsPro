@@ -111,7 +111,7 @@ def plan_bars(
 ) -> BarPlan:
     """按快照时刻、延迟和范围推算截止时刻、交易日和快照那天。"""
     cutoff = taken_at - delay
-    days = [_opened_by(calendar, cutoff - _QUARTER)]  # 最后一天要有一根走完的 15 分钟线
+    days = [opened_by(calendar, cutoff - _QUARTER)]  # 最后一天要有一根走完的 15 分钟线
     while len(days) < sessions:
         days.append(calendar.previous_session(days[-1].day))
     days.reverse()
@@ -119,7 +119,7 @@ def plan_bars(
         monday = days[0].day - timedelta(days=days[0].day.weekday())
         while (earlier := calendar.previous_session(days[0].day)).day >= monday:
             days.insert(0, earlier)
-    return BarPlan(cutoff, tuple(days), _opened_by(calendar, taken_at).day)
+    return BarPlan(cutoff, tuple(days), opened_by(calendar, taken_at).day)
 
 
 def build_bars(
@@ -174,7 +174,7 @@ def _divide(
     return o, h, low, c
 
 
-def _opened_by(calendar: TradingCalendar, moment: datetime) -> TradingSession:
+def opened_by(calendar: TradingCalendar, moment: datetime) -> TradingSession:
     """开盘时刻不晚于 moment 的最近一个交易日。"""
     return calendar.session_at(moment) or calendar.last_session_before(moment)
 

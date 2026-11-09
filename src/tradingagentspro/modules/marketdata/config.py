@@ -1,5 +1,5 @@
-"""行情模块的配置和默认值，含义见 market-data spec「行情配置」、market-context spec「重要日程」和
-price-bars spec「K 线配置」。
+"""行情模块的配置和默认值，含义见 market-data spec「行情配置」、market-context spec「重要日程」、
+price-bars spec「K 线配置」和 quant-indicators spec「量化指标配置」。
 
 日程的日期取自官方日历：FOMC 取自美联储的会议日历，CPI 和非农取自 BLS 的发布日历，到 2027 年底。
 """
@@ -7,7 +7,7 @@ price-bars spec「K 线配置」。
 from datetime import date, timedelta
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 
 from tradingagentspro.contracts.snapshot import ScheduleItem, ScheduleKind
 
@@ -66,6 +66,29 @@ DEFAULT_SCHEDULE: Final = (
 )
 
 
+class IndicatorConfig(BaseModel):
+    """量化指标的配置。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # 每个长度算一条均线，根数按任务的周期
+    ma_lengths: tuple[PositiveInt, ...] = Field(default=(20, 50, 200), min_length=1)
+    # 均线的斜率和 ATR 的变化比较往前这么多根
+    change_bars: int = Field(default=5, gt=0)
+    # ATR 按这么多根的真实波幅平均
+    atr_bars: int = Field(default=14, gt=0)
+    # 一年的交易日数：日线 ATR 的一年位置、跳空缺口和 52 周高低点用这么多根日线
+    year_sessions: int = Field(default=252, gt=0)
+    # 前高前低和前后这么多根比较
+    swing_bars: int = Field(default=5, gt=0)
+    # 前高前低和缺口在现价上方、下方各列这么多个
+    levels_per_side: int = Field(default=3, gt=0)
+    # 自己算量比时，过去每分钟的成交量按当天以前这么多个交易日算
+    volume_ratio_sessions: int = Field(default=5, gt=0)
+    # 大盘：相对强度和事件反应都和它比
+    benchmark: str = Field(default="SPY", min_length=1)
+
+
 class MarketDataConfig(BaseModel):
     """行情模块的配置。"""
 
@@ -79,3 +102,5 @@ class MarketDataConfig(BaseModel):
     schedule_sessions: int = Field(default=10, gt=0)
     # K 线的截止时刻比快照时刻早这么久：免费档取不了最近 15 分钟，回放也按这个时刻截
     bar_delay: timedelta = Field(default=timedelta(minutes=15), ge=timedelta(0))
+    # 量化指标
+    indicators: IndicatorConfig = IndicatorConfig()

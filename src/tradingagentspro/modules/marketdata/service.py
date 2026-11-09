@@ -1,16 +1,18 @@
 """行情的用例：取一组股票的行情，给出行情最近一次更新的时刻；市场背景的用例：VIX 收盘值和重要日程；
-K 线的用例：按周期和范围给出几只股票的 K 线。
+K 线的用例：按周期和范围给出几只股票的 K 线；量化指标的用例：按一个 Quant 任务算出全部数字。
 
-见 market-data spec、market-context spec 和 price-bars spec。
+见 market-data spec、market-context spec、price-bars spec 和 quant-indicators spec。
 """
 
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import date, datetime
 
+from tradingagentspro.contracts.quant import QuantIndicators
 from tradingagentspro.contracts.snapshot import ScheduleItem, VixClose
 from tradingagentspro.contracts.task import BarPeriod
 from tradingagentspro.modules.marketdata.config import MarketDataConfig
 from tradingagentspro.modules.marketdata.domain.bars import (
+    Bar,
     Bars,
     SourceBar,
     SourceDayBar,
@@ -18,6 +20,13 @@ from tradingagentspro.modules.marketdata.domain.bars import (
     plan_bars,
 )
 from tradingagentspro.modules.marketdata.domain.context import latest_close, upcoming
+from tradingagentspro.modules.marketdata.domain.indicators import (
+    IndicatorBars,
+    IndicatorRequest,
+    compute_indicators,
+    history_sessions,
+    quarter_sessions,
+)
 from tradingagentspro.modules.marketdata.domain.quote import Quote
 from tradingagentspro.modules.marketdata.ports import (
     BarHistorySource,
@@ -124,3 +133,33 @@ class BarService:
                 for symbol in symbols
             },
         )
+
+
+class IndicatorService:
+    """量化指标的入口：按 spec「取数」用 K 线的用例取数，再算出全部数字；不保存。"""
+
+    def __init__(
+        self, bars: BarService, calendar: TradingCalendar, config: MarketDataConfig
+    ) -> None:
+        self._bars = bars
+        self._calendar = calendar
+        self._config = config
+
+    def indicators(self, request: IndicatorRequest) -> QuantIndicators:
+        """这只股票的量化指标，见 quant-indicators spec。取数失败时抛 BarsUnavailableError。"""
+        calendar, config = self._calendar, self._config.indicators
+        window, taken_at = request.window, request.taken_at
+        plan = plan_bars(calendar, window.period, window.days, taken_at, self._config.bar_delay)
+        sector = () if request.sector is None else (request.sector,)
+        symbols = [request.symbol, *sector, config.benchmark]
+        need = max(config.ma_lengths) + config.change_bars
+        history = history_sessions(calendar, window.period, need, plan.last)
+        period = self._bars.bars(symbols, window.period, max(window.days, history), taken_at)
+        year = config.year_sessions + config.atr_bars + 1
+        daily = self._bars.bars([request.symbol], BarPeriod.DAY, year, taken_at)
+        quarters: Mapping[str, tuple[Bar, ...]] = {}
+        if sessions := quarter_sessions(calendar, request, plan.cutoff, plan.last, config):
+            fetched = self._bars.bars(symbols, BarPeriod.QUARTER_HOUR, sessions, taken_at)
+            quarters = fetched.by_symbol
+        data = IndicatorBars(period.by_symbol, daily.by_symbol[request.symbol], quarters)
+        return compute_indicators(request, plan, data, calendar, config)
