@@ -41,7 +41,7 @@ There are three statuses: Not started, In progress, Done.
 | M2 Trading side on paper | In progress | 16 / 16 |
 | M3 Case-side core | Done | 12 / 12 |
 | M4 Case flow end to end | In progress | 19 / 19 |
-| M5 Models | In progress | 18 / 20 |
+| M5 Models | In progress | 18 / 24 |
 | M6 Retrospectives and evaluation | Not started | — |
 | M7 Small-capital live | Not started | — |
 
@@ -134,7 +134,7 @@ Grouped by dependency; the order in the table is the implementation order: stora
 
 ### M5 Models
 
-The PM, News and Fundamentals are split; Quant, the Critic and leveraged instruments are added when they are split. The order of the table is the order of implementation. These changes build the skeleton only; prompts are written once it stands.
+The PM, News, Fundamentals and Quant are split; the Critic and leveraged instruments are added when they are split. The order of the table is the order of implementation. These changes build the skeleton only; prompts are written once it stands.
 
 | Group | Change | Type | Status |
 | --- | --- | --- | --- |
@@ -156,5 +156,9 @@ The PM, News and Fundamentals are split; Quant, the Critic and leveraged instrum
 | | Filing tools | New; Modify: News and filings, News tools, Sub-agent calls, Startup and wiring, Settings file, State store design | Done |
 | | Financial figures | New; Modify: Earnings calendar and sectors, News and filings, News tools, Filing tools, Sub-agent calls, Startup and wiring, State store design | Done |
 | | Valuation | New; Modify: Alpaca daily bars, Earnings calendar and sectors, Sub-agent calls, Startup and wiring | Done |
+| Quant | Bars | New; Modify: Alpaca daily bars | In progress |
+| | Quant indicators | New | Not started |
+| | Indicator entry | Modify: Task dispatch, Sub-agent calls, Shared context, State store snapshots, Stand-ins, State store design, Startup and wiring | Not started |
+| | Quant calls | New; Modify: Sub-agent calls, Model call trace, Settings file, Startup and wiring | Not started |
 | Going live | Write the prompts | New | Not started |
 | | Switch to real models | Modify: Model configuration | Not started |
