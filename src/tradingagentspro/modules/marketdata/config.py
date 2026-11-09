@@ -1,9 +1,10 @@
-"""行情模块的配置和默认值，含义见 market-data spec「行情配置」和 market-context spec「重要日程」。
+"""行情模块的配置和默认值，含义见 market-data spec「行情配置」、market-context spec「重要日程」和
+price-bars spec「K 线配置」。
 
 日程的日期取自官方日历：FOMC 取自美联储的会议日历，CPI 和非农取自 BLS 的发布日历，到 2027 年底。
 """
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -76,3 +77,5 @@ class MarketDataConfig(BaseModel):
     schedule: tuple[ScheduleItem, ...] = DEFAULT_SCHEDULE
     # 列出给定交易日之后这么多个交易日内的重要日程
     schedule_sessions: int = Field(default=10, gt=0)
+    # K 线的截止时刻比快照时刻早这么久：免费档取不了最近 15 分钟，回放也按这个时刻截
+    bar_delay: timedelta = Field(default=timedelta(minutes=15), ge=timedelta(0))

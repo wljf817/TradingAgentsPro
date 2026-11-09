@@ -1,16 +1,26 @@
-"""行情的用例：取一组股票的行情，给出行情最近一次更新的时刻；市场背景的用例：VIX 收盘值和重要日程。
+"""行情的用例：取一组股票的行情，给出行情最近一次更新的时刻；市场背景的用例：VIX 收盘值和重要日程；
+K 线的用例：按周期和范围给出几只股票的 K 线。
 
-见 market-data spec 和 market-context spec。
+见 market-data spec、market-context spec 和 price-bars spec。
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import date, datetime
 
 from tradingagentspro.contracts.snapshot import ScheduleItem, VixClose
+from tradingagentspro.contracts.task import BarPeriod
 from tradingagentspro.modules.marketdata.config import MarketDataConfig
+from tradingagentspro.modules.marketdata.domain.bars import (
+    Bars,
+    SourceBar,
+    SourceDayBar,
+    build_bars,
+    plan_bars,
+)
 from tradingagentspro.modules.marketdata.domain.context import latest_close, upcoming
 from tradingagentspro.modules.marketdata.domain.quote import Quote
 from tradingagentspro.modules.marketdata.ports import (
+    BarHistorySource,
     QuoteSource,
     QuoteUnavailableError,
     VixSource,
@@ -70,3 +80,47 @@ class MarketContextService:
         """交易日 day 到它之后配置的交易日数内的重要日程，按日期。"""
         last = self._calendar.add_sessions(day, self._config.schedule_sessions)
         return upcoming(self._config.schedule, day, last.day)
+
+
+class BarService:
+    """K 线的入口：每次调用都向 K 线源取，不保存；K 线源的失败原样抛出，不重试。"""
+
+    def __init__(
+        self, source: BarHistorySource, calendar: TradingCalendar, config: MarketDataConfig
+    ) -> None:
+        self._source = source
+        self._calendar = calendar
+        self._config = config
+
+    def bars(
+        self, symbols: Sequence[str], period: BarPeriod, sessions: int, taken_at: datetime
+    ) -> Bars:
+        """这些股票按快照时刻 taken_at 往前 sessions 个交易日的 K 线，见 price-bars spec。
+
+        请求按 spec「取数的请求」组合，结束时刻都是截止时刻。任何请求失败时抛
+        BarsUnavailableError。
+        """
+        plan = plan_bars(self._calendar, period, sessions, taken_at, self._config.bar_delay)
+        quarters: Mapping[str, tuple[SourceBar, ...]] = {}
+        days: Mapping[str, tuple[SourceDayBar, ...]] = {}
+        if period in (BarPeriod.QUARTER_HOUR, BarPeriod.HOUR):
+            quarters = self._source.quarter_hours(symbols, plan.first.open, plan.cutoff)
+        else:
+            days = self._source.days(symbols, plan.first.day, plan.cutoff)
+            if plan.last_open:
+                quarters = self._source.quarter_hours(symbols, plan.last.open, plan.cutoff)
+        splits = {symbol: self._source.splits(symbol, plan.price_day) for symbol in symbols}
+        return Bars(
+            cutoff=plan.cutoff,
+            by_symbol={
+                symbol: build_bars(
+                    self._calendar,
+                    period,
+                    plan,
+                    quarters.get(symbol, ()),
+                    days.get(symbol, ()),
+                    splits[symbol],
+                )
+                for symbol in symbols
+            },
+        )
