@@ -158,7 +158,7 @@ The PM, News, Fundamentals and Quant are split; the Critic and leveraged instrum
 | | Valuation | New; Modify: Alpaca daily bars, Earnings calendar and sectors, Sub-agent calls, Startup and wiring | Done |
 | Quant | Bars | New; Modify: Alpaca daily bars | Done |
 | | Quant indicators | New | Done |
-| | Indicator entry | Modify: Task dispatch, Sub-agent calls, Shared context, State store snapshots, Stand-ins, State store design, Startup and wiring | Not started |
+| | Indicator entry | Modify: Task dispatch, Agent calls, PM calls, Signal format, Sub-agent calls, Stand-ins, State store snapshots, State store design, Startup and wiring | In progress |
 | | Quant calls | New; Modify: Sub-agent calls, Model call trace, Settings file, Startup and wiring | Not started |
 | Going live | Write the prompts | New | Not started |
 | | Switch to real models | Modify: Model configuration | Not started |
