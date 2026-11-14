@@ -13,8 +13,8 @@ Agent 网关 SHALL 按下表把输入交给 agent，收下它的输出：
 | --- | --- | --- |
 | PM（研究） | 案件上下文、本案件现在的快照、PM 在本案件的对话 | 派发任务：一个或多个任务请求（task-dispatch spec「任务请求的格式」）；或者提交结论：case-types spec 的四种结论之一；或者输出不合法（pm-calls spec「PM 的输出不合法」） |
 | PM（回应） | 同上，对话的最后一轮交回的是 Critic 的质询 | 对这轮质询的回应（case-stages spec「Critic 审核和 PM 回应的格式」）；或者输出不合法 |
-| Critic | 案件上下文、快照、要审核的结论（带交易方案的持仓或关注的结论）、PM 在本案件派过的任务和 Result、Critic 在本案件的对话 | 补充研究：一个或多个任务请求；或者一次审核：通过、质询或否决（case-stages spec「Critic 审核和 PM 回应的格式」） |
-| News、Quant、Fundamentals | Task 和快照 | 信号、无信号或者输出不合法（sub-agent-calls spec「子 agent 的输出不合法」），和这次运行的工具返回过的内容的 ID（sub-agent-calls spec「工具返回过的内容」）；按 task-dispatch spec「子 agent 的输出变成 Result」校验 |
+| Critic | 案件上下文、快照、要审核的结论（带交易方案的持仓或关注的结论）、PM 在本案件派过的任务和 Result（Quant 的任务带它的量化指标条目，task-dispatch spec「Quant 任务的量化指标」）、Critic 在本案件的对话 | 补充研究：一个或多个任务请求；或者一次审核：通过、质询或否决（case-stages spec「Critic 审核和 PM 回应的格式」） |
+| News、Quant、Fundamentals | Task 和快照；Quant 另有这个任务的量化指标条目 | 信号、无信号或者输出不合法（sub-agent-calls spec「子 agent 的输出不合法」），和这次运行的工具返回过的内容的 ID（sub-agent-calls spec「工具返回过的内容」）；按 task-dispatch spec「子 agent 的输出变成 Result」校验 |
 | Reviewer | 快照 | 复盘报告：一段总结 |
 
 案件上下文是快照以外 PM 和 Critic 要看的、由调用方给出的内容；案件 ID、案件类型和股票在快照里（state-snapshot spec「每种案件的快照」）：
@@ -34,7 +34,7 @@ Agent 网关 SHALL 按下表把输入交给 agent，收下它的输出：
 | 跟进 | 跟进案件开出它的跟进：申请（case-types spec「跟进申请的格式」）和提出申请的案件的结论；其他案件没有 |
 
 - PM 回应质询时 SHALL NOT 派发任务：Proposal 规定回应需要的新信息由 Critic 的补充研究提供
-- 子 agent 的调用收到 Task 和快照，看不到案件上下文、别的任务和 Result；真实模型看到的内容是 sub-agent-calls spec「子 agent 的上下文」
+- 子 agent 的调用收到 Task 和快照（Quant 另有这个任务的量化指标条目），看不到案件上下文、别的任务和 Result；真实模型看到的内容是 sub-agent-calls spec「子 agent 的上下文」
 - 任务请求、结论、回应、审核的格式就是表里引用的 spec 的格式；问题去掉首尾空白后为空、复盘报告的总结去掉首尾空白后为空，都 MUST 是格式错误
 - 网关只调用、收下输出，SHALL NOT 检查结论：结论的校验、备用模型的限制和结论里的信号由调用方按 case-types、model-fallback、signal-format spec 检查
 
@@ -71,7 +71,7 @@ Agent 网关 SHALL 按下表把输入交给 agent，收下它的输出：
 
 - **GIVEN** K-1 的 PM 派发价格请求，派发 T-1
 - **WHEN** 调用 Quant 运行 T-1
-- **THEN** Quant 收到 T-1 和 S1，没有案件上下文和别的 Result
+- **THEN** Quant 收到 T-1、S1 和 T-1 的量化指标条目，没有案件上下文和别的 Result
 
 #### Scenario: Reviewer 只看到快照
 
@@ -105,6 +105,7 @@ PM 和 Critic 在一个案件里的对话 SHALL 按先后排列，每一轮是 a
 | Critic | 质询 | PM 对这轮质询的回应 |
 
 - 对话只放已经交回结果的轮次：结论通过以后没有交给 PM 回应的（没有交易方案、Critic 通过或否决、退出类方案）、Critic 通过或否决的那一轮都没有下一次调用，不进对话
+- 交回的每个 Task 和 Result，有量化指标条目时（task-dispatch spec「Quant 任务的量化指标」）SHALL 一并交回这个条目：复用的是被复用任务的条目；没有条目的写明没有
 - 读取工具的调用和结果 SHALL NOT 进对话：对话只有上表的回复和交回的结果
 - 回复和交回的结果不按上表对应、派发任务交回的结果和请求的个数不同、Critic 的通过或否决有交回的结果，都 MUST 报错
 
@@ -150,6 +151,14 @@ PM 和 Critic 在一个案件里的对话 SHALL 按先后排列，每一轮是 a
 
 - **WHEN** 构造这一轮：PM 输出不合法，交回 Task 和 Result；或者交回 Critic 的质询
 - **THEN** 都报错
+
+#### Scenario: Quant 的任务带量化指标条目
+
+- **GIVEN** K-1 的 PM 派发价格请求、新闻请求：派发 T-1 和 T-2；T-1 存下量化指标条目 quant/T-1（task-dispatch spec「Quant 任务的量化指标」）以后完成，T-2 完成
+- **WHEN** 再调用 K-1 的 PM
+- **THEN** 交回的结果依次是：T-1、它完成的 Result 和 quant/T-1；T-2 和它完成的 Result，写明没有条目
+- **WHEN** 接着 PM 提交开仓方案，通过校验，调用 K-1 的 Critic
+- **THEN** Critic 收到的 PM 派过的任务和 Result 里，T-1 也带 quant/T-1
 
 ### Requirement: 一次调用
 
@@ -208,19 +217,20 @@ Agent 网关调用一个 agent 时 SHALL 按 model-fallback spec 的步骤向模
 
 ### Requirement: 子 agent 的任务
 
-调用方 SHALL 把派发出去的任务和快照交给 Agent 网关运行。网关按「一次调用」调用任务的目标子 agent，调用带任务的截止时间（model-fallback spec「尝试的超时」），然后按下表生成这个任务的 Result（task-dispatch spec）：
+调用方 SHALL 把派发出去的任务和快照交给 Agent 网关运行。目标是 Quant 的任务，网关先按 task-dispatch spec「Quant 任务的量化指标」取得这个任务的量化指标条目，调用时一并交给 Quant。网关按「一次调用」调用任务的目标子 agent，调用带任务的截止时间（model-fallback spec「尝试的超时」），然后按下表生成这个任务的 Result（task-dispatch spec）：
 
 | 调用的结果 | Result |
 | --- | --- |
 | 拿到输出 | 按 task-dispatch spec「子 agent 的输出变成 Result」：完成、无信号，或者格式不合法的失败；模型是实际使用的模型 |
 | 全部不可用 | 失败，原因是调用失败，说明是 model-fallback 给出的说明（task-dispatch spec「调用失败」） |
 | 到了截止时间停止 | 超时（task-dispatch spec「超时」） |
-| 任务已经有 Result | 给出这个 Result，SHALL NOT 调用模型，也不记费用 |
+| 任务已经有 Result | 给出这个 Result，SHALL NOT 取量化指标、调用模型，也不记费用 |
 
 - Result 的费用是这次调用的费用：各次尝试记下的费用之和
+- Quant 的任务取不到 K 线（行情模块报数据源不可用）时 SHALL NOT 调用模型：Result 是失败，原因是数据取不到，说明是"取不到 K 线："加上行情模块给出的原因，没有模型，费用 0；这时已经晚于截止时间则是超时（task-dispatch spec「超时」）
 - 几个任务可以同时运行
 
-本 requirement 的场景里，Quant 的主模型是 google/s-1，备用模型是 openai/s-2；"T-1"指 K-1 的 PM 派发价格请求派发出的 T-1；基准信号引用的 E-1 和 E-2 是这次运行的工具返回过的。
+本 requirement 的场景里，Quant 的主模型是 google/s-1，备用模型是 openai/s-2；"T-1"指 K-1 的 PM 派发价格请求派发出的 T-1；基准信号引用的 E-1 和 E-2 是这次运行的工具返回过的；T-1 的量化指标都算得出，条目是 quant/T-1（`quant/` 加上 T-1 的 task_id）。
 
 #### Scenario: 拿到合法的信号
 
@@ -269,4 +279,22 @@ Agent 网关调用一个 agent 时 SHALL 按 model-fallback spec 的步骤向模
 
 - **GIVEN** T-1 已经完成
 - **WHEN** 再运行 T-1（比如崩溃以后重做）
-- **THEN** 给出 T-1 已有的 Result；没有向任何模型发请求，没有记下费用
+- **THEN** 给出 T-1 已有的 Result；没有取量化指标，没有向任何模型发请求，没有记下费用
+
+#### Scenario: Quant 的任务先取得量化指标条目
+
+- **WHEN** 运行 T-1，s-1 给出引用 quant/T-1 的基准信号，用量 8,000/1,000
+- **THEN** 先存下 quant/T-1，再向 s-1 发请求，交给 Quant 的有 T-1、快照和 quant/T-1
+- **AND** T-1 完成，引用的条目是 quant/T-1
+
+#### Scenario: 取不到 K 线
+
+- **WHEN** 2026-10-14 15:01:00Z 运行 T-1，行情模块报数据源不可用"Alpaca 超时"
+- **THEN** 没有向任何模型发请求；T-1 失败，原因是数据取不到，说明"取不到 K 线：Alpaca 超时"，没有模型，耗时 60 秒，费用 0
+- **WHEN** 2026-10-14 15:04:50Z 开始运行 T-1，行情模块在 15:05:10Z 报数据源不可用
+- **THEN** 没有向任何模型发请求；T-1 超时，没有模型
+
+#### Scenario: News 和 Fundamentals 的任务不取量化指标
+
+- **WHEN** 运行 K-1 的 PM 派发新闻请求、财报请求派发出的任务
+- **THEN** 行情模块没有收到请求；调用 News 和 Fundamentals 时没有量化指标条目

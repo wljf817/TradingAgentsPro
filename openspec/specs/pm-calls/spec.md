@@ -51,7 +51,7 @@ PM 的对话 SHALL 按 agent-calls spec「对话的每一轮」一轮一轮变�
 
 | 回复 | 模型的回答 | 交回给模型 |
 | --- | --- | --- |
-| 派发任务 | 调用 `dispatch_tasks`，参数是这次回复 | `dispatch_tasks` 的工具结果：每个请求的 Task 和 Result 的 JSON |
+| 派发任务 | 调用 `dispatch_tasks`，参数是这次回复 | `dispatch_tasks` 的工具结果：每个请求的 Task、Result 和量化指标条目（agent-calls spec「对话的每一轮」）的 JSON |
 | 提交结论 | 调用 `submit_conclusion`，参数是这次回复 | `submit_conclusion` 的工具结果：退回的原因，或者 Critic 的质询和补充研究的 JSON |
 | 回应 | 调用 `respond_to_challenge`，参数是这次回应 | `respond_to_challenge` 的工具结果：Critic 下一次质询和补充研究的 JSON |
 | 输出不合法 | 文字：模型当时的原文 | 用户消息：退回的原因的 JSON |
@@ -101,6 +101,12 @@ PM 的对话 SHALL 按 agent-calls spec「对话的每一轮」一轮一轮变�
 
 - **WHEN** 用同样的上下文和对话调用两次
 - **THEN** 两次的消息完全相同
+
+#### Scenario: 工具结果带量化指标条目
+
+- **GIVEN** 对话有派发的一轮，T-1 带量化指标条目 quant/T-1（task-dispatch spec「Quant 任务的量化指标」）
+- **WHEN** 调用 K-1 的 PM（研究）
+- **THEN** `dispatch_tasks` 的工具结果有 T-1、它完成的 Result 和 quant/T-1：条目 ID 和全部数字
 
 ### Requirement: 交回工具
 
